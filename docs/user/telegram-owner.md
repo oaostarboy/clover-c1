@@ -1,9 +1,15 @@
 # Telegram owner verification
 
-A Telegram account needs explicit authority before it can change persistent
-profile settings with `/proactive`. Chat access is not ownership. A DM, a
-username, a home channel, an allowlist, guest pairing or an unrestricted slash
-menu does not prove who owns the profile.
+Owner verification is an optional local identity-binding feature retained for
+compatibility. **It is not required for `/proactive`.** Admitted users with
+existing scoped command/control authority can open `/proactive` and tap **On**
+after updating, even on older profiles with no owner record. There is no terminal
+or code-exchange requirement for those controls. Updating does not enable them.
+
+Chat admission is not proof of ownership: a DM, username, home channel, allowlist,
+pairing or unrestricted command policy never creates an owner record. Configured
+DM/group admin lists and managed restrictions still determine settings rights.
+See [Proactive controls](proactive-workstreams.md) for the current permission rules.
 
 ## New installations
 
@@ -16,7 +22,7 @@ enable proactivity, change guest commands or grant chat access.
 3. Enter the separate confirmation code the bot returns into that same local
    setup terminal. Never send this code to another person.
 4. Setup verifies and saves the account that actually sent the Telegram update.
-   Reopen `/proactive` to see the native Enable / Disable buttons.
+   This optional record does not change existing command/control authority.
 
 Nothing grants ownership until step 3. Setup never accepts a typed user ID as
 identity proof. Forwarded messages, bots and public groups cannot supply proof.
@@ -37,34 +43,30 @@ Existing explicit DM administrator grants still work. Setup preserves them
 without inferring a new owner or changing the slash gate. A genuinely verified
 owner record is reused only for the same profile location and bot credentials.
 
-If `/proactive` says **Controls locked**, open `/proactive setup` (or
-`/proactive status`). Ask the person who set up Clover to run this locally:
+If `/proactive` says **Controls locked by command policy**, owner verification
+will not bypass that policy. `/proactive status` (or `/proactive setup`) explains
+the scoped admin setting. Ask the profile operator to review that permission
+policy instead of completing a pairing ceremony.
 
-```
-clover pairing owner-setup telegram
-```
-
-This uses the same verification steps as new setup. No historical message,
-paired guest or sole allowlisted sender is silently upgraded. An installation
-with no trusted owner proof cannot securely unlock itself from the phone alone.
-The local profile operator must assist. For a named profile, use the normal
-profile selector, for example `clover -p NAME pairing owner-setup telegram`.
+Operators who still want an explicit owner identity record may use the optional
+local command `clover pairing owner-setup telegram` (or
+`clover -p NAME pairing owner-setup telegram` for a named profile).
 
 ## Permission boundaries
 
-- The independent grant enables only the private Telegram owner fallback for
-  profile proactive controls. It does **not** confer general slash-command admin
-  rights. Guest command permissions and all admission lists remain unchanged.
-- Existing chat admission is still required to use the controls. Verify chat
-  access separately through the normal allowlist/pairing process.
-- An enabled explicit DM admin policy is authoritative, even if it excludes the
-  verified owner. Group controls still require explicit group admin permission.
-- Administrators can disable the fallback with
-  `platforms.telegram.verified_owner_controls: false`. A managed denial takes
-  precedence over user settings; current managed denials are checked again at
-  use. This switch does not revoke independent explicit admin grants.
-- The picker still checks the account, chat, message, thread, profile, adapter,
-  expiry, replay and current authorization at tap time.
+- Owner verification does **not** confer general slash-command admin rights,
+  chat access or a bypass of configured admin restrictions.
+- Existing source admission is required. With no scoped admin gate, admitted
+  users already have command/control authority without an owner record.
+  With a gate configured, its admins alone can change proactive settings;
+  guest permission to list `/proactive` stays read-only. Groups use their
+  separate group policy, not DM admin grants.
+- `platforms.telegram.verified_owner_controls: false` disables the legacy owner
+  fallback only. Managed denials of that fallback take precedence over user
+  aliases, but do not deny independent command/control authority. Use scoped
+  admin policy or managed proactive settings to restrict those controls.
+- The picker checks account, chat, message, thread, profile, adapter credentials,
+  expiry, replay and current admission/control authorization at tap time.
 
 ## Revocation and account changes
 
@@ -75,9 +77,11 @@ clover pairing owner-revoke telegram
 ```
 
 This cancels both pending owner proofs and the independent owner grant. It takes
-effect on the next operation, including an already-open picker; no service
-restart is required for this record. It does not remove explicit admin grants
-or guest/chat permissions. Remove those separately if revoking them is intended.
+effect on the next owner-record operation; no service restart is required for
+this record. It does not revoke independent command/control authority, so an
+already-open `/proactive` picker remains valid if that authority still applies.
+It does not remove admin grants or chat permissions. Remove those separately
+through the existing policy if revoking settings access is intended.
 Rebinding requires revocation and fresh verification. Bot credential rotation
 or moving/copying the profile invalidates the grant; revoke and verify again.
 
@@ -108,4 +112,4 @@ same filesystem authority, nor does a terminal by itself prove a human is
 present. It establishes an explicit local authorization plus an actual
 Telegram-sender binding, separate from untrusted chat claims. Proactivity keeps
 its exact previous value, including Off; enrollment creates no jobs, schedules
-or model calls. Only a later authorized Enable action changes that setting.
+or model calls. Only a later authorized On action changes that setting.

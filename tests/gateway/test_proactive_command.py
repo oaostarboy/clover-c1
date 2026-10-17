@@ -1,4 +1,4 @@
-"""Exercise shared gateway dispatch, explicit admin boundary and safe fallback."""
+"""Exercise shared gateway dispatch, scoped control authority and safe fallback."""
 from datetime import datetime, timedelta
 from unittest.mock import AsyncMock
 
@@ -21,7 +21,7 @@ def home(tmp_path, monkeypatch):
 def runner():
     return _make_runner(platform=Platform.TELEGRAM, platform_extra={
         "allow_admin_from": ["owner"], "user_allowed_commands": ["proactive"],
-        "group_user_allowed_commands": ["proactive"],
+        "group_user_allowed_commands": ["proactive"], "group_allow_admin_from": ["group-owner"],
     })
 
 
@@ -54,11 +54,12 @@ async def test_untrusted_users_and_non_admin_group_cannot_write(home, uid, ctype
 
 
 @pytest.mark.asyncio
-async def test_no_admin_list_is_not_admin_authority(home):
+async def test_unconfigured_admin_gate_uses_existing_control_authority(home):
     r = _make_runner(platform=Platform.TELEGRAM)
-    text = await r._handle_message(event("/proactive on"))
-    assert "admin" in text.lower()
     assert not load_settings().enabled
+    text = await r._handle_message(event("/proactive on"))
+    assert "Saved" in text
+    assert load_settings().enabled
 
 
 @pytest.mark.asyncio
@@ -106,7 +107,7 @@ async def test_profile_wrapper_persists_only_target_and_uses_its_admin_policy(ho
     # A transport admin is not automatically an admin of a different profile.
     other = get_profile_dir("unowned")
     other.mkdir()
-    (other / "config.yaml").write_text("{}")
+    (other / "config.yaml").write_text("platforms:\n  telegram:\n    allow_admin_from: [other-owner]\n")
     text = await r._make_profile_message_handler("unowned")(event("/proactive on"))
     assert "admin" in text.lower()
     assert "proactive" not in yaml.safe_load((other / "config.yaml").read_text())

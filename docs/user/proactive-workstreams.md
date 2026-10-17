@@ -307,8 +307,9 @@ repository for the release scope and verification boundaries.
 an explanation: “Tracks scoped unfinished work through conversation changes.”
 When saved and effective settings differ, the short menu says so explicitly.
 `/proactive status` shows the technical details (saved/effective state, mode,
-reload behavior and authority limits). Telegram shows native **Enable** /
-**Disable** buttons for an authenticated, explicitly enrolled admin. Other
+reload behavior and authority limits). Telegram shows native **On** /
+**Off** buttons for a source-admitted user authorized by the existing scoped
+command/control policy. Other
 gateway platforms use explicit text
 controls unless their adapter supports the same owned-picker guard. Slack uses
 `/clover proactive [status|on|off]` (to keep its 50 native-slash slots intact),
@@ -322,44 +323,43 @@ adapter's working typed prefix. CLI and TUI use the same deterministic controls:
 | `/proactive on` | Enable this profile (`enable` is also accepted) |
 | `/proactive off` | Disable only the master flag (`disable` is also accepted) |
 
-Gateway changes require an authenticated, explicitly enrolled admin in
-`platforms.<platform>.allow_admin_from`, or `group_allow_admin_from` in a group.
-An ordinary chat allowlist, pairing, allow-all, or permission to use the
-`proactive` command is **not** admin authority. With no explicit admin list,
-the menu stays read-only. CLI/TUI use the local config-file authority, like
-`clover config set`. No model request is needed for any of these controls.
-The read-only menu explains that controls are locked and points to `/whoami`
-and `/proactive status` for owner setup; it does not display unusable controls.
+Gateway controls use the existing scoped command authorization **and** source
+admission. There is no separate owner enrollment, terminal visit, pairing or
+code exchange for `/proactive`, including on older profiles without an owner
+record. After updating, open `/proactive` and tap **On** to enable it.
+Updating or opening the menu never enables proactivity on its own.
 
-### Enrolling the owner for Telegram controls
+- With no admin gate configured for this platform/chat scope, admitted users
+  can change proactivity, just as the existing unrestricted command policy
+  permits. This does not infer ownership or add anyone to an admin list.
+- With a nonempty `platforms.<platform>.allow_admin_from` list, only those admins
+  can change settings in DMs. Groups use the independent
+  `group_allow_admin_from` policy; DM admin rights do not carry into groups.
+  If the group gate is unconfigured, the existing unrestricted group command
+  policy applies, subject to group admission and trigger rules.
+- Listing `proactive` in a guest's `user_allowed_commands` (or
+  `group_user_allowed_commands`) allows read-only status, not settings rights
+  when an admin gate is active. Discovery/menu access is not a control grant.
+- Source allowlists, pairing/admission rules and managed administrator
+  restrictions remain authoritative. Current managed admin restrictions are
+  checked again at use, including for an already-open picker. Managed proactive
+  settings still reject changes to pinned features/actions.
+- `platforms.telegram.verified_owner_controls: false` disables the legacy
+  **verified-owner fallback only**, not existing command/control authority.
+  That flag is not a global `/proactive` deny switch. Use scoped admin policy
+  to restrict who controls settings and managed proactive pins to lock values.
 
-There is no implicit first-DM/single-allowlisted-user bootstrap. An authorized
-chat sender or a paired user is not automatically the profile administrator.
-Enrollment uses the existing local config CLI, not an in-chat trust claim:
-
-1. The operator verifies the owner's **sender user ID** from `/whoami` on the
-   trusted Telegram account. Never use a chat ID, username, forwarded message
-   or text assertion as proof. Do not use a wildcard or open-access grant.
-2. In the **current profile's** local terminal, inspect existing admin and
-   non-admin command lists. After reviewing the permission change, use:
-   `clover config set platforms.telegram.allow_admin_from '["VERIFIED_USER_ID"]'`.
-   This is a template: replace the placeholder with the verified sender ID;
-   preserve existing admin entries if any. For groups, use
-   `platforms.telegram.group_allow_admin_from` instead; DM admin authority does
-   not carry into groups. Keep the existing source allowlist/pairing policy.
-3. This existing setting enables slash-command gating for that platform/chat
-   type: other users can lose access to commands outside their configured
-   command list (apart from the always-allowed discovery commands). Review
-   that side effect before saving; do not blindly open all commands to guests.
-4. **Enrollment is not a hot-reloaded proactive toggle.** A single-profile
-   gateway retains its loaded admin policy and adapter/env admission gates;
-   the operator must apply the normal, separately approved gateway lifecycle
-   to load the enrollment. Then send a new `/proactive` command. This menu
-   never reloads or restarts the gateway itself.
+CLI/TUI use the local config-file authority, like `clover config set`. No model
+request is needed for any of these controls. A denied menu describes the
+current command policy and points to `/proactive status` for permission details;
+`/proactive setup` is a read-only alias for those details, not an enrollment flow.
+Existing owner-verification records and local pairing commands remain compatible,
+but creating, revoking or disabling an owner fallback does not grant or revoke
+independent command authority. Other commands and admin lists are unchanged.
 
 ### Toggle behavior
 
-The first Enable transition from `shadow` selects this bounded preset:
+The first On transition from `shadow` selects this bounded preset:
 `enabled: true`, `mode: active`, `recall.enabled: true` and
 `compaction_audit.enabled: true`. Active mode also permits the existing
 human-origin correction consumer; there is no separate correction flag.
@@ -372,7 +372,7 @@ the menu does not grant missing timing or permission.
 Limits, privacy, eligible job enrollment, timing (including non-null `never`
 or `after_reply`), auxiliary/model budgets and other config stay unchanged.
 Once mode is `active`, off/on preserves the saved capability preferences too.
-Disable sets only `enabled: false`; ledger records remain inert and inspectable,
+Off sets only `enabled: false`; ledger records remain inert and inspectable,
 and independently scheduled jobs and existing `/loop` records remain untouched.
 
 The command uses the existing atomic config writer and checks the saved values.
@@ -383,8 +383,8 @@ settings may make the effective state differ from the saved state; both appear
 in the menu. A failed/unconfirmed write never produces a success reply.
 
 Telegram settings buttons expire after five minutes and bind the original
-user, chat, message, thread, adapter and profile. The callback rechecks admin
-access and is claimed once before applying the change. Old, foreign, revoked
+user, chat, message, thread, adapter and profile. The callback rechecks scoped control
+authorization and source admission and is claimed once before applying the change. Old, foreign, revoked
 or replayed taps cannot toggle config. If native send fails, use text controls.
 
 ### Migration from the old alias
