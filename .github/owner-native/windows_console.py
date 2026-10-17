@@ -127,7 +127,9 @@ def run_console(command, cwd, env, code, cancel):
     import win32con
     import win32job
 
-    job = win32job.CreateJobObject(None, None)
+    # pywin32 311's WCHAR* typemap rejects None. Empty Unicode creates an
+    # unnamed job (asserted against ObjectNameInformation in native preflight).
+    job = win32job.CreateJobObject(None, '')
     p = None
     try:
         limits = win32job.QueryInformationJobObject(job, win32job.JobObjectExtendedLimitInformation)
