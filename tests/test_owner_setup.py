@@ -193,7 +193,15 @@ def test_real_cli_process_loads_exact_profile_and_confirms_saved_owner(profile, 
     code = s.prove(s.begin(), "12345678")
     child_home = tmp_path / "child-home"
     child_home.mkdir()
-    env = {"HOME": str(child_home), "CLOVER_HOME": str(profile), "TELEGRAM_BOT_TOKEN": TOKEN,
+    # Native Windows Path.home() uses USERPROFILE, not HOME. Supply only
+    # disposable native locations; never borrow the runner's user profile.
+    local_appdata = child_home / "AppData" / "Local"
+    appdata = child_home / "AppData" / "Roaming"
+    local_appdata.mkdir(parents=True)
+    appdata.mkdir(parents=True)
+    env = {"HOME": str(child_home), "USERPROFILE": str(child_home),
+           "LOCALAPPDATA": str(local_appdata), "APPDATA": str(appdata),
+           "CLOVER_HOME": str(profile), "TELEGRAM_BOT_TOKEN": TOKEN,
            "PATH": os.defpath, "PYTHONPATH": str(Path(__file__).resolve().parents[1])}
     # Required on native Windows to locate core DLLs; no credential borrowing.
     for name in ("SYSTEMROOT", "WINDIR", "TEMP", "TMP"):
@@ -205,3 +213,4 @@ def test_real_cli_process_loads_exact_profile_and_confirms_saved_owner(profile, 
     assert code not in result.stdout + result.stderr
     assert VerifiedOwnerStore(TOKEN, home=profile).is_owner("12345678")
     assert not (child_home / ".clover" / "platforms" / "telegram-owner.json").exists()
+    assert not (local_appdata / "clover" / "platforms" / "telegram-owner.json").exists()
