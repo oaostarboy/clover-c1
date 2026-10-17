@@ -62,7 +62,7 @@ def jobs_scope(job: dict) -> ws.Scope | None:
         return None
 
 
-def _saved_authorization() -> tuple[str, bool]:
+def _saved_authorization(*, platform: str | None = None) -> tuple[str, bool]:
     """Fresh scoped authorization inputs, never startup caches or all-file hashes.
 
     Keep the two saved layers separate: an administrator overlay must not hide
@@ -112,6 +112,19 @@ def _saved_authorization() -> tuple[str, bool]:
                 if "cronjob" in tools:
                     denied = True
         platform_tools = mapping(document.get("platform_toolsets"))
+        if platform is not None:
+            # A null platform selection is the same default as an absent key,
+            # including when ordinary job registration migrates old settings.
+            platform_tools = {k: v for k, v in platform_tools.items() if v is not None}
+        if platform is not None and platform_tools.get(platform) is not None:
+            # Watcher consent also needs the explicit native platform selection.
+            # Reuse string/list and composed-toolset resolution, not the CLI
+            # discovery normalizer: that may discover plugins/migrate settings.
+            # Missing/null selections keep the normal default. Check both saved
+            # layers separately so an overlay cannot hide a denial.
+            if not any("cronjob" in resolve_toolset(name)
+                       for name in names(platform_tools[platform])):
+                denied = True
         platforms = mapping(document.get("platforms"))
         # Restrict source binding to admission/control/credential inputs, not
         # display/model/latency preferences. Native actor/route checks still run.

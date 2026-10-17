@@ -29,6 +29,19 @@ looks it up. Authority and credential bindings are rechecked again after schedul
 registration, before an active receipt can be claimed.
 No automatic setup/enrollment is performed.
 
+Saved user tool permissions and strict administrator policy also bind consent.
+They are read afresh at review/acceptance/registration and before each source
+read, physical model attempt and delivery, including queued count-alert retries.
+Disabling `cronjob` or removing it from Telegram's saved tool selection prevents
+new paid consent and stops later watcher effects; an enabled owned job is not
+an irrevocable permission grant. Changed authority invalidates the old consent
+rather than expanding it. Invalid or unreadable current authorization fails
+closed. Empty/unconfigured permissions keep their normal defaults, and unrelated
+user display/turn-limit edits do not invalidate consent. Watcher Off remains
+available to the admitted private administrator after a tool denial. These checks
+are not an atomic transaction with concurrent external settings writers and
+cannot recall a request already sent. They do not change startup config caches.
+
 ## Review and enable
 
 In the private Telegram bot, open `/proactive` → Customize → Advanced / costs →

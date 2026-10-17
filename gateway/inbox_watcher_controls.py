@@ -41,6 +41,15 @@ class Binding:
             raise Denied('cross-profile watcher unavailable')
         # Dependency on M1: an old forgiving signature raises and fails closed.
         managed = managed_scope.load_managed_config(strict=True)
+        # Share the corrected action path's fresh, profile-scoped reader and
+        # toolset subtraction rules. Never flush or trust startup caches here.
+        # Keep valid denials inspectable; Draft refuses them, and every later
+        # effect compares this authority against the accepted consent snapshot.
+        # Off/status need private control authority, not a model-tool grant.
+        from agent.actionable_suggestions import _saved_authorization
+        saved, tool_denied = (None, False) if revocation else _saved_authorization(platform='telegram')
+        # Validate permissions before the mutation reader, which backs up bad
+        # files. A watcher authorization read must not copy private bad config.
         raw = config.require_readable_config_before_write()
         # Recheck fresh file policy as well as current gateway/transport admission.
         local = raw.get('platforms', {}).get('telegram', {})
@@ -71,12 +80,12 @@ class Binding:
                 or not re.fullmatch(r'[0-9a-f]{64}', metadata['fingerprint'])):
             raise Denied('supported bounded source metadata unavailable')
         # Only policy data, no mail. Changes invalidate all current review tokens.
-        authority = {'managed':managed, 'local_platform':local,
+        authority = {'managed':managed, 'local_platform':local, 'saved_permissions':saved,
                      'runtime_admin':runner.config.platforms[Platform.TELEGRAM].extra.get('allow_admin_from')}
         return {'home':str(self.home), 'actor':str(source.user_id), 'source':metadata,
                 'destination':{'platform':'telegram', 'chat_id':str(source.chat_id),
                                'thread_id':None, 'credential':credential},
-                'route':ROUTE, 'authority':digest(authority)}
+                'route':ROUTE, 'authority':digest(authority), 'saved_tool_denied':tool_denied}
 
     def validate_route(self):
         from agent.secret_scope import get_secret

@@ -197,6 +197,8 @@ class Draft:
     def __init__(self, binding):
         self.binding = binding
         self.baseline = binding.snapshot()
+        if self.baseline.get('saved_tool_denied', False):
+            raise Denied('current saved tool permission denied')
         self.created = time.monotonic()
         import uuid
         self.consent_id = uuid.uuid4().hex
