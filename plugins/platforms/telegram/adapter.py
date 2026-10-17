@@ -5629,6 +5629,29 @@ class TelegramAdapter(BasePlatformAdapter):
         else:  # "first" (default)
             return chunk_index == 0
 
+    async def send_inbox_watcher_alert(self, chat_id: str, count: int, guard) -> SendResult:
+        """One guarded, private, count-only PTB send; no rich/fallback/resend.
+
+        Return the normal adapter receipt contract. The durable watcher outbox
+        owns later retries, each with renewed authority and without model usage.
+        """
+        if (not isinstance(chat_id, str) or not chat_id.isdigit() or int(chat_id) <= 0
+                or type(count) is not int or not 1 <= count <= 5 or not self._bot):
+            return SendResult(success=False, error="watcher private delivery unavailable")
+        try:
+            guard()
+            message = await self._bot.send_message(
+                chat_id=chat_id, parse_mode=None, disable_notification=False,
+                text=f"📬 {count} urgent new inbox message(s). Open your mail app. "
+                     "Header-only scoring; /proactive watcher off stops this watcher.",
+            )
+            mid = getattr(message, "message_id", None)
+            if type(mid) is not int or mid <= 0:
+                return SendResult(success=False, error="watcher delivery unconfirmed")
+            return SendResult(success=True, message_id=str(mid))
+        except Exception:
+            return SendResult(success=False, error="watcher delivery unconfirmed")
+
     async def send(
         self,
         chat_id: str,

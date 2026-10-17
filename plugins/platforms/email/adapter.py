@@ -850,6 +850,74 @@ class EmailAdapter(BasePlatformAdapter):
             )
             await self._notify_fatal_error()
 
+    def inbox_watcher_metadata(self) -> dict:
+        """Local metadata only: no network, secret lookup, mailbox or connection probe.
+
+        This is a separate header-only reader, NEVER the gateway's RFC822 poller.
+        The fingerprint binds the already-loaded connection credential; it is not
+        a credential and is never a source of authentication authority.
+        """
+        import hashlib
+        if not (self._address and self._password and self._imap_host):
+            raise ValueError("native email connection unavailable")
+        binding = repr((self._address, self._imap_host, self._imap_port, self._password))
+        return {"type": "native-imap-headers-v1", "account": self._address,
+                "folder": "INBOX", "query": "new UID only",
+                "fingerprint": hashlib.sha256(binding.encode()).hexdigest()}
+
+    def inbox_watcher_read(self, cursor, *, max_items: int) -> dict:
+        """EXAMINE INBOX; bounded PEEK headers only. None establishes a baseline.
+
+        No search, bodies, attachments, flag changes, SMTP or user instructions.
+        Scan a bounded UID window (including holes) so an adversarial mailbox
+        cannot force an unbounded result set. UIDVALIDITY changes require consent.
+        """
+        if type(max_items) is not int or not 1 <= max_items <= 5:
+            raise ValueError("invalid batch limit")
+        imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=15)
+        try:
+            imap.login(self._address, self._password)
+            status, _ = imap.select("INBOX", readonly=True)
+            if status != "OK":
+                raise ValueError("mailbox unavailable")
+            epoch = imap.response("UIDVALIDITY")[1][0].decode("ascii")
+            next_uid = int(imap.response("UIDNEXT")[1][0])
+            if not epoch.isdigit() or next_uid < 1:
+                raise ValueError("invalid mailbox baseline")
+            if cursor is None:
+                return {"epoch": epoch, "cursor": next_uid - 1, "items": []}
+            if cursor["epoch"] != epoch or type(cursor["cursor"]) is not int:
+                raise ValueError("mailbox identity changed; review consent again")
+            high = min(next_uid - 1, cursor["cursor"] + max_items)
+            items = []
+            for uid in range(cursor["cursor"] + 1, high + 1):
+                status, data = imap.uid("fetch", str(uid),
+                    "(UID INTERNALDATE BODY.PEEK[HEADER.FIELDS (FROM SUBJECT DATE)]<0.4096>)")
+                if status != "OK":
+                    raise ValueError("header fetch unavailable")
+                raw = next((x[1] for x in data or [] if isinstance(x, tuple)), None)
+                if raw is None:
+                    continue  # expunged UID / hole
+                if not isinstance(raw, bytes) or len(raw) > 4096:
+                    raise ValueError("oversized header")
+                meta = next((x[0] for x in data or [] if isinstance(x, tuple)), b"")
+                internal = re.search(rb'INTERNALDATE "([^"\r\n]+)"', meta)
+                returned_uid = re.search(rb"\bUID ([0-9]+)\b", meta)
+                if not internal or not returned_uid or int(returned_uid[1]) != uid:
+                    raise ValueError("unverifiable header identity/date")
+                from datetime import datetime, timezone
+                stamp = datetime.strptime(internal[1].decode("ascii"), "%d-%b-%Y %H:%M:%S %z")
+                age = (datetime.now(timezone.utc) - stamp).total_seconds()
+                if not 0 <= age <= 86400:
+                    continue  # bounded 24h lookback; Date header is untrusted
+                from email.parser import BytesHeaderParser
+                msg = BytesHeaderParser().parsebytes(raw)
+                items.append({"id": str(uid), **{key: str(msg.get(key, ""))[:500]
+                              for key in ("from", "subject", "date")}})
+            return {"epoch": epoch, "cursor": high, "items": items}
+        finally:
+            _close_imap(imap)
+
     def _fetch_new_messages(self) -> List[Dict[str, Any]]:
         """Fetch new (unseen) messages from IMAP. Runs in executor thread."""
         results = []

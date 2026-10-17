@@ -181,19 +181,21 @@
     {
       "id": "inbox-watcher",
       "gates": [
-        "auxiliary.monitor",
-        "catalog:important-mail-monitor",
-        "cron schedule",
-        "cron delivery"
+        "profile-local inbox-watcher/state.db versioned consent",
+        "cron typed inbox_watcher metadata",
+        "fixed OpenAI physical dispatch allowance",
+        "private native Telegram receipt"
       ],
       "menu": "Advanced > 📬 Inbox watcher · Paid",
       "text_command": "/proactive watcher",
-      "status": "existing separate classifier automation; guide only; no activation. Reads connected inbox candidates; catalog cadence 30m; extra classifier and scheduled-agent usage. Missing enforced daily classifier budget blocks safe Customize activation. No dollar estimate. Existing jobs unchanged.",
-      "consumer": "cron/suggestion_catalog.py; cron/scripts/classify_items.py (task=monitor, max_tokens=1024); agent/auxiliary_client.py",
+      "status": "Implemented explicit paid opt-in for native Email INBOX headers -> pinned OpenAI gpt-4o-mini-2024-07-18 -> private native Telegram count alerts. Durable 1/run and selected UTC daily attempts, conservative input units, generated-token ceilings; no agent, fallback, SDK/transport retry or redirect. Other routes/sources/multiplex/standalone unavailable. Legacy jobs unchanged; main Off independent; no dollar ceiling.",
+      "consumer": "cron/inbox_watcher.py; cron/scripts/paid_inbox_watcher.py; gateway/inbox_watcher_controls.py; agent/auxiliary_client.py:call_bounded_inbox; native Email and Telegram adapters",
       "tests": [
-        "tests/test_proactive_customize.py",
-        "tests/test_proactive_customize_native.py",
-        "tests/cron/test_suggestions.py"
+        "tests/test_paid_inbox_native.py",
+        "tests/test_paid_inbox_transport_e2e.py",
+        "tests/test_paid_inbox_processes.py",
+        "tests/test_paid_inbox_admission.py",
+        "tests/test_paid_inbox_edges.py"
       ],
       "advanced": true
     },
@@ -246,7 +248,7 @@
     }
   ],
   "intentional_gaps": [
-    "No safe paid watcher activation until source/cadence/cost/permission and enforced classifier budgets are available.",
+    "Paid watcher scope is header-only native Email + fixed OpenAI API-key route + native private Telegram; no Gmail/other routes, bodies, standalone or multiplexed profiles.",
     "No semantic dedupe/update routing between generated procedure names and differently named ordinary skills.",
     "No phone screenshot or native Windows/macOS execution in this candidate."
   ]

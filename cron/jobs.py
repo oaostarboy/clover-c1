@@ -457,7 +457,10 @@ def fire_claim_fence(job_id: str, *, expected_owner: str):
 # as a filesystem path component under ``OUTPUT_DIR``; allowing it to be
 # updated lets an unsafe value (``../escape``, absolute path, nested) leak
 # into output writes/deletes.
-_IMMUTABLE_JOB_FIELDS = frozenset({"id", "workstream_scope"})
+_IMMUTABLE_JOB_FIELDS = frozenset({"id", "workstream_scope", "inbox_watcher"})
+
+# Internal script-only watcher owner; never accepted from freeform model input.
+_inbox_watcher_owner: ContextVar[Optional[dict]] = ContextVar("cron_inbox_watcher_owner", default=None)
 
 # Set only by the current, authenticated human admission owner. Delivery
 # origin, session environment and model arguments are deliberately not inputs.
@@ -2466,6 +2469,18 @@ def create_job(
     if normalized_reasoning_effort is not None:
         job["reasoning_effort"] = normalized_reasoning_effort
 
+    watcher = _inbox_watcher_owner.get()
+    if watcher is not None:
+        from cron.inbox_watcher import SCRIPT
+        if (set(watcher) != {"v", "digest", "home"} or watcher["v"] != 1
+                or not re.fullmatch(r"[0-9a-f]{64}", watcher["digest"])
+                or not Path(watcher["home"]).is_absolute()
+                or normalized_script != SCRIPT or not normalized_no_agent
+                or deliver != "local" or normalized_attach is not False
+                or prompt_text or origin or normalized_monitor_script or normalized_monitor_url):
+            raise ValueError("invalid owned inbox watcher job")
+        job["inbox_watcher"] = copy.deepcopy(watcher)
+
     metadata = _workstream_scope_owner.get()
     if metadata is not None:
         accepted = metadata["request"]
@@ -2566,6 +2581,12 @@ def update_job(job_id: str, updates: Dict[str, Any]) -> Optional[Dict[str, Any]]
             if job["id"] != job_id:
                 continue
 
+            if job.get("inbox_watcher") is not None and {
+                    "prompt", "script", "no_agent", "schedule", "deliver", "origin",
+                    "attach_to_session", "monitor_script", "monitor_url", "model", "provider",
+                    "base_url", "skills", "skill", "enabled_toolsets", "context_from", "workdir"
+                    }.intersection(updates):
+                raise ValueError("owned inbox watcher changes require new scoped consent")
             metadata = job.get("workstream_scope")
             if isinstance(metadata, dict):
                 if updates.get("workstream_id"):

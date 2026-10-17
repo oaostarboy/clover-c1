@@ -50,7 +50,7 @@ OPTIONAL = (
 )
 ADVANCED_ENTRIES = {
     "monitors": "Task / job monitors",
-    "watcher": "Inbox watcher (paid) — guide",
+    "watcher": "Inbox watcher (paid) — scoped opt-in",
     "judges": "Model judges — availability",
     "repairs": "Summary repair — availability",
     "scope": "Scope / evidence / limits",
@@ -76,18 +76,16 @@ def advanced_info(name: str, root: dict) -> str:
             "or enrolls none. Off suspends workstream use, not independently scheduled jobs."
         ),
         "watcher": (
-            "Inbox watcher — existing optional catalog automation, not desktop capture.\n"
-            "It reads a connected inbox, sends candidate content to the configured "
-            "monitor model for urgency scoring, and may send alerts. The starter "
-            "cadence is every 30 minutes; scoring adds extra model usage, plus the "
-            "scheduled agent's usage. Provider rates vary; no dollar estimate is implied. "
-            "It is not activated by On or this menu; any existing jobs stay unchanged.\n"
-            "Safe activation here is unavailable: the existing classifier lacks an "
-            "enforced per-day call budget, and proactive.aux limits do not cover it. "
-            "Before activation, separately review source, schedule, delivery, permissions, "
-            "cost acceptance and enforceable job/model limits. No acceptance button is "
-            "offered until those gates exist. /cron inspects existing jobs; "
-            "/suggestions catalog shows separate automation ideas, not free features."
+            "📬 Inbox watcher · separate paid opt-in, not desktop capture.\n"
+            "Header urgency scoring adds extra model usage. In a native private Telegram chat, "
+            "a connected native Email source can be reviewed with source, cadence, private destination, "
+            "pinned OpenAI model and enforced physical-attempt/input/output limits, then a distinct "
+            "Accept extra usage action. CLI/TUI and other sources/routes are unavailable for activation. "
+            "Opening/Cancel/ordinary Save/main On/recommended never enable it. "
+            "Use /proactive watcher in the private native bot; /proactive watcher status shows usage; "
+            "/proactive watcher off revokes only its owned job. Main Off does not stop this independent job. "
+            "No dollar ceiling is promised. Legacy catalog/manual jobs remain separate, unchanged and "
+            "outside the new limits; /cron inspects them. No source content or provider is contacted by discovery."
         ),
         "judges": (
             "Model-assisted suggestion judges — not wired to the foreground offer path. "
@@ -276,7 +274,7 @@ class ProactiveDraft:
             text = (f"⏱ Frequency: {c['cooldown']}s cooldown · {c['cap']}/session\n"
                     "Choose hourly or daily; both cap offers at 1/session. Existing custom limits remain unless you choose one.")
         elif view == "advanced":
-            text = "⚙️ Advanced · status and setup guides\nPaid options never start from this menu."
+            text = "⚙️ Advanced · status and setup\nPaid watcher requires separate scoped extra-usage acceptance."
         elif view in ADVANCED_ENTRIES:
             text = advanced_info(view, self.effective)
         elif view == "recommended":

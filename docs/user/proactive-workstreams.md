@@ -409,15 +409,17 @@ inbox urgency classifier; model-judge and repair availability; scope, evidence
 and limits; routines/reminders; desktop-capture availability. Descriptions and
 cost caveats appear after tapping, not as a large Customize front-page paragraph.
 
-The existing inbox watcher reads a connected inbox and sends candidate content
-to `auxiliary.monitor` for urgency scoring. Its catalog starter cadence is every
-30 minutes. It can incur scheduled-agent plus classifier usage. **Activation
-from Customize is unavailable**: the existing classifier has no enforced daily
-call budget, and `proactive.aux` does not cover it. No fake cost-confirmation or
-Enable button is offered. A safe activation flow needs source, scope, delivery,
-cadence, cost acceptance and enforced job/model budgets first. This menu does
-not inspect private inbox content, enumerate job details, or create/enroll jobs.
-Desktop/screen/audio capture was research, not a shipped proactivity consumer.
+The separate [paid inbox watcher](paid-inbox-watcher.md) supports one narrow,
+explicit opt-in: connected native Email / INBOX headers, a pinned non-reasoning
+OpenAI route, and private native Telegram count alerts. Review source, cadence,
+private destination, route, urgency and usage caps, then **Accept extra usage**.
+Opening, Cancel, ordinary Save, main On and recommended cannot enable it. A
+script-only owned job has no scheduling agent. Durable per-physical-attempt
+reservations cover bounded input and generated tokens, not a dollar guarantee.
+Discovery never fetches mail or calls a provider. Watcher Off revokes only its
+owned job; main Off leaves it independent. Legacy catalog/manual mail jobs and
+their costs are unchanged and outside this allowance. Other sources/transports,
+multiplexed profiles and desktop/screen/audio capture are unavailable.
 
 Model-assisted suggestion judges are not wired to the foreground offer path;
 `max_repairs` does not activate model repair in the supported summary audit.
