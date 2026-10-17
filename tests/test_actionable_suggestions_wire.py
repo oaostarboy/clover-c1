@@ -27,12 +27,16 @@ def native(monkeypatch, tmp_path):
         h.adapter._register_handlers(app)
 
     h, target = make_diagnostic(monkeypatch, tmp_path, setup)
+    send = [p for m, p in endpoint.calls if m == "sendMessage"][-1]
+    app.bot_data["action_choices"] = [b["callback_data"] for b in send["reply_markup"]["inline_keyboard"][0]]
     yield h, target, app, endpoint
     asyncio.run(app.shutdown())
     h.close()
 
 
 def native_tap(app, data="cp:0", *, actor=12345, message=50, chat=12345, thread=None):
+    if data in {"cp:0", "cp:1"}:
+        data = app.bot_data["action_choices"][int(data[-1])]
     msg = {"message_id": message, "date": 1800000000,
            "chat": {"id": chat, "type": "private"}, "text": "proposal"}
     if thread is not None:
