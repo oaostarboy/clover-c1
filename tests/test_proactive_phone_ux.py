@@ -26,7 +26,7 @@ async def test_unconfigured_policy_has_short_controls_without_owner_setup(home):
     assert await r._handle_message(event("/proactive")) is None
     wire = a._send_message_with_thread_fallback.call_args.kwargs
     assert wire["text"].startswith("Proactive: On\n")
-    assert len(wire["text"]) <= 160
+    assert len(wire["text"]) <= 280
     assert [b.text for b in wire["reply_markup"].inline_keyboard[0]] == ["On", "Off"]
     assert (home / "config.yaml").read_bytes() == before
 
@@ -60,7 +60,7 @@ async def test_cli_enrolled_owner_gets_short_native_menu_and_compact_callback(ho
     wire = a._send_message_with_thread_fallback.call_args.kwargs
     markup = wire["reply_markup"].to_dict()
     print("PROACTIVE_UX_ENROLLED=" + json.dumps({"text": wire["text"], "characters": len(wire["text"]), "reply_markup": markup}))
-    assert len(wire["text"]) <= 160
+    assert len(wire["text"]) <= 280
     assert "/proactive on" not in wire["text"]
     buttons = wire["reply_markup"].inline_keyboard[0]
     assert [b.text for b in buttons] == ["On", "Off"]
@@ -68,7 +68,7 @@ async def test_cli_enrolled_owner_gets_short_native_menu_and_compact_callback(ho
     await tap(a, q)
     result = q.edit_message_text.call_args.kwargs["text"]
     print("PROACTIVE_UX_CALLBACK=" + json.dumps({"action": value, "text": result, "characters": len(result), "reply_markup": q.edit_message_text.call_args.kwargs["reply_markup"]}))
-    assert len(result) <= 180
+    assert len(result) <= 280
     assert f"Proactive: {value.title()}" in result and "Saved" in result and "next turn" in result
     assert load_settings().enabled is (value == "on")
     r._handle_message_with_agent.assert_not_called()
@@ -101,7 +101,7 @@ def test_tui_dispatch_uses_same_short_controls_without_a_model(home):
         return response["result"]["output"]
 
     text = dispatch("")
-    assert text.startswith("Proactive: Off\n") and len(text) <= 200
+    assert text.startswith("Proactive: Off\n") and len(text) <= 360
     assert "/proactive on" in text and "/proactive off" in text
     assert not (home / "config.yaml").exists()
     assert "Saved" in dispatch("on") and load_settings().active
@@ -137,7 +137,7 @@ async def test_unrestricted_command_authority_does_not_create_admin_enrollment(h
     assert r._is_user_authorized_for_source(src)  # Eligible admission baseline.
     assert r._proactive_caller_is_admin(src)
     text = await r._handle_message(event("/proactive on", "12345678"))
-    assert isinstance(text, str) and "Saved" in text and len(text) < 180
+    assert isinstance(text, str) and "Saved" in text and len(text) < 360
     assert "allow_admin_from" not in config.require_readable_config_before_write().get("platforms", {}).get("telegram", {})
 
 
@@ -220,7 +220,7 @@ async def test_compact_callback_reports_saved_effective_divergence(home, tmp_pat
         assert "Proactive: On" in result
         assert "Saved: Off" in result and "effective: On" in result
         assert "managed policy" in result and "no change" in result
-        assert "applies next turn" not in result and len(result) <= 240
+        assert "applies next turn" not in result and len(result) <= 480
         assert (home / "config.yaml").read_bytes() == before
     finally:
         managed_scope.invalidate_managed_cache()

@@ -17,7 +17,7 @@ def test_proactive_is_separate_discoverable_command():
 def test_help_autocomplete_and_telegram_menu_derive_real_command():
     from clover_cli.commands import COMMANDS, SUBCOMMANDS, gateway_help_lines, telegram_bot_commands
     assert "/proactive" in COMMANDS
-    assert SUBCOMMANDS["/proactive"] == ["status", "on", "off"]
+    assert {"status", "on", "off", "customize", "recommended", "advanced", "watcher"} <= set(SUBCOMMANDS["/proactive"])
     assert any("/proactive" in line for line in gateway_help_lines())
     assert "proactive" in dict(telegram_bot_commands(include_plugins=False))
 

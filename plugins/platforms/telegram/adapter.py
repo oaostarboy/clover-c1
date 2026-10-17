@@ -244,6 +244,7 @@ from gateway.config import Platform, PlatformConfig
 from gateway.platforms.base import (
     BasePlatformAdapter,
     absorb_inbound_receipts,
+    merge_telegram_album_media,
     complete_inbound_handoff,
     MessageEvent,
     MessageType,
@@ -873,6 +874,9 @@ class TelegramAdapter(BasePlatformAdapter):
         self._pending_photo_batch_tasks: Dict[str, asyncio.Task] = {}
         self._media_group_events: Dict[str, MessageEvent] = {}
         self._media_group_tasks: Dict[str, asyncio.Task] = {}
+        # Popped batches belong to dispatch, not to the debounce timer.
+        # Track them separately so disconnect still cancels and awaits them.
+        self._media_dispatch_tasks: set[asyncio.Task] = set()
         # Buffer rapid text messages so Telegram client-side splits of long
         # messages are aggregated into a single MessageEvent.  Lower defaults
         # (0.3s / 1.0s instead of 0.6s / 2.0s) let short replies stream
@@ -1280,27 +1284,37 @@ class TelegramAdapter(BasePlatformAdapter):
                         )
                     return
                 try:
-                    await self.handle_message(event)
+                    if await self.handle_message(event) is False:
+                        # Explicit failed queue handoff: retain it and the
+                        # remainder, but never spin retrying a poison input.
+                        for rest in events[idx:]:
+                            self._hold_inbound_event(
+                                rest, where="redispatch-unaccepted", schedule=False
+                            )
+                        allow_followup_schedule = False
+                        return
                 except asyncio.CancelledError:
-                    self._hold_inbound_event(
-                        event, where="redispatch-cancelled", schedule=False
-                    )
+                    if not getattr(event, "_adapter_handoff_complete", False):
+                        self._hold_inbound_event(
+                            event, where="redispatch-cancelled", schedule=False
+                        )
                     for rest in events[idx + 1 :]:
                         self._hold_inbound_event(
                             rest, where="redispatch-cancelled", schedule=False
                         )
                     raise
                 except Exception:
-                    # Retryable failure: keep current + remainder. Do not
+                    # Keep only unaccepted work plus the remainder. Do not
                     # immediately reschedule — a poison event would tight-loop.
                     # Next mark_connected or a later connected-path hold drains.
                     logger.exception(
-                        "[Telegram] Failed to redispatch held inbound (%d chars); re-holding",
+                        "[Telegram] Failed to redispatch held inbound (%d chars); retaining unaccepted work",
                         len(getattr(event, "text", None) or ""),
                     )
-                    self._hold_inbound_event(
-                        event, where="redispatch-failed", schedule=False
-                    )
+                    if not getattr(event, "_adapter_handoff_complete", False):
+                        self._hold_inbound_event(
+                            event, where="redispatch-failed", schedule=False
+                        )
                     for rest in events[idx + 1 :]:
                         self._hold_inbound_event(
                             rest, where="redispatch-failed", schedule=False
@@ -5366,6 +5380,8 @@ class TelegramAdapter(BasePlatformAdapter):
             collect(task)
         for task in list(self._pending_photo_batch_tasks.values()):
             collect(task)
+        for task in list(getattr(self, "_media_dispatch_tasks", ())):
+            collect(task)
         for task in list(self._pending_text_batch_tasks.values()):
             collect(task)
         collect(getattr(self, "_polling_error_task", None))
@@ -5628,6 +5644,29 @@ class TelegramAdapter(BasePlatformAdapter):
             return True
         else:  # "first" (default)
             return chunk_index == 0
+
+    async def send_inbox_watcher_alert(self, chat_id: str, count: int, guard) -> SendResult:
+        """One guarded, private, count-only PTB send; no rich/fallback/resend.
+
+        Return the normal adapter receipt contract. The durable watcher outbox
+        owns later retries, each with renewed authority and without model usage.
+        """
+        if (not isinstance(chat_id, str) or not chat_id.isdigit() or int(chat_id) <= 0
+                or type(count) is not int or not 1 <= count <= 5 or not self._bot):
+            return SendResult(success=False, error="watcher private delivery unavailable")
+        try:
+            guard()
+            message = await self._bot.send_message(
+                chat_id=chat_id, parse_mode=None, disable_notification=False,
+                text=f"📬 {count} urgent new inbox message(s). Open your mail app. "
+                     "Header-only scoring; /proactive watcher off stops this watcher.",
+            )
+            mid = getattr(message, "message_id", None)
+            if type(mid) is not int or mid <= 0:
+                return SendResult(success=False, error="watcher delivery unconfirmed")
+            return SendResult(success=True, message_id=str(mid))
+        except Exception:
+            return SendResult(success=False, error="watcher delivery unconfirmed")
 
     async def send(
         self,
@@ -7084,11 +7123,18 @@ class TelegramAdapter(BasePlatformAdapter):
             except Exception:
                 owned = False
             if not owned:
-                await query.answer(text="Picker expired or not owned by you; run /proactive again.")
+                await query.answer(text=guard.get("denied_text") or "Picker expired or not owned by you; run /proactive again.")
                 return
 
         try:
-            idx = int(data[3:])
+            payload = data[3:].split(":")
+            if state.get("nonce"):
+                if len(payload) != 2 or payload[1] != state["nonce"]:
+                    await query.answer(text="Picker already used; use the current buttons.")
+                    return
+            elif len(payload) != 1:
+                raise ValueError("unexpected callback token")
+            idx = int(payload[0])
             if idx < 0:
                 raise ValueError("negative choice index")
             choice = state["choices"][idx]
@@ -7114,19 +7160,38 @@ class TelegramAdapter(BasePlatformAdapter):
             logger.error("Choice picker selection failed: %s", exc)
             result_text = f"Error applying selection: {exc}"
 
+        # An owned settings page may continue in the same message. Every page
+        # gets a new token, so a delayed/repeated old tap cannot select a new
+        # control at the same index. Unowned generic pickers retain their API.
+        next_state = None
+        keyboard = None
+        if guard is not None and isinstance(result_text, dict):
+            import secrets
+            nonce = secrets.token_hex(6)
+            choices = result_text["choices"]
+            buttons = [InlineKeyboardButton(str(c["label"]), callback_data=f"cp:{i}:{nonce}")
+                       for i, c in enumerate(choices)]
+            keyboard = InlineKeyboardMarkup([buttons[i:i + 2] for i in range(0, len(buttons), 2)])
+            next_state = dict(state, choices=choices, nonce=nonce)
+            result_text = result_text["text"]
+        edited = False
         try:
             await query.edit_message_text(
                 text=self.format_message(result_text),
                 parse_mode=ParseMode.MARKDOWN_V2,
-                reply_markup=None,
+                reply_markup=keyboard,
             )
+            edited = True
         except Exception:
             try:
                 await query.edit_message_text(
-                    text=result_text, parse_mode=None, reply_markup=None,
+                    text=result_text, parse_mode=None, reply_markup=keyboard,
                 )
+                edited = True
             except Exception:
                 pass
+        if edited and next_state is not None and chat_id not in self._choice_picker_state:
+            self._choice_picker_state[chat_id] = next_state
         await query.answer()
         if self._choice_picker_state.get(chat_id) is state:
             self._choice_picker_state.pop(chat_id, None)
@@ -10761,6 +10826,8 @@ class TelegramAdapter(BasePlatformAdapter):
         media_group_id = getattr(msg, "media_group_id", None)
         if media_group_id:
             return f"{session_key}:album:{media_group_id}"
+        if event.get_command() == "queue":
+            return f"{session_key}:photo-request:{event.message_id}"
         return f"{session_key}:photo-burst"
 
     async def _flush_photo_batch(self, batch_key: str) -> None:
@@ -10772,20 +10839,26 @@ class TelegramAdapter(BasePlatformAdapter):
             event = self._pending_photo_batches.pop(batch_key, None)
             if not event:
                 return
+            if self._pending_photo_batch_tasks.get(batch_key) is current_task:
+                self._pending_photo_batch_tasks.pop(batch_key, None)
+            if current_task is not None:
+                self.__dict__.setdefault("_media_dispatch_tasks", set()).add(current_task)
             if self._should_drop_delayed_delivery():
                 self._hold_inbound_event(event, where="photo-flush")
                 event = None
                 return
             logger.info("[Telegram] Flushing photo batch %s with %d image(s)", batch_key, len(event.media_urls))
-            await self.handle_message(event)
+            if await self.handle_message(event) is False:
+                self._hold_inbound_event(event, where="photo-flush-unaccepted", schedule=False)
             event = None
         except asyncio.CancelledError:
-            if event is not None:
+            if event is not None and not getattr(event, "_adapter_handoff_complete", False):
                 self._hold_inbound_event(event, where="photo-flush-cancelled")
             raise
         finally:
             if self._pending_photo_batch_tasks.get(batch_key) is current_task:
                 self._pending_photo_batch_tasks.pop(batch_key, None)
+            getattr(self, "_media_dispatch_tasks", set()).discard(current_task)
 
     def _enqueue_photo_event(self, batch_key: str, event: MessageEvent) -> None:
         """Merge photo events into a pending batch and schedule flush."""
@@ -10795,6 +10868,7 @@ class TelegramAdapter(BasePlatformAdapter):
 
         existing = self._pending_photo_batches.get(batch_key)
         if existing is None:
+            event.metadata["telegram_media_batch"] = f"photo:{event.message_id or id(event)}"
             self._pending_photo_batches[batch_key] = event
         else:
             existing.media_urls.extend(event.media_urls)
@@ -11117,16 +11191,27 @@ class TelegramAdapter(BasePlatformAdapter):
         new user message and interrupts the first. We debounce briefly and merge the
         attachments into a single MessageEvent.
         """
+        event.metadata["telegram_media_batch"] = f"album:{media_group_id}"
+        if event.message_id and str(event.message_id).isdigit():
+            event.metadata["telegram_album_members"] = {
+                str(event.message_id): [list(event.media_urls), list(event.media_types)]
+            }
+        # Recovery redispatches the event directly, not through this method.
+        # Transport identity must already exist if disconnect takes ownership.
         if self._should_drop_delayed_delivery():
             self._hold_inbound_event(event, where="media-group-enqueue")
             return
-
+        # Telegram album IDs must not coalesce different senders/topic lanes,
+        # even when those lanes deliberately share a gateway session.
+        media_group_id = repr((media_group_id, event.source.chat_id,
+                               event.source.user_id, event.source.thread_id))
         existing = self._media_group_events.get(media_group_id)
         if existing is None:
             self._media_group_events[media_group_id] = event
         else:
-            existing.media_urls.extend(event.media_urls)
-            existing.media_types.extend(event.media_types)
+            if not merge_telegram_album_media(existing, event):
+                existing.media_urls.extend(event.media_urls)
+                existing.media_types.extend(event.media_types)
             if event.text:
                 existing.text = self._merge_caption(existing.text, event.text)
             absorb_inbound_receipts(existing, event)
@@ -11147,20 +11232,26 @@ class TelegramAdapter(BasePlatformAdapter):
             event = self._media_group_events.pop(media_group_id, None)
             if event is None:
                 return
+            if self._media_group_tasks.get(media_group_id) is current_task:
+                self._media_group_tasks.pop(media_group_id, None)
+            if current_task is not None:
+                self.__dict__.setdefault("_media_dispatch_tasks", set()).add(current_task)
             if self._should_drop_delayed_delivery():
                 self._hold_inbound_event(event, where="media-group-flush")
                 event = None
                 return
-            await self.handle_message(event)
+            if await self.handle_message(event) is False:
+                self._hold_inbound_event(event, where="media-group-flush-unaccepted", schedule=False)
             event = None
         except asyncio.CancelledError:
             # Cancelled after pop but before durable dispatch — hold, don't lose.
-            if event is not None:
+            if event is not None and not getattr(event, "_adapter_handoff_complete", False):
                 self._hold_inbound_event(event, where="media-group-flush-cancelled")
             raise
         finally:
             if self._media_group_tasks.get(media_group_id) is current_task:
                 self._media_group_tasks.pop(media_group_id, None)
+            getattr(self, "_media_dispatch_tasks", set()).discard(current_task)
 
     async def _handle_sticker(self, msg: Message, event: "MessageEvent") -> None:
         """

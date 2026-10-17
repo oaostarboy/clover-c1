@@ -10,9 +10,10 @@ Nothing here is read from an event field, a role, a TTY, a user-supplied id,
 or model/tool text.  The registry lives in this module's private state, so a
 ``MessageEvent`` built, copied, ``dataclasses.replace``-d, restored,
 scheduled, delegated or injected by maintenance code has no entry and carries
-no provenance.  Python is not an in-process sandbox; this is the app's
-trusted-owner contract, not isolation from arbitrary code in the same
-interpreter.
+no provenance. A trusted input owner may explicitly move (not copy) its
+existing issue to its validated dispatch or queue clone. Python is not an
+in-process sandbox; this is the app's trusted-owner contract, not isolation
+from arbitrary code in the same interpreter.
 
 Origin confirms *who typed the message*.  It grants no execution permission,
 no continuation authority and no approval.
@@ -27,7 +28,7 @@ import secrets
 import threading
 import uuid
 import weakref
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any, Callable, Dict, Optional
 
 HUMAN = "human"
@@ -138,6 +139,50 @@ def transfer_human_ingress(source: Any, target: Any, *, platform: str, original_
         issue = _ISSUED.get(id(source))
         if (issue is None or issue.event_ref() is not source or issue.platform != platform
                 or issue.content_digest != text_digest(original_text) or key in _ISSUED):
+            return False
+        del _ISSUED[id(source)]
+        _ISSUED[key] = replace(issue, event_ref=ref)
+    return True
+
+
+def transfer_queued_human_ingress(source: Any, target: Any) -> bool:
+    """Move an existing issue to the host's exact /queue payload clone.
+
+    The only permitted rewrite is removing the parsed command prefix. All
+    other event fields must survive unchanged. This moves, never copies or
+    mints, and retains the original scope, digest and liveness callback. In
+    particular, a bound original digest does NOT attest to rewritten bytes.
+    Legacy adapter issues remain unbound; metadata cannot create an issue.
+    """
+    if (source is target or not is_dataclass(source) or type(source) is not type(target)
+            or getattr(source, "internal", False) or getattr(source, "synthetic", False)
+            or not getattr(source, "allow_gateway_control", False)
+            or source.get_command() != "queue"
+            or target.text != source.get_command_args().strip()):
+        return False
+    for field in fields(source):
+        if field.name == "text":
+            continue
+        expected = getattr(source, field.name)
+        if field.name == "message_type" and not source.media_urls:
+            expected = type(source.message_type).TEXT
+        if getattr(target, field.name) != expected:
+            return False
+    key = id(target)
+    def forget(_ref):
+        with _LOCK:
+            _ISSUED.pop(key, None)
+    try:
+        ref = weakref.ref(target, forget)
+    except TypeError:
+        return False
+    with _LOCK:
+        issue = _ISSUED.get(id(source))
+        platform = getattr(getattr(source, "source", None), "platform", None)
+        platform = getattr(platform, "value", platform)
+        if (issue is None or issue.event_ref() is not source or key in _ISSUED
+                or issue.platform != platform
+                or (issue.content_digest and issue.content_digest != text_digest(source.text))):
             return False
         del _ISSUED[id(source)]
         _ISSUED[key] = replace(issue, event_ref=ref)

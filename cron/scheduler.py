@@ -5585,6 +5585,7 @@ def run_job(
     extra_prompt: Optional[str] = None,
     cancel_event: Optional[_CancelEventLike] = None,
     unreachable_result: Optional[dict] = None,
+    watcher_context=None,
 ) -> tuple[bool, str, str, Optional[str]]:
     """
     Execute a single cron job.
@@ -5615,6 +5616,14 @@ def run_job(
     """
     job_id = job["id"]
     job_name = str(job.get("name") or job.get("prompt") or job_id or "cron job")
+
+    # Internal script-only route needs live admitted adapters. Never fall through
+    # to an agent or a generic subprocess if its typed metadata was edited.
+    from cron.inbox_watcher import SCRIPT as _INBOX_SCRIPT
+    if "inbox_watcher" in job or job.get("script") == _INBOX_SCRIPT:
+        from cron.scripts.paid_inbox_watcher import run_owned
+        _watcher_adapters, _watcher_loop = watcher_context or (None, None)
+        return run_owned(job, adapters=_watcher_adapters, loop=_watcher_loop)
 
     # ---------------------------------------------------------------
     # no_agent short-circuit — the script IS the job, no LLM involvement.
@@ -7395,6 +7404,8 @@ def _run_one_job_body(
         # interpreter-shutdown guard in _deliver_result.
         _deferred_agents: list = []
         _unreachable_result: dict = {}
+        _watcher_kwargs = ({"watcher_context": (adapters, loop)}
+                           if "inbox_watcher" in job else {})
         try:
             if fire_claim_lost is None:
                 success, output, final_response, error = run_job(
@@ -7402,6 +7413,7 @@ def _run_one_job_body(
                     defer_agent_teardown=_deferred_agents,
                     extra_prompt=extra_prompt,
                     unreachable_result=_unreachable_result,
+                    **_watcher_kwargs,
                 )
             else:
                 success, output, final_response, error = run_job(
@@ -7410,6 +7422,7 @@ def _run_one_job_body(
                     extra_prompt=extra_prompt,
                     cancel_event=fire_claim_lost,
                     unreachable_result=_unreachable_result,
+                    **_watcher_kwargs,
                 )
         except BaseException:
             # run_job's finally still hands back the agent when it raises; tear

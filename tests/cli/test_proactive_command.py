@@ -33,7 +33,7 @@ def test_cli_toggle_uses_bounded_preset_and_live_settings_reader(control):
     assert cli.process_command("/proactive on") is True
     actual = load_settings()
     assert actual.active and actual.recall_enabled and actual.compaction_audit_enabled
-    assert not actual.suggestions_enabled and not actual.procedures_enabled
+    assert actual.suggestions_enabled and not actual.procedures_enabled
     assert actual.compaction_audit_max_repairs == 0
     assert actual.private_only and not actual.eligible_jobs
     assert actual.aux_max_calls_per_day == 4
@@ -116,7 +116,7 @@ def test_status_shows_persisted_and_managed_effective_state(control, tmp_path, m
     try:
         cli.process_command("/proactive status")
         text = str(cli.console.print.call_args)
-        assert "Proactive: Off (saved" in text
+        assert "Saved: Off" in text and "managed policy" in text
         assert "Effective settings: On (mode: active)" in text
         assert not (home / "config.yaml").exists()
     finally:
@@ -138,7 +138,7 @@ def test_first_enable_preserves_timing_limits_and_aux_budgets(control, timing):
     saved = config.read_raw_config()["proactive"]
     assert saved["suggestions"] == {"enabled": False, "preferred_timing": timing, "cooldown_seconds": 7200}
     assert saved["eligible_jobs"] == ["owned-monitor"]
-    assert saved["recall"] == {"enabled": True, "max_bytes": 128}
+    assert saved["recall"] == {"enabled": False, "max_bytes": 128}
     assert saved["compaction_audit"] == {"enabled": True}
     assert saved["aux"] == {"max_calls_per_event": 0, "max_calls_per_day": 0, "max_output_tokens": 64}
     assert load_settings().active
@@ -219,8 +219,8 @@ def test_managed_overlay_toggle_preserves_whole_raw_document(managed_preferences
     expected["proactive"]["enabled"] = action == "on"
     if action == "on":
         expected["proactive"].update(mode="active")
-        expected["proactive"]["recall"]["enabled"] = True
         expected["proactive"]["compaction_audit"] = {"enabled": True}
+        expected["proactive"]["procedures"] = {"enabled": False}
     cli.process_command("/proactive " + action)
     assert "Saved;" in str(cli.console.print.call_args)
     assert config.read_raw_config() == expected
@@ -258,9 +258,10 @@ def test_managed_proactive_modified_pins_reject_without_document_write(managed_p
     (managed / "config.yaml").write_text(yaml.safe_dump(overlay))
     managed_scope.invalidate_managed_cache()
     before = (home / "config.yaml").read_bytes()
-    cli.process_command("/proactive on")
+    action = "recommended" if any(k in pin for k in ("recall", "compaction_audit")) else "on"
+    cli.process_command("/proactive " + action)
     text = str(cli.console.print.call_args)
-    assert "could not be confirmed" in text and "Saved;" not in text
+    assert ("could not be confirmed" in text or "Not saved" in text) and "Saved;" not in text
     assert (home / "config.yaml").read_bytes() == before
     effective = config.load_config(migrate=False)["proactive"]
     for key, value in pin.items():
@@ -280,7 +281,7 @@ def test_managed_proactive_disable_pin_rejects_without_document_write(managed_pr
     managed_scope.invalidate_managed_cache()
     before = (home / "config.yaml").read_bytes()
     cli.process_command("/proactive off")
-    assert "could not be confirmed" in str(cli.console.print.call_args)
+    assert "Not saved" in str(cli.console.print.call_args)
     assert (home / "config.yaml").read_bytes() == before
     assert load_settings().enabled is True
 

@@ -9629,6 +9629,60 @@ async def _acreate_with_stream(
     )
 
 
+# Scoped SDK diagnostic suppression: mail never becomes a request-options log.
+# The filter is inert for every unrelated thread/context and auxiliary caller.
+import contextvars as _inbox_contextvars
+_INBOX_PRIVATE_DISPATCH = _inbox_contextvars.ContextVar("inbox_private_dispatch", default=False)
+
+
+class _InboxPrivateLogFilter(logging.Filter):
+    def filter(self, record):
+        return not _INBOX_PRIVATE_DISPATCH.get()
+
+
+_INBOX_PRIVATE_LOG_FILTER = _InboxPrivateLogFilter()
+
+
+def create_bounded_inbox_client(api_key: str):
+    """Fixed official endpoint, no environment proxy/redirect/transport retry."""
+    import httpx
+    from openai import OpenAI
+    return OpenAI(api_key=api_key, base_url="https://api.openai.com/v1", max_retries=0,
+                  http_client=httpx.Client(follow_redirects=False, trust_env=False,
+                                           transport=httpx.HTTPTransport(retries=0)))
+
+
+def call_bounded_inbox(*, client, messages: list, max_output_tokens: int, reserve):
+    """Watcher-only fixed physical dispatch; unrelated auxiliary paths unchanged.
+
+    The owner supplies an official OpenAI client with SDK retries disabled and
+    reserves its durable allowance immediately before this single request. No
+    Relay middleware, auth recovery, format repair, task/main routing or fallback.
+    Only this pinned non-reasoning model has a supported generated-token ceiling.
+    Production construction pins api.openai.com; offline tests inject a transport.
+    """
+    from openai import OpenAI
+    if (type(client) is not OpenAI or client.max_retries != 0
+            or client._client.follow_redirects is not False):
+        raise ValueError("watcher requires official OpenAI SDK; no retries or redirects")
+    if type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 256:
+        raise ValueError("invalid watcher output ceiling")
+    # OpenAI's debug request-options diagnostic includes the full JSON body.
+    # Suppress only this watcher call, not other callers' logging or routing.
+    sdk_logger = logging.getLogger("openai._base_client")
+    sdk_logger.addFilter(_INBOX_PRIVATE_LOG_FILTER)
+    privacy = _INBOX_PRIVATE_DISPATCH.set(True)
+    try:
+        reserve()  # conservative: never refunded after uncertain transmission
+        return client.chat.completions.create(
+            model="gpt-4o-mini-2024-07-18", messages=messages, temperature=0,
+            max_tokens=max_output_tokens, stream=False, timeout=20,
+            response_format={"type": "json_object"},
+        )
+    finally:
+        _INBOX_PRIVATE_DISPATCH.reset(privacy)
+
+
 @_relay_auxiliary_call
 def call_llm(
     task: str = None,
