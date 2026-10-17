@@ -40,7 +40,11 @@ def observe_cli_run(request, monkeypatch):
         started = time.monotonic()
         monkeypatch.setattr(subprocess, 'Popen', observed_popen)
         try:
-            result = real_run(command, *args, **kwargs)
+            launch_command = command
+            if 'wrapped-command' in out.name:
+                launch_command = [command[0], '-c', "import io, runpy, sys; sys.stdin = io.TextIOWrapper(sys.stdin.buffer, encoding=sys.stdin.encoding, errors=sys.stdin.errors); sys.argv = ['clover_cli.main', 'pairing', 'owner-confirm', 'telegram']; runpy.run_module('clover_cli.main', run_name='__main__')"]
+                emit('command_experiment', change='Python stdin wrapper plus runpy module entry; proof remains on stdin')
+            result = real_run(launch_command, *args, **kwargs)
             proof = kwargs['input'].strip()
             emit('completed', returncode=result.returncode, seconds=time.monotonic()-started, saved_message='verified and saved' in result.stdout.lower(), proof_not_echoed=proof not in result.stdout + result.stderr, getpass_warning='GetPassWarning' in result.stderr)
             return result
