@@ -875,6 +875,8 @@ class EmailAdapter(BasePlatformAdapter):
         if type(max_items) is not int or not 1 <= max_items <= 5:
             raise ValueError("invalid batch limit")
         imap = imaplib.IMAP4_SSL(self._imap_host, self._imap_port, timeout=15)
+        # imaplib.Debug is process-global; never inherit protocol dumps for mail.
+        imap.debug = 0
         try:
             imap.login(self._address, self._password)
             status, _ = imap.select("INBOX", readonly=True)
