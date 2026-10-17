@@ -60,7 +60,7 @@ def _card():
 
 
 def _todos(*s):
-    return [{"id": f"s{i}", "status": x} for i, x in enumerate(s)]
+    return [{"id": f"s{i}", "status": x} for i, x in enumerate(s, 1)]
 
 
 async def _bind(adapter, card, clock, interval=4.0):

@@ -72,11 +72,12 @@ def test_initial_text_has_the_say_title_outcome_and_steps_but_no_activity():
     assert "\U0001f527" not in card.initial_text and "call" not in card.initial_text
 
 
-def test_card_without_steps_is_header_and_outcome_only():
+def test_card_without_steps_adds_its_goal_row():
     card = _card(steps=())
     assert card.initial_text.splitlines() == [
         "\U0001f500 **fixing the bugs**",
         "> Goal: test build + PR \u00b7 ~10\u201325 min",
+        "> \u25b8 g",
     ]
 
 
@@ -499,8 +500,9 @@ def test_multi_card_shape_while_running():
     assert "> \U0001f340 **nice & tidy site** \u00b7 done \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 9 \u00b7 \u23f1 1m40s" in lines
     assert "All pages load" not in "\n".join(lines) and not any("\u25a0 **nice" in ln for ln in lines)
     j = lines.index("> \u25a0 **silas studios site**")  # a long name: its stats close the section
-    assert lines[j + 1].startswith("> \U0001f527 *") and lines[j + 2].startswith("> \u21b3 *")
-    assert lines[j + 3] == "> *Sonnet 5.5 \u00b7 \U0001f6e0 4 calls \u00b7 \u23f1 1m12s*"
+    assert lines[j + 1].startswith("> \u25b8 Review silas studios")
+    assert lines[j + 2].startswith("> \U0001f527 *") and lines[j + 3].startswith("> \u21b3 *")
+    assert lines[j + 4] == "> *Sonnet 5.5 \u00b7 \U0001f6e0 4 calls \u00b7 \u23f1 1m12s*"
     assert lines.index("> \U0001f527 *web_search silas studios booking*") < lines.index(
         "> \u21b3 *read_file contact*")
     assert "> \u25a0 **Check the pizzeria bros pamphlet** \u00b7 waiting" in lines
@@ -915,13 +917,14 @@ def test_many_helpers_use_the_compact_layout():
     # at most 3 running helpers in full: name + stats, then at most 2 tool lines
     # (a long name has its stats on the next line)
     full = [i for i, ln in enumerate(lines) if ln.startswith("> \u25a0 **") and "done" not in ln and any(
-        "Sonnet 5.5" in x for x in lines[i:i + 4])]
+        "Sonnet 5.5" in x for x in lines[i:i + 5])]
     assert len(full) == 3
     for i in full:
-        assert lines[i + 1].startswith("> \U0001f527 *") and lines[i + 2].startswith("> \u21b3 *")
-        k = i + 3 if "Sonnet 5.5" not in lines[i] else i + 2
-        if "Sonnet 5.5" in lines[i + 3]:
-            k = i + 3  # a long name: its stats are the section's last line
+        assert lines[i + 1].startswith("> \u25b8 ")
+        assert lines[i + 2].startswith("> \U0001f527 *") and lines[i + 3].startswith("> \u21b3 *")
+        k = i + 4 if "Sonnet 5.5" not in lines[i] else i + 3
+        if "Sonnet 5.5" in lines[i + 4]:
+            k = i + 4  # a long name: its stats are the section's last line
         assert lines[k + 1] == f"> {SPACER}"
     # the 4th running helper and the waiting ones are grouped into one line each
     assert "> more running: foxtrot site" in lines
@@ -1141,7 +1144,7 @@ def test_multi_tool_lines_are_running_then_done_at_most_two_and_indented():
         _tool("dm", "terminal", f"cmd{n}", n + 1, task_index=0); _done("dm", "terminal", n + 1, task_index=0)
     _tool("dm", "terminal", "now-cmd", 4, task_index=0)
     text = card.render()
-    assert f"\n> {_EM}\U0001f527 *terminal now-cmd*\n> {_EM}\u21b3 *terminal cmd2*\n" in text
+    assert f"\n> {_EM}{_EM}\U0001f527 *terminal now-cmd*\n> {_EM}{_EM}\u21b3 *terminal cmd2*\n" in text
     assert "cmd1" not in text, "at most two tool lines per subagent"
 
 
@@ -1158,7 +1161,7 @@ def test_tool_phrases_are_capped_so_the_whole_line_fits_one_phone_row():
     row = next(ln for ln in multi.render().splitlines() if "\U0001f527" in ln)
     phrase = row.split("\U0001f527 *", 1)[1].rstrip("*")
     assert len(phrase) <= ac.TOOL_PHRASE_MULTI and phrase.endswith("\u2026") and not phrase.endswith(" \u2026")
-    assert row.startswith("> " + _EM + "\U0001f527 *"), "the indent is kept"
+    assert row.startswith("> " + _EM + _EM + "\U0001f527 *"), "tools nest under the automatic row"
     ac.reset_for_tests(); ac.set_style_for_tests("unified")
     card = _card()
     _tool("d1", "terminal", long_cmd, 1)
@@ -1566,7 +1569,8 @@ def test_a_long_name_without_a_goal_still_ends_with_its_stats():
     ac.on_child_event("subagent.start", **_kid("dm", 0, model="claude-sonnet-5-5", title="a" * 60))
     lines = _flat(card.render()).splitlines()
     i = next(k for k, ln in enumerate(lines) if "**" + "a" * 60 + "**" in ln)
-    assert lines[i] == "> \u25a0 **" + "a" * 60 + "**" and lines[i + 1].startswith("> *Sonnet 5.5")
+    assert lines[i] == "> \u25a0 **" + "a" * 60 + "**"
+    assert lines[i + 1] == "> \u25b8 a" and lines[i + 2].startswith("> *Sonnet 5.5")
 
 
 def test_short_names_keep_their_stats_inline():
@@ -2004,12 +2008,17 @@ def test_steps_are_plain_text_and_tool_lines_are_italic():
 
 def test_without_a_checklist_the_tool_lines_sit_at_the_step_indent():
     single = _card(steps=())
+    # External/lifecycle cards can still have no plan. Deliberately exercise
+    # that renderer state rather than treating omitted dispatch metadata as it.
+    single.parts[0].checklist.steps.clear()
     _tool("d1", "terminal", "ls", 1); _done("d1", "terminal", 1)
     _tool("d1", "read_file", "a.py", 2)
     lines = single.render().splitlines()
     assert lines[-2:] == ["> \U0001f527 *read_file a.py*", "> \u21b3 *terminal ls*"]
     ac.reset_for_tests(); ac.set_style_for_tests("unified")
     multi = _multi_card(goals=("a", "b"), steps=())
+    for kid in multi.parts[0].checklist.kids:
+        kid.steps.clear()
     _tool("dm", "terminal", "ls", 1, task_index=0); _done("dm", "terminal", 1, task_index=0)
     _tool("dm", "read_file", "a.py", 2, task_index=0)
     text = multi.render()

@@ -78,6 +78,8 @@ def build_resume_tasks(record: Dict[str, Any], indexes: List[int]) -> List[Dict[
         steps = t.get("steps") or (single_handoff.get("steps") if len(stored) == 1 else None)
         if steps:
             task["steps"] = steps
+        if isinstance(t.get("checklist"), list):
+            task["_checklist"] = t["checklist"]
         for key in ("tier", "output_schema", "route", "account", "_route_binding"):
             if t.get(key):
                 task[key] = t[key]
@@ -226,9 +228,10 @@ def _launch(runner: Any, record: Dict[str, Any], agent: Any, source: Any, publis
         with delegation_inflight.resume_context(
             int(record.get("resumes") or 0) + 1, str(record["delegation_id"]),
             card=record.get("card"), work=str(record.get("card_work") or ""),
+            checklists=[t.get("_checklist") for t in tasks],
         ):
             raw = delegate_task(
-                tasks=tasks,
+                tasks=[{k: v for k, v in t.items() if k != "_checklist"} for t in tasks],
                 role=record.get("role"),
                 background=True,
                 require_background=True,

@@ -1432,6 +1432,25 @@ def test_shop_with_the_three_bugs_fails_in_each_area(tmp_path):
         assert rc == 1, (area, out)
 
 
+def _shop_source_files(root):
+    # The canonical runner precompiles tracked Python fixtures. Bytecode in
+    # __pycache__ is generated, not part of this exact source-file contract.
+    # Keep every other file (including unexpected files inside that directory).
+    return {p.relative_to(root) for p in root.rglob("*") if p.is_file()
+            and not (p.parent.name == "__pycache__" and p.suffix == ".pyc")}
+
+
+def test_shop_source_inventory_excludes_only_compiled_caches(tmp_path):
+    files = ["config.py", "__pycache__/config.cpython-311.pyc",
+             "__pycache__/unexpected.txt", "__pycache__/unexpected.py", "unexpected.pyc"]
+    for name in files:
+        path = tmp_path / name
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fixture")
+    assert _shop_source_files(tmp_path) == {Path(name) for name in files
+                                          if name != "__pycache__/config.cpython-311.pyc"}
+
+
 def test_feature_flag_shop_is_the_fixed_shop_plus_a_config(tmp_path):
     dm.seed_case_fixtures("feature-flag-review", tmp_path)
     shop = tmp_path / "shop"
@@ -1440,7 +1459,7 @@ def test_feature_flag_shop_is_the_fixed_shop_plus_a_config(tmp_path):
     assert (shop / "config.py").is_file()
 
     buggy, fixed = FIXTURES / "fix-three-bugs" / "shop", FIXTURES / "feature-flag-review" / "shop"
-    rel = lambda root: {p.relative_to(root) for p in root.rglob("*") if p.is_file()}  # noqa: E731
+    rel = _shop_source_files
     assert rel(fixed) - rel(buggy) == {Path("config.py")}
     assert rel(buggy) <= rel(fixed)
     changed = {
