@@ -24,7 +24,7 @@ def run_case(label, env, bash, observed):
     case_out = OUT / label
     case_out.mkdir()
     copied = {}
-    templates = {'cli_probe_plugin.py': 'cli_probe_plugin.py'}
+    templates = {} if label == 'candidate-full-file' else {'cli_probe_plugin.py': 'cli_probe_plugin.py'}
     if observed:
         templates['sitecustomize.py'] = 'cli_observer.py'
     for target, template in templates.items():
@@ -40,7 +40,9 @@ def run_case(label, env, bash, observed):
         assert not destination.exists()
         destination.write_text(str(case_out), encoding='utf-8')
         copied[destination] = hashlib.sha256(destination.read_bytes()).hexdigest()
-    args = [bash, str(SOURCE / 'scripts/run_tests.sh'), '-j', '1', '--file-retries', '0', 'tests/test_owner_setup.py', '-p', 'no:randomly', '-p', 'cli_probe_plugin', '--cli-observation-out=' + case_out.as_posix(), '--junitxml=' + (case_out / 'cases.xml').as_posix(), '-r', 'a', '--tb=short']
+    args = [bash, str(SOURCE / 'scripts/run_tests.sh'), '-j', '1', '--file-retries', '0', 'tests/test_owner_setup.py', '-p', 'no:randomly', '--junitxml=' + (case_out / 'cases.xml').as_posix(), '-r', 'a', '--tb=short']
+    if label != 'candidate-full-file':
+        args += ['-p', 'cli_probe_plugin', '--cli-observation-out=' + case_out.as_posix()]
     started = time.monotonic()
     try:
         with (case_out / 'canonical.log').open('w', encoding='utf-8') as file:
@@ -92,7 +94,7 @@ def main():
     (OUT / 'native-getpass.py').write_bytes(native_getpass)
     save('native-getpass-identity.json', {'file': getpass.__file__, 'sha256': hashlib.sha256(native_getpass).hexdigest(), 'selected_function': getpass.getpass.__name__})
     save('dependencies.json', {d.metadata['Name']: d.version for d in importlib.metadata.distributions()})
-    save('plan.json', {'kind': 'DIAGNOSTIC_ONLY_NOT_NATIVE_GATE', 'original_failed_run': 38999910756, 'original_fixture': '729e52f38e6f185633f7b60539ce18adb2656a9a', 'orchestration_base': 'd14c37eb2db96081aeee514ff9425f02ce03eb2f', 'cases': ['exact-command-control', 'stdin-identity-experiment', 'wrapped-command-validation'], 'unchanged_cli_timeout': 30, 'workers': 1, 'file_retries': 0, 'instrumentation': 'parent metadata only; child sys.setprofile phase names and 10s repeating faulthandler stacks; no env values/input/output/locals/return values', 'no_production_changes': True, 'not_claimed': ['native gate acceptance', 'console fixture proof', 'install/update proof', 'enrollment', 'release']})
+    save('plan.json', {'kind': 'DIAGNOSTIC_ONLY_NOT_NATIVE_GATE', 'original_failed_run': 38999910756, 'original_fixture': '729e52f38e6f185633f7b60539ce18adb2656a9a', 'orchestration_base': 'd14c37eb2db96081aeee514ff9425f02ce03eb2f', 'cases': ['candidate-full-file'], 'unchanged_cli_timeout': 30, 'workers': 1, 'file_retries': 0, 'instrumentation': 'none; no observation plugin or child sitecustomize installed in candidate-full-file', 'no_production_changes': True, 'not_claimed': ['native gate acceptance', 'console fixture proof', 'install/update proof', 'enrollment', 'release']})
     for path in before['tracked_sha256']:
         file = SOURCE / path
         file.chmod(stat.S_IMODE(file.stat().st_mode) & ~0o222)
@@ -112,7 +114,7 @@ def main():
     bash = shutil.which('bash')
     assert bash and 'git' in bash.lower() and 'wsl' not in bash.lower()
     results = []
-    for label, observed in [('exact-command-control', True), ('stdin-identity-experiment', True), ('wrapped-command-validation', False)]:
+    for label, observed in [('candidate-full-file', False)]:
         results.append(run_case(label, env, bash, observed))
         save('test-results.json', results)
     after = identity('after')
