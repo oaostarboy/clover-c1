@@ -6,6 +6,8 @@ decoder instead. Keep the real ConPTY in an owned, kill-on-close Windows job so
 neither a library reader thread nor a terminal child can outlive a failed probe.
 """
 import codecs
+import hashlib
+import importlib.metadata
 import json
 from pathlib import Path
 import socket
@@ -33,16 +35,67 @@ class Transcript:
         return self.text
 
 
+# The reviewed CPython 3.11 / Windows x64 wheel from uv.lock. This binding has
+# no Python backend getter. Its explicit constructor dispatches Some(0) ONLY to
+# ConPTY::new, propagating errors without automatic/WinPTY fallback. Accept that
+# identity contract only with these exact loaded artifacts, never just a label.
+LOCKED_CONPTY = {
+    'name': 'ConPTY', 'id': 0, 'pywinpty': '2.0.15',
+    'verification': 'locked-explicit-constructor-no-fallback',
+    'sha256': {
+        'winpty/__init__.py': '95a4e2f6c2e308bc9cc9a4183b7c0cbe164d20adaf87fa4ebc64c94f639de10b',
+        'winpty/enums.py': '7e11ef05f6f4722551d97b008819faed0fb33439541af6a4aa5c99d974627228',
+        'winpty/ptyprocess.py': '388ad6ce2a59679cd94aa73b93ffe67a0099f725a47a94b300fd380eed06d87e',
+        'winpty/winpty.cp311-win_amd64.pyd': '0bdbcda99f77f54ca1bb8fb10bbf9d78a721aac5f32ea95249254e19d3002298',
+    },
+}
+
+
+def _locked_conpty():
+    import winpty
+    import winpty.enums as enums
+    import winpty.ptyprocess as wrapper
+    import winpty.winpty as native
+
+    dist = importlib.metadata.distribution('pywinpty')
+    if dist.version != LOCKED_CONPTY['pywinpty'] or native.__version__ != dist.version:
+        raise RuntimeError('locked pywinpty version required for backend identity')
+    modules = [winpty, enums, wrapper, native]
+    observed = {}
+    for relative, module in zip(LOCKED_CONPTY['sha256'], modules):
+        path = Path(module.__file__).resolve()
+        if path != Path(dist.locate_file(relative)).resolve():
+            raise RuntimeError('locked pywinpty loaded artifact origin mismatch')
+        observed[relative] = hashlib.sha256(path.read_bytes()).hexdigest()
+    if observed != LOCKED_CONPTY['sha256']:
+        raise RuntimeError('locked pywinpty loaded artifact digest mismatch')
+    if (wrapper.PTY is not native.PTY or winpty.PtyProcess is not wrapper.PtyProcess
+            or enums.Backend.ConPTY != LOCKED_CONPTY['id']):
+        raise RuntimeError('locked pywinpty backend API mismatch')
+    names = [name for name, value in vars(enums.Backend).items()
+             if not name.startswith('_') and value == LOCKED_CONPTY['id']]
+    if names != [LOCKED_CONPTY['name']]:
+        raise RuntimeError('locked pywinpty backend identity mismatch')
+    identity = {'name': names[0], 'id': enums.Backend.ConPTY,
+                'pywinpty': dist.version, 'verification': LOCKED_CONPTY['verification'],
+                'sha256': observed}
+    return wrapper.PtyProcess, native.PTY, identity
+
+
 def _console(request):
     # Load only AFTER the parent assigns this process to its private job and
     # sends stdin. Any subsequently spawned ConPTY process inherits that job.
-    from winpty import PtyProcess
-    from winpty.enums import Backend
     import win32event
 
-    p = PtyProcess.spawn(request['command'], cwd=request['cwd'],
-                         env=request['env'], backend=Backend.ConPTY)
+    process_type, native_type, identity = _locked_conpty()
+    # Locked spawn uses `backend or env_override` then int(backend). The public
+    # conversion accepts truthy '0', so it reaches native Some(0) even if the
+    # environment requests WinPTY. Numeric zero would select auto/the override.
+    p = process_type.spawn(request['command'], cwd=request['cwd'],
+                           env=request['env'], backend=str(identity['id']))
     try:
+        if type(p.pty) is not native_type:
+            raise RuntimeError('locked pywinpty returned a mismatched native PTY')
         reader = Transcript(p.fileobj)
         reader.until(time.monotonic() + 20, 'Telegram confirmation code')
         assert 'Telegram confirmation code' in reader.text, 'ConPTY did not reach actual password prompt'
@@ -58,7 +111,8 @@ def _console(request):
         status = p.exitstatus
         assert status == (1 if request['cancel'] else 0), 'unexpected native console exit status'
         result = {'transcript': reader.text, 'exitstatus': status,
-                  'backend': 'ConPTY', 'eof': reader.eof}
+                  'backend': identity['name'], 'backend_identity': identity,
+                  'eof': reader.eof}
     finally:
         # This is library-resource cleanup, not an extension of either success
         # deadline. The outer 35s cap also bounds spawn/close/join themselves.
@@ -93,8 +147,11 @@ def run_console(command, cwd, env, code, cancel):
         stdout, stderr = p.communicate(json.dumps(request), timeout=35)
         assert p.returncode == 0, stderr
         result = json.loads(stdout)
-        assert result['backend'] == 'ConPTY' and result['eof'] is True
+        assert result['backend_identity'] == LOCKED_CONPTY, 'native backend identity was not established'
+        assert result['backend'] == result['backend_identity']['name'] and result['eof'] is True
         assert result['exitstatus'] == (1 if cancel else 0)
+        # Safe backend provenance only: never print the transcript or proof code.
+        print(json.dumps({'console_backend_identity': result['backend_identity']}), flush=True)
         return result['transcript']
     finally:
         try:
