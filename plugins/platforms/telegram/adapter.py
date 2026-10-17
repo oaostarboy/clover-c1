@@ -40,6 +40,27 @@ def _redact_telegram_error_text(error: object) -> str:
         return "<telegram error redacted>"
 
 
+class _OwnerProofLogFilter(logging.Filter):
+    """PTB DEBUG logs include request/response bodies, including return codes."""
+
+    def filter(self, record):
+        text = record.getMessage()
+        safe = re.sub(r"cloverowner_[A-Za-z0-9_-]+", "cloverowner_<redacted>", text)
+        safe = re.sub(r"Confirmation code: [0-9a-f]{16}", "Confirmation code: <redacted>", safe)
+        if safe != text:
+            record.msg, record.args = safe, ()
+        return True
+
+
+def _install_owner_proof_log_filters():
+    # Logger filters are not inherited by children; cover the PTB producers,
+    # not only the telegram parent. Idempotent across profile adapters.
+    for name in ("telegram.Bot", "telegram.ext.ExtBot", "telegram.ext.Application"):
+        target = logging.getLogger(name)
+        if not any(isinstance(f, _OwnerProofLogFilter) for f in target.filters):
+            target.addFilter(_OwnerProofLogFilter())
+
+
 def _scoped_gate_env(name: str, default: str = "") -> str:
     """Read a TELEGRAM_*/GATEWAY_* authorization gate env var per-profile.
 
@@ -736,6 +757,11 @@ class TelegramAdapter(BasePlatformAdapter):
         super().__init__(config, Platform.TELEGRAM)
         self._app: Optional[Application] = None
         self._bot: Optional[Bot] = None
+        # Capture credential ownership at construction under the profile scope;
+        # background PTB tasks must not borrow an ambient/default profile.
+        from clover_constants import get_clover_home
+        self._owner_verification_home = get_clover_home().resolve()
+        _install_owner_proof_log_filters()
         # Update-ID admission (see update_admission.py) is EXPERIMENTAL and off
         # by default (platforms.telegram.extra.update_admission). Off, no
         # admission handler, finalizer or error hook is installed and no claim,
@@ -10389,6 +10415,8 @@ class TelegramAdapter(BasePlatformAdapter):
         msg = self._effective_update_message(update)
         if not msg or not msg.text:
             return
+        if await self._handle_owner_verification(msg):
+            return
         # Early user-level auth check: reject unauthorized users before any
         # text batching, observe-buffer persistence, event building, or response
         # generation. This prevents removed/blocked users from injecting prompts
@@ -10416,10 +10444,54 @@ class TelegramAdapter(BasePlatformAdapter):
         mint_human_ingress(event, platform="telegram")
         self._enqueue_text_event(event)
 
+    async def _handle_owner_verification(self, message: Message) -> bool:
+        """Consume reserved owner proofs before admission, logs, or agent dispatch.
+
+        This endpoint cannot enroll anyone: only local confirmation of the
+        separate return code can do that. Invalid proofs are silent, including
+        public groups, forwarded messages and messages from bot accounts.
+        """
+        text = message.text or ""
+        if "cloverowner_" not in text:
+            return False
+        parts = text.split(None, 1)
+        if (len(parts) != 2 or parts[0].split("@", 1)[0] != "/start"
+                or not parts[1].startswith("cloverowner_")):
+            return True  # Even a quoted/mistyped challenge must not reach a model.
+        user = message.from_user
+        addressed_bot = parts[0].partition("@")[2]
+        if addressed_bot and (not self._bot or addressed_bot.lower() != self._bot.username.lower()):
+            return True
+        if (message.chat.type != "private" or not user or user.is_bot
+                or message.chat.id != user.id or message.sender_chat is not None
+                or message.forward_origin is not None):
+            return True
+        from gateway.pairing import VerifiedOwnerStore
+        try:
+            store = VerifiedOwnerStore(self.config.token, home=self._owner_verification_home)
+            code = store.prove(parts[1][len("cloverowner_"):], str(user.id))
+        except (OSError, ValueError, TypeError, RuntimeError):
+            # No exception text: it may contain credentials or the incoming proof.
+            return True
+        if code and self._bot:
+            try:
+                await self._bot.send_message(
+                    chat_id=message.chat.id,
+                    text=("Owner is not yet verified. Enter this code only in your own Clover setup terminal. "
+                          "Do not send it to another person.\nConfirmation code: " + code),
+                )
+            except Exception:
+                # Transport failures may echo the complete send body. Do not
+                # let PTB error handlers log the proof/code via an exception.
+                pass  # No grant; the local operator can begin a fresh request.
+        return True
+
     async def _handle_command(self, update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         """Handle incoming command messages."""
         msg = self._effective_update_message(update)
         if not msg or not msg.text:
+            return
+        if await self._handle_owner_verification(msg):
             return
         if not self._should_process_message(msg, is_command=True):
             return

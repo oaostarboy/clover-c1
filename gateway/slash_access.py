@@ -222,6 +222,32 @@ def policy_for_source(gateway_config: Any, source: Any) -> SlashAccessPolicy:
     return policy_from_extra(extra, scope)
 
 
+def telegram_verified_owner_allowed(platform_config: Any, user_id: Optional[str] = None) -> bool:
+    """Narrow owner fallback; current managed denials beat runtime snapshots.
+
+    Both supported config spellings are checked in the managed source before
+    shared-key bridging, so a user-side alias cannot erase a managed denial.
+    This does not change the existing explicit-admin/slash-command policy.
+    """
+    if _platform_extra(platform_config).get("verified_owner_controls", True) is not True:
+        return False
+    from clover_cli.managed_scope import load_managed_config
+    platforms = load_managed_config().get("platforms", {})
+    managed = platforms.get("telegram", {}) if isinstance(platforms, dict) else {}
+    if not isinstance(managed, dict):
+        return False
+    extra = managed.get("extra", {})
+    for scope in (managed, extra):
+        if not isinstance(scope, dict):
+            return False
+        if scope.get("verified_owner_controls", True) is not True:
+            return False
+        ids = _coerce_id_list(scope.get("allow_admin_from"))
+        if user_id is not None and ids and user_id not in ids:
+            return False
+    return True
+
+
 __all__ = [
     "SlashAccessPolicy",
     "policy_from_extra",

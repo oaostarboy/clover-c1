@@ -8199,6 +8199,8 @@ def gateway_setup():
         print()
         print_info("No platforms configured. Run 'clover gateway setup' when ready.")
 
+    from clover_cli.pairing import setup_verified_telegram_owner
+    setup_verified_telegram_owner()
     print()
 
 
