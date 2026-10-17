@@ -263,3 +263,15 @@ def test_unsafe_target_gives_a_precise_blocker_before_execution(native):
     assert "active run" in edits[-1]["text"]
     rows = notepad.list_receipts(scope(h), h.results[-1]["workstream_suggestion"]["workstream_id"])
     assert not any('"state":"started"' in r["detail"] for r in rows)
+
+
+
+def test_expired_action_sends_action_specific_recovery_not_a_settings_command(native):
+    from agent import actionable_suggestions as actions
+    h, target, app, endpoint = native
+    proposal = actions.pending(h.results[-1]["workstream_suggestion"]["action"]["token"])
+    proposal.expires_at = 0
+    asyncio.run(app.process_update(native_tap(app)))
+    answers = [p for m, p in endpoint.calls if m == "answerCallbackQuery"]
+    assert "new action offer" in answers[-1]["text"]
+    assert "/proactive" not in answers[-1]["text"]

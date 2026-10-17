@@ -90,7 +90,8 @@ async def send_offer(runner, event, artifact: dict) -> bool:
         f"Pause job {p.snapshot['id']} future runs?\nNo current run is cancelled. The failure is not repaired.",
         [{"value": "do", "label": "🔧 Do it"}, {"value": "later", "label": "Not now"}],
         selected, choice_guard={"owner_user_id": str(source.user_id),
-                                "expires_at": p.expires_at, "authorize": authorized})
+                                "expires_at": p.expires_at, "authorize": authorized,
+                                "denied_text": "Action expired, stopped or no longer authorized. Nothing ran; ask for a new action offer."})
 
 
 async def after_reply(runner, event, result: dict) -> None:
