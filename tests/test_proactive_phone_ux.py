@@ -85,11 +85,17 @@ async def test_status_has_scoped_local_setup_with_policy_side_effect_warning(hom
     r = _make_runner(platform=Platform.TELEGRAM)
     text = await r._handle_message(event("/proactive status", "12345678", chat_type=chat_type))
     assert isinstance(text, str)
-    assert f"clover config set platforms.telegram.{key}" in text
-    assert "/whoami" in text and "user ID" in text
-    assert "not a chat ID" in text
-    assert "other users" in text and "slash commands" in text
-    assert "reload" in text.lower() and "current profile" in text
+    if chat_type == "dm":
+        assert "clover pairing owner-setup telegram" in text
+        assert "confirmation code" in text and "Guest access" in text
+        assert "no policy reload" in text
+        assert "clover config set" not in text  # Enrollment must not silently gate guest commands.
+    else:
+        assert f"clover config set platforms.telegram.{key}" in text
+        assert "other users" in text and "slash commands" in text
+        assert "reload" in text.lower()
+    assert "/whoami" in text
+    assert "current profile" in text
     assert "--force" not in text and "12345678" not in text
     assert not (home / "config.yaml").exists()
 

@@ -3597,16 +3597,38 @@ class GatewaySlashCommandsMixin:
         return f"✓ Added subgoal {idx}: {text}"
 
     def _proactive_caller_is_admin(self, source: SessionSource) -> bool:
-        """Persistent profile controls need explicit admin enrollment, not allow-all."""
+        """Profile controls need explicit scoped admin or locally verified ownership.
+
+        Disabled slash gating is compatibility, never evidence of ownership.
+        Enrolling an owner does not turn that gate on or change guest commands.
+        """
         try:
-            from gateway.slash_access import policy_for_source
+            from gateway.slash_access import policy_for_source, _scope_for_chat_type
             config = self.config
             if getattr(config, "multiplex_profiles", False):
                 from gateway.config import load_gateway_config
                 config = load_gateway_config()
             policy = policy_for_source(config, source)
-            return bool(source.user_id and policy.enabled and policy.is_admin(source.user_id)
-                        and self._is_user_authorized_for_source(source))
+            if not source.user_id or not self._is_user_authorized_for_source(source):
+                return False
+            if policy.enabled:
+                # Explicit policy (including managed admin lists) wins over
+                # a separately verified owner. Group authority stays explicit.
+                return policy.is_admin(source.user_id)
+            if source.platform.value != "telegram" or _scope_for_chat_type(source.chat_type) != "dm":
+                return False
+            from clover_constants import get_clover_home
+            from gateway.pairing import VerifiedOwnerStore
+            home = get_clover_home().resolve()
+            adapter = self._adapter_for_source(source)
+            if (adapter is None or getattr(adapter, "_owner_verification_home", None) != home
+                    or self._resolve_profile_home_for_source(source).resolve() != home):
+                return False
+            platform_config = config.platforms.get(source.platform)
+            from gateway.slash_access import telegram_verified_owner_allowed
+            if platform_config is None or not telegram_verified_owner_allowed(platform_config, str(source.user_id)):
+                return False
+            return VerifiedOwnerStore(adapter.config.token, home=home).is_owner(str(source.user_id))
         except Exception:
             return False
 
@@ -3623,8 +3645,21 @@ class GatewaySlashCommandsMixin:
             return self._stale_offline_command_reply("proactive")
         can_change = self._proactive_caller_is_admin(event.source)
         args = event.get_command_args().strip()
-        text = proactive_command(args, can_change=can_change, show_commands=bool(args) or not can_change)
-        if args.lower() == "status" and not can_change:
+        owner_setup = args.lower() == "setup"
+        text = proactive_command("status" if owner_setup else args, can_change=can_change,
+                                 show_commands=bool(args) or not can_change)
+        if (owner_setup or (args.lower() == "status" and not can_change)) and event.source.platform.value == "telegram" and event.source.chat_type in {"dm", "direct", "private", "", None}:
+            text += (
+                "\nOwner confirmation (local setup, current profile): ask the person who set up Clover "
+                "to run `clover pairing owner-setup telegram`. Open your bot's private chat, send the "
+                "setup challenge, then enter the bot's confirmation code in that same local setup. "
+                "Never share either code with someone else. This verifies the actual Telegram sender, "
+                "not a /whoami ID, username or text claim. Guest access and slash commands stay unchanged. "
+                "Proactivity stays Off if it was Off; verification never enables it. "
+                "Existing chat admission and explicit admin/managed policy still apply. "
+                "After confirmation, reopen /proactive for buttons; no policy reload is needed for this grant."
+            )
+        elif args.lower() == "status" and not can_change:
             from gateway.slash_access import _keys_for_scope, _scope_for_chat_type
             admin_key, _ = _keys_for_scope(_scope_for_chat_type(event.source.chat_type))
             platform_key = event.source.platform.value

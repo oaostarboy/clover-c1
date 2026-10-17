@@ -12,8 +12,14 @@ def pairing_command(args):
     """Handle clover pairing subcommands."""
     from gateway.pairing import PairingStore
 
-    store = PairingStore()
     action = getattr(args, "pairing_action", None)
+    if action in {"owner-setup", "owner-confirm", "owner-revoke"}:
+        if getattr(args, "platform", None) != "telegram":
+            print("Owner verification currently supports Telegram only.")
+            return
+        telegram_owner_command(action)
+        return
+    store = PairingStore()
 
     if action == "list":
         _cmd_list(store)
@@ -118,3 +124,81 @@ def _cmd_clear_pending(store):
         print(f"\n  Cleared {count} pending pairing request(s).\n")
     else:
         print("\n  No pending requests to clear.\n")
+
+
+def setup_verified_telegram_owner() -> bool:
+    """Offer after normal setup has connected the gateway; never start it here."""
+    from clover_cli.setup import prompt_yes_no
+    from gateway.config import Platform, load_gateway_config
+    cfg = load_gateway_config().platforms.get(Platform.TELEGRAM)
+    if not cfg or not cfg.enabled or not cfg.token:
+        return False
+    from gateway.pairing import VerifiedOwnerStore
+    from gateway.slash_access import policy_from_extra
+    store = VerifiedOwnerStore(cfg.token)
+    if store.owner_user_id():
+        print("Telegram owner already verified for this profile and bot. Proactivity unchanged.")
+        return True
+    if policy_from_extra(cfg.extra, "dm").enabled:
+        print("Telegram's explicit DM admin policy already controls /proactive; left unchanged.")
+        return True
+    if cfg.extra.get("verified_owner_controls", True) is not True:
+        print("Telegram owner verification is disabled by profile or managed policy.")
+        return False
+    if not prompt_yes_no("Verify your Telegram account for owner controls? (Proactivity stays unchanged)", True):
+        print("Owner not verified. Later: clover pairing owner-setup telegram")
+        return False
+    return telegram_owner_command("owner-setup")
+
+
+def telegram_owner_command(action: str) -> bool:
+    """Local profile authority plus an independently delivered Telegram code.
+
+    Codes never enter command-line arguments, config.yaml, ordinary pairing,
+    chat history or model tools. Local authority is filesystem/operator trust,
+    not a claim that a terminal itself proves a human is present.
+    """
+    from gateway.config import Platform, load_gateway_config
+    from gateway.pairing import VerifiedOwnerStore
+    from clover_cli.setup import prompt
+    cfg = load_gateway_config().platforms.get(Platform.TELEGRAM)
+    if not cfg or not cfg.token:
+        print("Owner not verified: configure Telegram in this profile first.")
+        return False
+    store = VerifiedOwnerStore(cfg.token)
+    try:
+        if action == "owner-revoke":
+            store.revoke()
+            print("Verified Telegram owner and pending owner proofs revoked. Explicit admin and chat access unchanged.")
+            return True
+        if cfg.extra.get("verified_owner_controls", True) is not True:
+            print("Owner not verified: disabled by profile or managed policy.")
+            return False
+        if action == "owner-setup":
+            if store.owner_user_id():
+                print("Telegram owner already verified for this profile and bot. Proactivity unchanged.")
+                return True
+            challenge = store.begin()
+            print("Verify only your own Telegram account. Keep these codes private.")
+            print("The gateway must be connected to this bot. In its private chat, send:")
+            print("/start cloverowner_" + challenge)
+            print("Then enter the confirmation code returned to YOUR Telegram account here.")
+            print("No ownership is granted until local confirmation. Codes expire in 10 minutes.")
+        code = prompt("Telegram confirmation code (Enter to finish later)", password=True)
+        if not code:
+            print("Owner not verified. After connecting the gateway and sending the challenge, run:")
+            print("clover pairing owner-confirm telegram (in this same profile, before expiry)")
+            return False
+        uid = store.confirm(code)
+        if uid and store.is_owner(uid):
+            print(f"Telegram owner {uid} verified and saved for this profile and bot.")
+            print("Reopen /proactive for controls. Proactivity and guest permissions are unchanged.")
+            print("Existing chat admission and explicit admin/managed policy still apply.")
+            return True
+        print("Owner not verified: code invalid, expired or already consumed. Start owner-setup again.")
+    except (OSError, ValueError, TypeError, RuntimeError):
+        # Exception messages can contain file contents or credentials. Do not
+        # echo them (or either code) into console logs.
+        print("Owner not verified: could not confirm the scoped save. Check profile storage permissions.")
+        print("If the bot credential or profile location changed, use owner-revoke before owner-setup.")
+    return False

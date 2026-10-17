@@ -1,5 +1,11 @@
 # Proactive workstreams
 
+Telegram's private Enable / Disable buttons require an explicit scoped admin or
+[verified owner](telegram-owner.md). Setup verifies the actual Telegram sender
+with local operator confirmation; it never enables proactivity or changes guest
+permissions during enrollment. Existing installs without owner proof can use
+`/proactive setup` for the secure one-time confirmation steps.
+
 An **opt-in**, per-profile ledger that keeps unfinished work, your corrections
 and verified progress across new chats, restarts and compaction. It is stored
 in the existing `cron/notepad.db` and is **off by default**: with

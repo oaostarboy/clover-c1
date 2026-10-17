@@ -18,12 +18,12 @@ Security features (based on OWASP + NIST SP 800-63-4 guidance):
 Storage: ~/.clover/pairing/
 """
 
+import errno
 import hashlib
 import json
 import logging
 import os
 import secrets
-import tempfile
 import threading
 import time
 from pathlib import Path
@@ -416,7 +416,22 @@ def _secure_write(path: Path, data: str) -> None:
     complete file or the new one — never a partial write.
     """
     path.parent.mkdir(parents=True, exist_ok=True)
-    fd, tmp_path = tempfile.mkstemp(dir=str(path.parent), suffix=".tmp")
+    # tempfile.mkstemp retries PermissionError on Windows when os.access says
+    # the parent is writable. That check need not reflect an NTFS create ACL,
+    # so genuine denial can spend its entire name-retry budget in tempfile.
+    # Retry only exclusive-create collisions; all other errors fail closed.
+    tmp_dir = os.path.abspath(path.parent)
+    flags = os.O_RDWR | os.O_CREAT | os.O_EXCL
+    flags |= getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0)
+    for _ in range(100):
+        tmp_path = os.path.join(tmp_dir, f"tmp{secrets.token_hex(16)}.tmp")
+        try:
+            fd = os.open(tmp_path, flags, 0o600)
+        except FileExistsError:
+            continue
+        break
+    else:
+        raise FileExistsError(errno.EEXIST, "No usable temporary file name found", tmp_dir)
     try:
         with os.fdopen(fd, "w", encoding="utf-8") as f:
             f.write(data)
@@ -997,3 +1012,109 @@ class PairingStore:
                 if not platform.startswith("_"):
                     platforms.append(platform)
         return platforms
+
+
+class VerifiedOwnerStore:
+    """Narrow Telegram profile-control grant, NOT pairing/chat/slash admission.
+
+    Only the local profile operator calls begin/confirm/revoke. The adapter
+    calls prove with the sender from a private authenticated Telegram update.
+    Two independently delivered codes prevent a first-messenger ownership race.
+    The existing portable file lock and pairing atomic writer serialize CLI
+    and gateway processes; no running policy snapshot caches this grant.
+    """
+
+    TTL = 600
+
+    def __init__(self, bot_token: str, *, home: Optional[Path] = None):
+        if not isinstance(bot_token, str) or not bot_token:
+            raise ValueError("Telegram bot credentials are required for owner verification.")
+        self.home = (home or get_clover_home()).resolve()
+        self.path = self.home / "platforms" / "telegram-owner.json"
+        self.scope = hashlib.sha256((str(self.home) + "\0" + bot_token).encode()).hexdigest()
+
+    def _lock(self):
+        from clover_cli.active_sessions import _FileLock
+        return _FileLock(self.path.with_suffix(".lock"))
+
+    def _read(self):
+        try:
+            state = json.loads(self.path.read_text(encoding="utf-8"))
+        except FileNotFoundError:
+            return {"version": 1, "scope": self.scope}
+        if not isinstance(state, dict) or state.get("version") != 1 or state.get("scope") != self.scope:
+            raise ValueError("Owner record scope changed; revoke locally before verifying again.")
+        return state
+
+    def _write(self, state):
+        _secure_write(self.path, json.dumps(state, sort_keys=True))
+        if self._read() != state:
+            raise OSError("Owner verification save could not be confirmed.")
+
+    def begin(self) -> str:
+        """Start (or replace) an unprivileged verification request locally."""
+        with self._lock():
+            state = self._read()
+            if state.get("owner"):
+                raise ValueError("Owner already verified; revoke locally before rebinding.")
+            challenge = secrets.token_urlsafe(24)
+            state["pending"] = {"hash": hashlib.sha256(challenge.encode()).hexdigest(),
+                                "expires": time.time() + self.TTL, "proofs": {}}
+            self._write(state)
+            return challenge
+
+    @staticmethod
+    def _valid_user_id(user_id) -> bool:
+        import re
+        return (isinstance(user_id, str) and re.fullmatch(r"[1-9][0-9]{0,18}", user_id) is not None
+                and int(user_id) <= 9223372036854775807)
+
+    def prove(self, challenge: str, user_id: str) -> Optional[str]:
+        """Bind a transport sender; return a separate code for local confirmation."""
+        if not self._valid_user_id(user_id) or not isinstance(challenge, str) or len(challenge) != 32:
+            return None
+        with self._lock():
+            state = self._read()
+            pending = state.get("pending", {})
+            if state.get("owner") or time.time() >= pending.get("expires", 0):
+                return None
+            if not secrets.compare_digest(pending.get("hash", ""), hashlib.sha256(challenge.encode()).hexdigest()):
+                return None
+            proofs = pending["proofs"]
+            if str(user_id) in proofs.values() or len(proofs) >= 8:
+                return None
+            code = secrets.token_hex(8)
+            proofs[hashlib.sha256(code.encode()).hexdigest()] = user_id
+            self._write(state)
+            return code
+
+    def confirm(self, code: str) -> Optional[str]:
+        """Local authority selects the code seen in their own Telegram account."""
+        with self._lock():
+            state = self._read()
+            pending = state.get("pending", {})
+            if state.get("owner") or time.time() >= pending.get("expires", 0):
+                return None
+            uid = pending.get("proofs", {}).get(hashlib.sha256(code.encode()).hexdigest())
+            if not uid:
+                return None
+            state["owner"] = uid
+            state.pop("pending", None)
+            self._write(state)
+            return uid
+
+    def owner_user_id(self) -> Optional[str]:
+        """Return only a verified, literal transport identity in this scope."""
+        try:
+            owner = self._read().get("owner")
+            return owner if self._valid_user_id(owner) else None
+        except (OSError, ValueError, TypeError):
+            return None
+
+    def is_owner(self, user_id: str) -> bool:
+        return self._valid_user_id(user_id) and self.owner_user_id() == user_id
+
+    def revoke(self) -> None:
+        """Explicit local reset, also required after a bot credential change."""
+        with self._lock():
+            self._write({"version": 1, "scope": self.scope})

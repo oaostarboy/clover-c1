@@ -36,5 +36,13 @@ def build_pairing_parser(subparsers, *, cmd_pairing: Callable) -> None:
     pairing_revoke_parser.add_argument("platform", help="Platform name")
     pairing_revoke_parser.add_argument("user_id", help="User ID to revoke")
 
+    for action, help_text in (
+        ("owner-setup", "Verify the Telegram profile owner locally (not guest pairing)"),
+        ("owner-confirm", "Finish a pending local owner verification"),
+        ("owner-revoke", "Revoke verified owner controls and pending owner proofs"),
+    ):
+        owner_parser = pairing_sub.add_parser(action, help=help_text)
+        owner_parser.add_argument("platform", choices=["telegram"])
+
     pairing_sub.add_parser("clear-pending", help="Clear all pending codes")
     pairing_parser.set_defaults(func=cmd_pairing)

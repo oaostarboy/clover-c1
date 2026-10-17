@@ -2260,6 +2260,9 @@ def setup_gateway(config: dict):
         # Not running: install (if needed) and start, no questions asked.
         ensure_gateway_service(context="setup")
 
+    # Proof is received by the connected adapter, never a competing poller.
+    from clover_cli.pairing import setup_verified_telegram_owner
+    setup_verified_telegram_owner()
     print_info("━" * 50)
 
 
