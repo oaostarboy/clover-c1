@@ -144,6 +144,16 @@ class AffectReading:
     confidence: float
     observed_at: datetime
     source: EvidenceRef
+    posture: str = ''  # Empty only for legacy trusted internal VA samples.
+
+
+def reading_posture(reading: AffectReading | None) -> str:
+    """Pure projection also used by read-only status; no state mutation."""
+    if reading is None or reading.confidence < 0.7:
+        return 'ordinary'
+    if reading.posture:
+        return reading.posture
+    return 'careful_brief' if reading.valence < -0.3 else 'ordinary'
 
 
 @dataclass(frozen=True)
@@ -219,7 +229,18 @@ class ThoughtState:
                           "pending", now, now, now + ttl)
         self.last_error = None
         try:
-            return self.store.put(thought)
+            if not self._active():
+                return None
+            admitted = self.store.put(thought)
+            if admitted is not None and (not self._active()
+                    or not evidence_matches(self.reader, self.key, source)
+                    or not self._active()):
+                # Owner operations are optimistic across distinct stores. A late
+                # Stop/correction must leave no pending text, even after put.
+                self.store.invalidate(admitted, 'invalidated', self.clock())
+                self.affect.correct()
+                return None
+            return admitted
         except PresenceStoreError:
             self.last_error = "store_unavailable"
             return None
@@ -334,7 +355,15 @@ class AffectState:
             return False
         self._ticket = None
         self._latest = None
-        if not isinstance(sample, Mapping) or set(sample) != {"valence", "arousal", "confidence"}:
+        if not isinstance(sample, Mapping) or set(sample) not in (
+                {'valence', 'arousal', 'confidence'}, {'valence', 'arousal', 'confidence', 'posture'}):
+            return False
+        posture = sample.get('posture', '')
+        if posture:
+            from agent.presence_assessment import POSTURES
+            if not isinstance(posture, str) or posture not in POSTURES:
+                return False
+        elif 'posture' in sample:
             return False
         axes = []
         for name, lo, hi in (("valence", -1, 1), ("arousal", 0, 1), ("confidence", 0, 1)):
@@ -345,7 +374,7 @@ class AffectState:
             if not math.isfinite(value):
                 return False
             axes.append(value)
-        self._latest = AffectReading(*axes, ticket.observed_at, ticket.source)
+        self._latest = AffectReading(axes[0], axes[1], axes[2], ticket.observed_at, ticket.source, posture)
         return True
 
     @property
@@ -362,6 +391,4 @@ class AffectState:
 
     @property
     def posture(self) -> str:
-        reading = self.latest
-        return ("careful_brief" if reading and reading.valence < -0.3
-                and reading.confidence >= 0.7 else "ordinary")
+        return reading_posture(self.latest)

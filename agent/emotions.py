@@ -181,7 +181,8 @@ def render(*, key=None):
             held = 'state_unavailable'
         if key is not None and active and held not in {'stopped', 'state_unavailable'}:
             reading, expired = _peek_reading(key, config)
-    posture = 'careful_brief' if reading and reading.valence < -0.3 and reading.confidence >= 0.7 else 'ordinary'
+    from agent.presence_state import reading_posture
+    posture = reading_posture(reading)
     affect = 'unknown (expired)' if expired else 'unknown (no recent reading)'
     if reading:
         age = max(0, int((clock()-reading.observed_at).total_seconds()))

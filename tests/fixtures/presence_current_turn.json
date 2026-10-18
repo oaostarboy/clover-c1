@@ -1,0 +1,295 @@
+{
+  "notice": "Normative cases curated from the user-specified behavior contract. Assistant-authored text and expected labels require human review. SCRIPTED outputs are not measured model accuracy or calibrated confidence.",
+  "cases": [
+    {
+      "id": "paraphrase_en",
+      "language": "en",
+      "text": "Nothing I try works, and I am losing patience.",
+      "expected_posture": "careful_brief",
+      "scripted_output": {
+        "affect": {
+          "valence": -0.7,
+          "arousal": 0.8,
+          "confidence": 0.9,
+          "posture": "careful_brief"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "sadness_en",
+      "language": "en",
+      "text": "Since she left, the house feels empty.",
+      "expected_posture": "gentle",
+      "scripted_output": {
+        "affect": {
+          "valence": -0.7,
+          "arousal": 0.2,
+          "confidence": 0.9,
+          "posture": "gentle"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "joy_en",
+      "language": "en",
+      "text": "We finally got the keys to our new home!",
+      "expected_posture": "upbeat",
+      "scripted_output": {
+        "affect": {
+          "valence": 0.8,
+          "arousal": 0.8,
+          "confidence": 0.9,
+          "posture": "upbeat"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "calm_en",
+      "language": "en",
+      "text": "I feel settled today. Let us take this slowly.",
+      "expected_posture": "ordinary",
+      "scripted_output": {
+        "affect": {
+          "valence": 0.3,
+          "arousal": 0.1,
+          "confidence": 0.9,
+          "posture": "ordinary"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "uncertain_en",
+      "language": "en",
+      "text": "I cannot tell which option fits me yet.",
+      "expected_posture": "clarify",
+      "scripted_output": {
+        "affect": {
+          "valence": 0,
+          "arousal": 0.3,
+          "confidence": 0.8,
+          "posture": "clarify"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "mixed_en",
+      "language": "en",
+      "text": "I am proud of the result but sad that our team is splitting up.",
+      "expected_posture": "reflective",
+      "scripted_output": {
+        "affect": {
+          "valence": 0,
+          "arousal": 0.5,
+          "confidence": 0.85,
+          "posture": "reflective"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "negation_en",
+      "language": "en",
+      "text": "I am not frustrated; I just need the command syntax.",
+      "expected_posture": "ordinary",
+      "scripted_output": {
+        "affect": {
+          "valence": 0.1,
+          "arousal": 0.2,
+          "confidence": 0.9,
+          "posture": "ordinary"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "quote_en",
+      "language": "en",
+      "text": "The sample sentence is \"I am frustrated\". Translate it.",
+      "expected_posture": "abstain",
+      "scripted_output": {
+        "affect": null,
+        "thought": null
+      }
+    },
+    {
+      "id": "third_party_en",
+      "language": "en",
+      "text": "My colleague is sad. I only need a factual summary.",
+      "expected_posture": "abstain",
+      "scripted_output": {
+        "affect": null,
+        "thought": null
+      }
+    },
+    {
+      "id": "sarcasm_en",
+      "language": "en",
+      "text": "Wonderful, another crash. Just what I needed.",
+      "expected_posture": "ordinary",
+      "scripted_output": {
+        "affect": {
+          "valence": -0.2,
+          "arousal": 0.4,
+          "confidence": 0.4,
+          "posture": "ordinary"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "ambiguity_en",
+      "language": "en",
+      "text": "Fine.",
+      "expected_posture": "abstain",
+      "scripted_output": {
+        "affect": null,
+        "thought": null
+      }
+    },
+    {
+      "id": "paraphrase_fr",
+      "language": "fr",
+      "text": "Rien ne marche et je commence à perdre patience.",
+      "expected_posture": "careful_brief",
+      "scripted_output": {
+        "affect": {
+          "valence": -0.7,
+          "arousal": 0.8,
+          "confidence": 0.9,
+          "posture": "careful_brief"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "sadness_fr",
+      "language": "fr",
+      "text": "Depuis son départ, tout me semble vide.",
+      "expected_posture": "gentle",
+      "scripted_output": {
+        "affect": {
+          "valence": -0.7,
+          "arousal": 0.2,
+          "confidence": 0.9,
+          "posture": "gentle"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "joy_fr",
+      "language": "fr",
+      "text": "On a enfin réussi, je suis ravi !",
+      "expected_posture": "upbeat",
+      "scripted_output": {
+        "affect": {
+          "valence": 0.8,
+          "arousal": 0.8,
+          "confidence": 0.9,
+          "posture": "upbeat"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "calm_fr",
+      "language": "fr",
+      "text": "Je me sens paisible. Prenons notre temps.",
+      "expected_posture": "ordinary",
+      "scripted_output": {
+        "affect": {
+          "valence": 0.3,
+          "arousal": 0.1,
+          "confidence": 0.9,
+          "posture": "ordinary"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "negation_fr",
+      "language": "fr",
+      "text": "Je ne suis pas triste ; je cherche seulement une date.",
+      "expected_posture": "ordinary",
+      "scripted_output": {
+        "affect": {
+          "valence": 0.1,
+          "arousal": 0.2,
+          "confidence": 0.9,
+          "posture": "ordinary"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "quoted_fr",
+      "language": "fr",
+      "text": "Elle a écrit « je suis triste ». Corrige la ponctuation.",
+      "expected_posture": "abstain",
+      "scripted_output": {
+        "affect": null,
+        "thought": null
+      }
+    },
+    {
+      "id": "mixed_fr",
+      "language": "fr",
+      "text": "Je suis heureux du départ et inquiet de quitter mes amis.",
+      "expected_posture": "reflective",
+      "scripted_output": {
+        "affect": {
+          "valence": 0,
+          "arousal": 0.5,
+          "confidence": 0.85,
+          "posture": "reflective"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "ambiguous_fr",
+      "language": "fr",
+      "text": "Ça va.",
+      "expected_posture": "abstain",
+      "scripted_output": {
+        "affect": null,
+        "thought": null
+      }
+    },
+    {
+      "id": "low_confidence_fr",
+      "language": "fr",
+      "text": "Eh bien, encore une surprise.",
+      "expected_posture": "ordinary",
+      "scripted_output": {
+        "affect": {
+          "valence": -0.7,
+          "arousal": 0.6,
+          "confidence": 0.3,
+          "posture": "careful_brief"
+        },
+        "thought": null
+      }
+    },
+    {
+      "id": "non_latin_joy",
+      "language": "zh",
+      "text": "终于成功了，我很开心！",
+      "expected_posture": "upbeat",
+      "scripted_output": {
+        "affect": {
+          "valence": 0.8,
+          "arousal": 0.8,
+          "confidence": 0.9,
+          "posture": "upbeat"
+        },
+        "thought": null
+      }
+    }
+  ]
+}

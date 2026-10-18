@@ -15,6 +15,9 @@ still requires the release packaging lane; declaration is not a built-image proo
 
 Retained original Apache-2.0 attribution and verbatim LICENSE/NOTICE.
 Clover modifications remove Focus/model/global state, inject time and bind
-readings to scoped explicit thoughts. No NEKO assets, dependencies or models
+readings to scoped authenticated current human evidence. Bounded posture enums,
+current-turn extraction/schema prompts, and later-context lexical admission are
+original Clover additions, not copied NEKO prompts or algorithms. No NEKO assets,
+dependencies or models
 are included. New thought/initiative behavior is Clover design, not an upstream
 persistent companion-emotion implementation. See module modification notices.

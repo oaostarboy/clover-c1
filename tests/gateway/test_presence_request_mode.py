@@ -22,7 +22,8 @@ def test_native_request_budget_is_reserved_before_http_shared_and_not_a_token_cl
         # Real durable reservation precedes every physical dispatch.
         with sqlite3.connect(ThoughtStore().path) as db:
             assert db.execute('SELECT COUNT(*) FROM presence_budget').fetchone()[0]==len(requests)
-        text=json.dumps({'valence':-.8,'arousal':.8,'confidence':.9})
+        text=json.dumps({'affect': {'valence':-.8,'arousal':.8,'confidence':.9,
+                                    'posture':'careful_brief'}, 'thought':None})
         if provider=='anthropic':return httpx.Response(200,json={'content':[{'type':'text','text':text}]})
         if provider=='gemini':return httpx.Response(200,json={'candidates':[{'content':{'parts':[{'text':text}]}}]})
         event={'type':'response.completed','response':{'output':[{'type':'message','content':[{'type':'output_text','text':text}]}]}}
@@ -31,8 +32,14 @@ def test_native_request_budget_is_reserved_before_http_shared_and_not_a_token_cl
     native=route_fixture(monkeypatch,provider,respond)
     config['presence'].update(native['presence']);config['auxiliary']=native['auxiliary']
     (h.home/'config.yaml').write_text(yaml.safe_dump(config))
+    from datetime import timedelta
+    from agent import presence_runtime as runtime
+    now = [runtime.clock()]
+    monkeypatch.setattr(runtime, 'clock', lambda: now[0])
     try:
-        for n in range(4):h.inbound_human(f'I am frustrated. Please be brief. Synthetic attempt {n}.',message_id=100+n)
+        for n in range(4):
+            now[0] += timedelta(seconds=7)
+            h.inbound_human(f'I am frustrated. Please be brief. Synthetic attempt {n}.',message_id=100+n)
         assert len(requests)==3 and len(h.results)==4
         assert len(h.scripted.requests)==4
         assert all('Tentative interaction posture: careful_brief' in str(r['messages'][-1]) for r in h.scripted.requests[:3])

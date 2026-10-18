@@ -22,7 +22,8 @@ def setup_host(monkeypatch, tmp_path):
     requests = []
     async def transport(request):
         requests.append(json.loads(request.content))
-        content = ({'valence': -0.8, 'arousal': 0.8, 'confidence': 0.9}
+        content = ({'affect': {'valence': -0.8, 'arousal': 0.8, 'confidence': 0.9,
+                               'posture': 'careful_brief'}, 'thought': None}
                    if 'valence' in str(json.loads(request.content)['messages'][0]) else {
                        'connection': 'Deployment packaging can verify manifest checksum before publishing.',
                        'evidence_indices': [0], 'confidence': 0.9})
@@ -101,7 +102,9 @@ def test_config_off_then_on_invalidates_old_thoughts_without_replaying(monkeypat
         config['presence']['enabled'] = True
         save_config(config, strip_defaults=False)
         h.inbound_human('Help verify deployment packaging', message_id=101)
-        assert not requests and bot.send_message.await_count == 0
+        # Re-enabled ordinary text may now be assessed, but old thoughts never replay.
+        assert len(requests) == 1 and 'valence' in str(requests[0]['messages'][0])
+        assert not ThoughtStore().publications() and bot.send_message.await_count == 0
     finally:
         h.close()
 
@@ -137,7 +140,8 @@ def test_native_inspect_forget_resume_controls_are_scoped(monkeypatch, tmp_path)
         assert 'future thoughts only' in resumed, 'no real resume control'
         assert ThoughtStore().initiative_status() == (2, False)
         h.inbound_human('Help verify deployment packaging', message_id=104)
-        assert not requests and bot.send_message.await_count == 0
+        assert len(requests) == 1 and 'valence' in str(requests[0]['messages'][0])
+        assert not ThoughtStore().publications() and bot.send_message.await_count == 0
     finally:
         h.close()
 

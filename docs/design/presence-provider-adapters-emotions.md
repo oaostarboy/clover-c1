@@ -108,8 +108,9 @@ routes this command through the catch-all rather than displacing an existing one
 Other shared/unsupported messaging surfaces receive a private-conversation
 instruction, not affect data.
 
-The formatter separates Clover's interaction posture (ordinary/careful response
-style, not felt emotion) from a tentative user-affect reading, with confidence,
+The formatter separates Clover's bounded interaction posture (ordinary,
+careful_brief, gentle, upbeat, reflective or clarify: response style, not felt
+emotion) from a tentative user-affect reading, with confidence,
 age/remaining expiry and a fixed redacted evidence explanation. It shows the
 configured provider/model, feature state, initiative holds and effective budgets.
 The route is **configured metadata only**: status does not check dispatch

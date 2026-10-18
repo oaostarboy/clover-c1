@@ -79,8 +79,9 @@ def test_desktop_after_reply_owns_distinct_initiative_with_renderer_ack(monkeypa
     agent, transport, sid, session, send = desktop_host(h, monkeypatch)
     try:
         if origin_surface == 'telegram':
-            send('Help verify deployment packaging')
-            h.inbound_human('Prepare for explicit surface linking', message_id=100)
+            # Linking setup is an explicit ordinary-posture control, not an assessment sample.
+            send('Presence: ordinary. Help verify deployment packaging')
+            h.inbound_human('Presence: ordinary. Prepare for explicit surface linking', message_id=100)
             challenge = native_command(h, '/proactive presence link', 101)
             assert 'Link code: ' in challenge, challenge
             code = challenge.split('Link code: ',1)[1].split()[0]
@@ -96,6 +97,8 @@ def test_desktop_after_reply_owns_distinct_initiative_with_renderer_ack(monkeypa
             response = server.dispatch({'jsonrpc':'2.0','id':'after','method':'presence.after_reply',
                 'params':{'session_id':sid,'token':complete['presence_after_reply_token']}}, transport=transport)
         else:
+            # A view opportunity alone is not new human evidence. Admit later context first.
+            send('Help verify deployment packaging')
             response = server.dispatch({'jsonrpc':'2.0','id':'return','method':'presence.project_return',
                 'params':{'session_id':sid}}, transport=transport)
         assert response['result']['accepted'] is True
@@ -125,7 +128,7 @@ def test_desktop_after_reply_owns_distinct_initiative_with_renderer_ack(monkeypa
             assert stopped['result']['status'] == 'interrupted'
         assert ThoughtStore().initiative_status()[1] is True
         rows = h.db.get_messages('desktop-stored')
-        expected_roles = ['user','assistant']*(2 if opportunity == 'after_reply' else 1)
+        expected_roles = ['user','assistant']*2
         assert [r['role'] for r in rows if r['role'] != 'session_meta'] == expected_roles
         assert all(r['content'] == 'ack' for r in rows if r['role'] == 'assistant')
     finally:
@@ -196,8 +199,8 @@ def test_explicit_link_supports_desktop_source_telegram_send_once_across_surface
     h, requests, bot = setup_host(monkeypatch, tmp_path)
     agent, transport, sid, session, send = desktop_host(h, monkeypatch)
     try:
-        send('Help verify deployment packaging')
-        h.inbound_human('Prepare explicit surface linking', message_id=100)
+        send('Presence: ordinary. Help verify deployment packaging')
+        h.inbound_human('Presence: ordinary. Prepare explicit surface linking', message_id=100)
         challenge = native_command(h, '/proactive presence link', 101)
         code = challenge.split('Link code: ',1)[1].split()[0]
         linked = server.dispatch({'id':'link-command','method':'command.dispatch', 'params':{
