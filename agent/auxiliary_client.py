@@ -7328,8 +7328,13 @@ async def presence_completion(*, messages: list, max_output_tokens: int, timeout
             or type(timeout) not in (int, float) or not 0 < timeout <= 5
             or len(json.dumps(messages, ensure_ascii=False).encode()) > 6144):
         raise ValueError("unsupported bounded presence route")
+    base_url = route.get('base_url')
+    if route['provider'] == 'custom' and (not isinstance(base_url, str)
+            or not base_url or base_url != base_url.strip()):
+        raise ValueError('presence custom route requires an explicit endpoint; no provider detection')
     client, model = resolve_provider_client(route["provider"], model=route["model"],
-                                           async_mode=True, api_mode="chat_completions")
+                                           async_mode=True, api_mode="chat_completions",
+                                           explicit_base_url=base_url if route['provider'] == 'custom' else None)
     if type(client) is not openai.AsyncOpenAI:
         raise ValueError("presence route requires native async chat transport")
     try:

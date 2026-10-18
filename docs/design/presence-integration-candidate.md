@@ -22,7 +22,10 @@ research or guessed currency. The physical auxiliary request is through
 
 The bounded auxiliary candidate accepts **explicit OpenAI-compatible API-key
 routes only** (`auxiliary.presence.provider: openai` or `custom`, plus an explicit
-model). OAuth, auto-selection and compatibility wrappers hold. Credentials stay
+model). Custom requires `auxiliary.presence.base_url` explicitly; a missing
+endpoint holds before the general resolver and cannot trigger another API-key
+provider's detection/fallback. OAuth, auto-selection and compatibility wrappers
+hold. Credentials stay
 in the existing credential owner, never in presence state/config. The native
 async SDK receives `max_retries=0`; cancellation propagates. The normal agent's
 provider and its retry behavior are unchanged.
