@@ -49,7 +49,7 @@ class RequestedReplyOwner:
                 and consumer.chat_id == self.scope[2]):
             acks = consumer.confirmed_final_transport_acks(final_text)
             if acks:
-                return RequestedReplyReceipt(self, final_text, acks)
+                return RequestedReplyReceipt(self, final_text, acks, consumer)
         return None
 
     def receipt_for_edit(self, adapter, result, final_text):
@@ -67,8 +67,11 @@ class RequestedReplyReceipt:
     owner: RequestedReplyOwner = field(repr=False)
     text: str = field(repr=False)
     transport_acks: tuple = field(default=(), repr=False)
+    consumer: Any = field(default=None, repr=False)
 
     def accepts(self, runner, event, session_key, generation, final_text):
         return (bool(self.transport_acks) and self.text == final_text
+                and (self.consumer is None or self.consumer.confirmed_final_transport_acks(final_text)
+                     == self.transport_acks)
                 and not getattr(event, 'internal', False)
                 and self.owner.current(runner, event.source, session_key, generation))

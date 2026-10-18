@@ -783,6 +783,15 @@ class TelegramAdapter(BasePlatformAdapter):
         """Telegram measures message length in UTF-16 code units."""
         return utf16_len
 
+    def streaming_message_len(self, content: str) -> int:
+        """Budget both raw previews and the actual MarkdownV2 final payload.
+
+        A logical chunk must fit one physical message in either form. Counting
+        only raw UTF-16 lets formatting escape expansion split a preview send,
+        after which editing its first id with the whole chunk duplicates tails.
+        """
+        return max(utf16_len(content), utf16_len(self.format_message(content)))
+
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.TELEGRAM)
         self._app: Optional[Application] = None
@@ -5748,6 +5757,13 @@ class TelegramAdapter(BasePlatformAdapter):
                     for chunk in chunks
                 ]
             
+            # Editable previews must remain one physical message, just like
+            # edit_message(finalize=False). A rich-capability fallback can
+            # reach here with a logical budget larger than the legacy cap.
+            # Keep the rest in the consumer, which commits ALL text on final.
+            preview_only = bool((metadata or {}).get("expect_edits") and len(chunks) > 1)
+            if preview_only:
+                chunks = chunks[:1]
             message_ids = []
             thread_id = self._metadata_thread_id(metadata)
             requested_thread_id = self._message_thread_id_for_send(thread_id)
@@ -6002,6 +6018,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     "message_ids": message_ids,
                     "requested_thread_id": requested_thread_id,
                     "thread_fallback": used_thread_fallback,
+                    "preview_only": preview_only,
                 },
             )
             
@@ -6129,7 +6146,8 @@ class TelegramAdapter(BasePlatformAdapter):
             # Any saturation state for this message is finished with — the
             # final edit always delivers real (full) content.
             self._last_overflow_preview.pop(_preview_key, None)
-        if utf16_len(content) > self.MAX_MESSAGE_LENGTH:
+        measured = self.streaming_message_len(content) if finalize else utf16_len(content)
+        if measured > self.MAX_MESSAGE_LENGTH:
             if finalize:
                 return await self._edit_overflow_split(
                     chat_id, message_id, content, finalize=finalize, metadata=metadata,
@@ -6318,8 +6336,11 @@ class TelegramAdapter(BasePlatformAdapter):
         Falls back to ``SendResult(success=False)`` only if even the first-
         chunk edit fails — that's a real adapter problem, not an overflow.
         """
+        # Measure the final transformation before splitting raw logical text.
+        # Leave room for fence balancing and the escaped (N/M) decoration.
         chunks = self.truncate_message(
-            content, self.MAX_MESSAGE_LENGTH, len_fn=utf16_len,
+            content, self.MAX_MESSAGE_LENGTH - 100,
+            len_fn=self.streaming_message_len if finalize else utf16_len,
         )
         if len(chunks) <= 1:
             # Defensive: shouldn't happen given the caller's pre-flight, but
@@ -6495,6 +6516,7 @@ class TelegramAdapter(BasePlatformAdapter):
             success=True,
             message_id=last_id,
             continuation_message_ids=tuple(continuation_ids),
+            raw_response={"message_ids": [str(message_id), *continuation_ids]},
         )
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:
