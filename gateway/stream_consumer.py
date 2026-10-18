@@ -385,15 +385,10 @@ class _FencedAdapterIO:
             # Receipt evidence is stricter than duplicate-suppression flags.
             # Drafts, commentary, cosmetic cleanup and native optimistic
             # finalization are deliberately not requested-reply ACKs.
-            if (consumer._final_delivery_active and not consumer._abandoned
-                    and consumer._run_still_current()
-                    and getattr(result, "success", False) is True
+            if (consumer._final_delivery_active
                     and ((name == "edit_message" and kwargs.get("finalize") is True)
                          or (name == "send" and (kwargs.get("metadata") or {}).get("notify") is True))):
-                consumer._final_transport_acks.append(FinalTransportAck(
-                    name, kwargs.get("content", ""),
-                    tuple(consumer._message_ids_from_result(result)),
-                ))
+                consumer._record_transport_ack(name, kwargs.get("content", ""), result)
             return result
 
         return _call
@@ -866,6 +861,18 @@ class GatewayStreamConsumer:
             self._clean_for_display(source)
         ).strip()
 
+    def _record_transport_ack(self, operation, content, result, *, terminal=True):
+        # Optional proof cannot turn a completed platform send into a failure
+        # (and therefore a replay). Unavailable fences hold presence only.
+        try:
+            if (not self._abandoned and self._run_still_current()
+                    and getattr(result, "success", False) is True):
+                self._final_transport_acks.append(FinalTransportAck(
+                    operation, content, tuple(self._message_ids_from_result(result)), terminal,
+                ))
+        except Exception:
+            pass
+
     def has_confirmed_final_delivery(self, final_text: str) -> bool:
         """Only a terminal ACK plus exact complete payload can admit presence.
 
@@ -873,12 +880,15 @@ class GatewayStreamConsumer:
         tail succeeded. Its unsplit ledger must match the completed result.
         Uncertain sends may still suppress duplicates, but never mint ACKs.
         """
-        return (any(ack.terminal for ack in self._final_transport_acks) and not self._delivery_cancelled
-                and not self._abandoned and self._run_still_current()
-                and self._final_response_sent is True
-                and self._delivered_final_text is not None
-                and self._delivered_final_text == ensure_closed_code_fences(
-                    self._clean_for_display(final_text or "")).strip())
+        try:
+            return (any(ack.terminal for ack in self._final_transport_acks) and not self._delivery_cancelled
+                    and not self._abandoned and self._run_still_current()
+                    and self._final_response_sent is True
+                    and self._delivered_final_text is not None
+                    and self._delivered_final_text == ensure_closed_code_fences(
+                        self._clean_for_display(final_text or "")).strip())
+        except Exception:
+            return False
 
     def delivered_final_matches(self, final_text: str) -> Optional[bool]:
         """Reconcile the recorded turn-final payload against ``final_text``.
@@ -2396,10 +2406,7 @@ class GatewayStreamConsumer:
                 # These heads are sealed, including heads sent before finish.
                 # Preserve their physical receipts but do not let a head alone
                 # count as the turn-final tail ACK.
-                if getattr(result, "success", False) is True and self._run_still_current():
-                    self._final_transport_acks.append(FinalTransportAck(
-                        "send", text, tuple(self._message_ids_from_result(result)), terminal=False,
-                    ))
+                self._record_transport_ack("send", text, result, terminal=False)
                 self._message_id = str(result.message_id)
                 self._track_preview_ids_from_result(result)
                 self._already_sent = True

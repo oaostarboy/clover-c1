@@ -23078,12 +23078,15 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             # Consume exact transport proof, never already_sent/preview flags.
             from gateway.requested_reply_delivery import RequestedReplyReceipt
             _reply_receipt = agent_result.pop("_requested_reply_receipt", None)
-            if (isinstance(_reply_receipt, RequestedReplyReceipt)
-                    and not any(agent_result.get(k) for k in ("failed", "error", "interrupted", "partial"))
-                    and agent_result.get("completed") is not False
-                    and _reply_receipt.accepts(self, event, _quick_key, run_generation,
-                                              agent_result.get("final_response"))):
-                event._presence_requested_reply_ack = True
+            try:
+                if (isinstance(_reply_receipt, RequestedReplyReceipt)
+                        and not any(agent_result.get(k) for k in ("failed", "error", "interrupted", "partial"))
+                        and agent_result.get("completed") is not False
+                        and _reply_receipt.accepts(self, event, _quick_key, run_generation,
+                                                  agent_result.get("final_response"))):
+                    event._presence_requested_reply_ack = True
+            except Exception:
+                pass  # Missing optional proof must never replay an ACKED reply.
 
             try:
                 if isinstance(agent_result, dict) and '_presence_turn' in agent_result:

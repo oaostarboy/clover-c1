@@ -25,10 +25,13 @@ class RequestedReplyOwner:
 
     @classmethod
     def capture(cls, runner, source, session_key, generation):
-        adapter = runner._adapter_for_source(source)
-        return cls(runner, adapter, getattr(adapter, '_bot', None),
-                   runner._adapter_credential_fingerprint(adapter),
-                   _scope(source), session_key, generation)
+        try:
+            adapter = runner._adapter_for_source(source)
+            return cls(runner, adapter, getattr(adapter, '_bot', None),
+                       runner._adapter_credential_fingerprint(adapter),
+                       _scope(source), session_key, generation)
+        except Exception:
+            return None  # Optional presence must not fail the requested turn.
 
     def current(self, runner, source, session_key, generation):
         return (runner is self.runner and session_key == self.session_key
