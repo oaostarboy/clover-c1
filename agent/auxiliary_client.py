@@ -7338,6 +7338,10 @@ async def presence_completion(*, messages: list, max_output_tokens: int, timeout
     if type(client) is not openai.AsyncOpenAI:
         raise ValueError("presence route requires native async chat transport")
     try:
+        # Native SDK defaults may follow HTTP redirects even with retries=0.
+        # This resolver owns a fresh native client; preserve its transport/TLS
+        # configuration but forbid a redirect from making a second request.
+        client._client.follow_redirects = False
         bounded = client.with_options(max_retries=0, timeout=timeout)
         result = await asyncio.wait_for(bounded.chat.completions.create(
             model=model, messages=messages, max_tokens=max_output_tokens,

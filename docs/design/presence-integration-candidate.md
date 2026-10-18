@@ -31,7 +31,7 @@ general retrying call helper. Only explicit OpenAI-compatible API-key routes
 supported. Custom also requires its explicit `base_url`; missing endpoints hold
 before auto-detection. OAuth, auto-selection and compatibility wrappers hold.
 Credentials remain in the existing credential owner. The native async SDK uses
-`max_retries=0`, a bounded timeout and cancellation. Ordinary provider calls are
+`max_retries=0`, redirects disabled, a bounded timeout and cancellation. Ordinary provider calls are
 unchanged.
 
 W3 validates, CAS-claims and attempts a distinct publication through the surface

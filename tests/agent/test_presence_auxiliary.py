@@ -51,3 +51,23 @@ def test_presence_aux_has_one_physical_attempt_and_no_fallback(monkeypatch):
         asyncio.run(aux.presence_completion(messages=[{'role':'user','content':'synthetic capsule'}],
                                              max_output_tokens=512, timeout=1))
     assert len(calls) == 1
+
+
+@pytest.mark.parametrize('status', [301, 302, 303, 307, 308])
+def test_presence_aux_never_follows_native_http_redirect(monkeypatch, status):
+    calls = []
+    async def transport(request):
+        calls.append(request)
+        if len(calls) == 1:
+            return httpx.Response(status, headers={'location':'https://synthetic.invalid/v1/redirected'})
+        return httpx.Response(200, json={'choices':[{'message':{'content':'second physical request'}}]})
+    client = openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://synthetic.invalid/v1',
+        max_retries=7, http_client=httpx.AsyncClient(follow_redirects=True,
+            transport=httpx.MockTransport(transport)))
+    monkeypatch.setattr(aux, 'resolve_provider_client', lambda *a, **k: (client, 'synthetic-model'))
+    monkeypatch.setattr('clover_cli.config.load_config', lambda **kw: {
+        'auxiliary': {'presence': {'provider': 'openai', 'model': 'synthetic-model'}}})
+    with pytest.raises(openai.APIStatusError):
+        asyncio.run(aux.presence_completion(messages=[{'role':'user','content':'synthetic capsule'}],
+            max_output_tokens=512, timeout=1))
+    assert len(calls) == 1 and client.is_closed()
