@@ -342,6 +342,15 @@ class StreamConsumerConfig:
     chat_type: str = ""
 
 
+@dataclass(frozen=True)
+class FinalTransportAck:
+    """Exact successful terminal platform operation (never an optimistic flag)."""
+    operation: str
+    content: str
+    message_ids: tuple[str, ...]
+    terminal: bool = True
+
+
 class _FencedAdapterIO:
     """Delivery-side adapter calls for one consumer, fenced once abandoned.
 
@@ -373,6 +382,18 @@ class _FencedAdapterIO:
             result = attr(*args, **kwargs)
             if inspect.isawaitable(result):
                 result = await result
+            # Receipt evidence is stricter than duplicate-suppression flags.
+            # Drafts, commentary, cosmetic cleanup and native optimistic
+            # finalization are deliberately not requested-reply ACKs.
+            if (consumer._final_delivery_active and not consumer._abandoned
+                    and consumer._run_still_current()
+                    and getattr(result, "success", False) is True
+                    and ((name == "edit_message" and kwargs.get("finalize") is True)
+                         or (name == "send" and (kwargs.get("metadata") or {}).get("notify") is True))):
+                consumer._final_transport_acks.append(FinalTransportAck(
+                    name, kwargs.get("content", ""),
+                    tuple(consumer._message_ids_from_result(result)),
+                ))
             return result
 
         return _call
@@ -454,6 +475,9 @@ class GatewayStreamConsumer:
     ):
         self.adapter = adapter
         self._io = _FencedAdapterIO(self)
+        self._final_delivery_active = False
+        self._final_transport_acks = []
+        self._delivery_cancelled = False
         self.chat_id = chat_id
         self.cfg = config or StreamConsumerConfig()
         self.metadata = metadata
@@ -842,6 +866,20 @@ class GatewayStreamConsumer:
             self._clean_for_display(source)
         ).strip()
 
+    def has_confirmed_final_delivery(self, final_text: str) -> bool:
+        """Only a terminal ACK plus exact complete payload can admit presence.
+
+        The split/fallback recorder runs only after all heads and the final
+        tail succeeded. Its unsplit ledger must match the completed result.
+        Uncertain sends may still suppress duplicates, but never mint ACKs.
+        """
+        return (any(ack.terminal for ack in self._final_transport_acks) and not self._delivery_cancelled
+                and not self._abandoned and self._run_still_current()
+                and self._final_response_sent is True
+                and self._delivered_final_text is not None
+                and self._delivered_final_text == ensure_closed_code_fences(
+                    self._clean_for_display(final_text or "")).strip())
+
     def delivered_final_matches(self, final_text: str) -> Optional[bool]:
         """Reconcile the recorded turn-final payload against ``final_text``.
 
@@ -1092,6 +1130,7 @@ class GatewayStreamConsumer:
         # run.py reads these only after the consumer task exits.
         self._final_response_sent = False
         self._final_content_delivered = False
+        self._final_transport_acks = []
         self._delivered_final_text = None
         self._turn_split_delivery = False
         # Native draft streaming: bump the draft_id so the next text segment
@@ -2207,6 +2246,7 @@ class GatewayStreamConsumer:
                 await asyncio.sleep(0.05)  # Small yield to not busy-loop
 
         except asyncio.CancelledError:
+            self._delivery_cancelled = True
             # Best-effort final edit on cancellation.  finalize=True so
             # REQUIRES_EDIT_FINALIZE platforms (Telegram) apply final
             # formatting — a plain edit here would leave the entire reply
@@ -2353,6 +2393,13 @@ class GatewayStreamConsumer:
                 ),
             )
             if result.success and result.message_id:
+                # These heads are sealed, including heads sent before finish.
+                # Preserve their physical receipts but do not let a head alone
+                # count as the turn-final tail ACK.
+                if getattr(result, "success", False) is True and self._run_still_current():
+                    self._final_transport_acks.append(FinalTransportAck(
+                        "send", text, tuple(self._message_ids_from_result(result)), terminal=False,
+                    ))
                 self._message_id = str(result.message_id)
                 self._track_preview_ids_from_result(result)
                 self._already_sent = True
@@ -2448,6 +2495,14 @@ class GatewayStreamConsumer:
         return list(chunks)
 
     async def _send_fallback_final(self, text: str) -> None:
+        previous = self._final_delivery_active
+        self._final_delivery_active = True
+        try:
+            await self._send_fallback_final_impl(text)
+        finally:
+            self._final_delivery_active = previous
+
+    async def _send_fallback_final_impl(self, text: str) -> None:
         """Send the final continuation after streaming edits stop working.
 
         Retries each chunk once on flood-control failures with a short delay.
@@ -3318,6 +3373,7 @@ class GatewayStreamConsumer:
         self._already_sent = False
         self._final_response_sent = False
         self._final_content_delivered = False
+        self._final_transport_acks = []
         self._delivered_final_text = None
         self._turn_split_delivery = False
         logger.info(
@@ -3326,6 +3382,16 @@ class GatewayStreamConsumer:
         )
 
     async def _send_or_edit(
+        self, text: str, *, finalize: bool = False, is_turn_final: bool = True,
+    ) -> bool:
+        previous = self._final_delivery_active
+        self._final_delivery_active = bool(finalize and is_turn_final)
+        try:
+            return await self._send_or_edit_impl(text, finalize=finalize, is_turn_final=is_turn_final)
+        finally:
+            self._final_delivery_active = previous
+
+    async def _send_or_edit_impl(
         self, text: str, *, finalize: bool = False, is_turn_final: bool = True,
     ) -> bool:
         """Send or edit the streaming message.

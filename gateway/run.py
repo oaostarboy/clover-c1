@@ -23075,6 +23075,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
 
+            # Consume exact transport proof, never already_sent/preview flags.
+            from gateway.requested_reply_delivery import RequestedReplyReceipt
+            _reply_receipt = agent_result.pop("_requested_reply_receipt", None)
+            if (isinstance(_reply_receipt, RequestedReplyReceipt)
+                    and not any(agent_result.get(k) for k in ("failed", "error", "interrupted", "partial"))
+                    and agent_result.get("completed") is not False
+                    and _reply_receipt.accepts(self, event, _quick_key, run_generation,
+                                              agent_result.get("final_response"))):
+                event._presence_requested_reply_ack = True
+
             try:
                 if isinstance(agent_result, dict) and '_presence_turn' in agent_result:
                     from agent.presence_runtime import register_after_reply
@@ -31889,6 +31899,14 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 return True
             return self._is_session_run_current(session_key, run_generation)
         
+        # Bind before any stream I/O; a replaced bot/credential/run must not
+        # inherit the old requested reply ACK at after-reply registration.
+        from gateway.requested_reply_delivery import RequestedReplyOwner
+        _requested_reply_owner = (
+            RequestedReplyOwner.capture(self, source, session_key, run_generation)
+            if source.platform.value == "telegram" else None
+        )
+
         user_config = _load_gateway_config()
         platform_key = _platform_config_key(source.platform)
 
@@ -33788,6 +33806,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # final answer.  Suppressing delivery here leaves the user staring
         # at silence.  (#10xxx — "agent stops after web search")
         _sc = stream_consumer_holder[0]
+        _reconciled_reply_receipt = None
         if isinstance(response, dict) and not response.get("failed"):
             _final = response.get("final_response") or ""
             _is_empty_sentinel = not _final or _final == "(empty)"
@@ -33875,6 +33894,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                         )
                         if getattr(_reconcile_res, "success", True):
                             response["already_sent"] = True
+                            if _requested_reply_owner is not None and getattr(_reconcile_res, "success", False) is True:
+                                _reconciled_reply_receipt = _requested_reply_owner.receipt_for_edit(
+                                    _sc_adapter, _reconcile_res, _final)
                             logger.info(
                                 "Reconciled stale streamed finalize for session %s: edited message %s with the complete response (#71643).",
                                 session_key or "?", _sc_msg_id,
@@ -33901,13 +33923,16 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 _sc_msg_id = _sc.message_id
                 if _sc_msg_id:
                     try:
-                        await _sc.adapter.edit_message(
+                        _transform_result = await _sc.adapter.edit_message(
                             chat_id=source.chat_id,
                             message_id=_sc_msg_id,
                             content=response["final_response"],
                             finalize=True,
                         )
                         response["already_sent"] = True
+                        if _requested_reply_owner is not None and getattr(_transform_result, "success", False) is True:
+                            _reconciled_reply_receipt = _requested_reply_owner.receipt_for_edit(
+                                _sc.adapter, _transform_result, response["final_response"])
                         logger.info(
                             "Edited streamed message %s for session %s to include plugin-transformed content.",
                             _sc_msg_id, session_key or "?",
@@ -33943,6 +33968,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                     _transformed,
                     len(_final),
                 )
+
+        if (isinstance(response, dict) and _requested_reply_owner is not None
+                and response.get("already_sent") is True):
+            _receipt = _reconciled_reply_receipt or _requested_reply_owner.receipt(
+                _sc, response.get("final_response") or "")
+            if _receipt is not None:
+                response["_requested_reply_receipt"] = _receipt
 
         _register_turn_card_cleanup(response)
 
