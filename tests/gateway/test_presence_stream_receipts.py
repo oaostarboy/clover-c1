@@ -248,4 +248,3 @@ def test_consumer_requires_terminal_ack_not_flags_or_cleanup(monkeypatch, tmp_pa
         assert not requests and bot.send_message.await_count==0
     finally:
         h.close()
-
