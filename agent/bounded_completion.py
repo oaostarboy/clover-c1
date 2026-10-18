@@ -231,7 +231,7 @@ class _DispatchDeadlineExpired(BaseException):
     """Carry a local deadline through SDK Exception/retry wrappers unchanged."""
 
 
-def _install_dispatch_guard(http, deadline):
+def _install_dispatch_guard(http, deadline, authority=None):
     """Fence every selected HTTPX transport after SDK construction and hooks.
 
     Only this call-owned client is wrapped. Its existing transports retain TLS,
@@ -251,6 +251,12 @@ def _install_dispatch_guard(http, deadline):
             nonlocal attempted
             # Deliver cancellation requested during synchronous SDK/HTTPX work.
             await asyncio.sleep(0)
+            if asyncio.get_running_loop().time() >= deadline:
+                raise _DispatchDeadlineExpired()
+            if authority is not None:
+                authority.validate()
+            # Owner readback can use synchronous local I/O. It cannot reset or
+            # extend the original physical dispatch deadline.
             if asyncio.get_running_loop().time() >= deadline:
                 raise _DispatchDeadlineExpired()
             if attempted:
@@ -369,7 +375,7 @@ async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -
             raise CompletionHeld('resolved_endpoint_cap_unverified')
         client._client.follow_redirects = False
         _install_response_limit(client._client)
-        _install_dispatch_guard(client._client, deadline)
+        _install_dispatch_guard(client._client, deadline, authority)
         remaining = remaining_budget(deadline)
         bounded = client.with_options(max_retries=0, timeout=remaining)
         create = bounded.chat.completions.with_streaming_response.create
@@ -460,7 +466,7 @@ async def _native_complete(client, model, route, cap, messages, tokens, timeout,
         headers['content-type'] = 'application/json'
         data = bytearray()
         async with http:
-            _install_dispatch_guard(http, deadline)
+            _install_dispatch_guard(http, deadline, getattr(client, '_bounded_authority', None))
             remaining = remaining_budget(deadline)
             async with asyncio.timeout_at(deadline):
                 async with http.stream('POST',url,json=payload,headers=headers,timeout=remaining) as response:

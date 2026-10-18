@@ -5,7 +5,6 @@ short-lived and single-use. Restart cannot replay a provider or native publicati
 """
 from __future__ import annotations
 import asyncio
-import contextvars
 from dataclasses import dataclass, replace
 import secrets
 import threading
@@ -111,8 +110,10 @@ def stage_after_reply(server, sid, session, result, payload):
             or not payload.get('text') or any(result.get(k) for k in ('failed','interrupted','partial','error'))
             or result.get('completed') is False):
         return
+    from agent.presence_authority import callback_context
+    host.arm_owner()
     ticket = Ticket(server, sid, session, transport, dict(identity), host,
-                    time.monotonic()+30, contextvars.copy_context(), 'after_reply',
+                    time.monotonic()+30, callback_context(), 'after_reply',
                     session_generation=session.get('_human_ingress_generation', -1), identity_instance=identity)
     session['_presence_anchor'] = ticket
     host.gateway_current = lambda: current(ticket)

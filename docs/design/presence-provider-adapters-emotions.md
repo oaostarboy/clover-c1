@@ -47,10 +47,14 @@ No configuration or credential is changed by these adapters.
 
 Both modes use a maximum five-second inference transport deadline and a 16-KiB
 retained response-byte envelope, with input at most 6144 JSON UTF-8 bytes.
-Credential-owner resolution occurs before the inference HTTP deadline and may
-have its own auth/refresh behavior; this is not a universal auth-operation time
-bound. Native SDK/HTTP transports close on timeout/caller cancellation and discard
-late results. **Local connection closure is not proof that remote generation or
+The original absolute deadline includes configuration reads, no-refresh
+credential-owner acquisition, SDK construction, request hooks and transport work.
+The bounded lane reuses only an already-selected owner or an explicitly configured
+credential/keyless route; it does not select another account, refresh tokens or
+fall back. Synchronous local I/O cannot be preempted by asyncio: elapsed-time
+checks after it and at actual selected-transport entry reject late dispatch, and
+late results cannot publish. Native SDK/HTTP transports close on timeout/caller
+cancellation and discard late results. **Local connection closure is not proof that remote generation or
 billing stopped.** Truncation, deadline and a short-output prompt are not a server
 token cap. A reported strict-contract violation holds rather than publishes.
 

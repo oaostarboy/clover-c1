@@ -94,6 +94,9 @@ class SessionEvidence:
 class PresenceTurn:
     def __init__(self, agent, turn):
         self.agent, self.turn = agent, turn
+        from agent.presence_authority import capture
+        self.selected_owner = capture(agent)
+        self._publication_used = False
         self.event_id, self.query = turn.event_id, turn.query
         self.input_generation = turn.ingress.presence_generation
         self.event_generation = turn.ingress.run_generation
@@ -119,6 +122,7 @@ class PresenceTurn:
         from copy import copy
         result = copy(self)
         result.turn = None
+        result._publication_used = False
         result.event_id = uuid4().hex
         result.source_id = None
         result.key = self.store.linked_key(self.original_key)
@@ -199,7 +203,31 @@ class PresenceTurn:
                  evidence=[[r.owner, r.source_id, r.digest] for r in decision.evidence]),
             thought=snapshot.thought, generation=self.input_generation)
 
+    def arm_owner(self):
+        if self.selected_owner is not None:
+            self.selected_owner = self.selected_owner.bounded()
+
     async def publish(self, adapter, source, *, surface='telegram', kind='after_reply'):
+        from agent.presence_authority import scoped
+        import asyncio
+        if self._publication_used or not self.current():
+            return
+        self._publication_used = True
+        try:
+            # One task-local lease, including acquisition and publication.
+            # Reset in scoped's finally, also on caller cancellation/failure.
+            async with asyncio.timeout(5):
+                await asyncio.sleep(0)
+                snapshot = self.snapshot()
+                if snapshot is None:
+                    return
+                with scoped(self.selected_owner,
+                        lambda: self.current() and self.state.is_current(snapshot.thought)):
+                    await self._publish(adapter, source, surface=surface, kind=kind)
+        except (ValueError, TimeoutError):
+            return
+
+    async def _publish(self, adapter, source, *, surface='telegram', kind='after_reply'):
         from agent.presence_initiation import InitiationEvent, assess_initiation
         from agent.auxiliary_client import presence_completion
         from gateway.presence_delivery import (DeliveryScope, SurfaceBinding, DeliveryOffer,
@@ -217,6 +245,11 @@ class PresenceTurn:
         thought = next((t for t in self.state.list_pending() if t.thought_id == decision.thought_id
                         and t.revision == decision.revision), None)
         def publish_current():
+            from agent.presence_authority import validate_active
+            try:
+                validate_active()
+            except ValueError:
+                return False
             return thought is not None and self.state.is_current(thought) and self.current()
         if not publish_current():
             return
@@ -409,7 +442,13 @@ def register_after_reply(runner, event, result, session_key, generation):
                 chat_id=source.chat_id, user_id=source.user_id,
                 project=host.original_key.scope.project) == host.original_key.scope)
     host.gateway_current = authorized_current
+    host.arm_owner()
+    used = False
     async def after_ack():
+        nonlocal used
+        if used:
+            return
+        used = True
         if getattr(event, '_presence_requested_reply_ack', False) is True:
             await host.publish(adapter, source)
     adapter.register_post_delivery_callback(session_key, after_ack, generation=generation)

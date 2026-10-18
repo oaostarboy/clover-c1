@@ -199,7 +199,9 @@ def acquire(config, route, *, source_config=None):
     main = main if isinstance(main, dict) else {}
     entry = configured_entry(config, route.provider)
     checks = []
-    valid_checks = []
+    from agent.presence_authority import validate_active
+    validate_active()
+    valid_checks = [validate_active]
     key, source_reader = _configured_key(task, aux)
     explicit = key is not None
     if source_reader:
