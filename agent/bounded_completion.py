@@ -227,6 +227,52 @@ def _install_response_limit(http):
     http.event_hooks['response'].insert(0, headers)
 
 
+class _DispatchDeadlineExpired(BaseException):
+    """Carry a local deadline through SDK Exception/retry wrappers unchanged."""
+
+
+def _install_dispatch_guard(http, deadline):
+    """Fence every selected HTTPX transport after SDK construction and hooks.
+
+    Only this call-owned client is wrapped. Its existing transports retain TLS,
+    proxy, mount and close ownership; no default transport or request is added.
+    """
+    import httpx
+    if (not isinstance(http, httpx.AsyncClient)
+            or getattr(http._send_single_request, '__func__', None) is not httpx.AsyncClient._send_single_request
+            or getattr(http._transport_for_url, '__func__', None) is not httpx.AsyncClient._transport_for_url):
+        raise CompletionHeld('native_dispatch_boundary_unavailable')
+    attempted = False
+    wrappers = {}
+    class DispatchGuard(httpx.AsyncBaseTransport):
+        def __init__(self, transport):
+            self.transport = transport
+        async def handle_async_request(self, request):
+            nonlocal attempted
+            # Deliver cancellation requested during synchronous SDK/HTTPX work.
+            await asyncio.sleep(0)
+            if asyncio.get_running_loop().time() >= deadline:
+                raise _DispatchDeadlineExpired()
+            if attempted:
+                raise CompletionHeld('physical_request_envelope_exceeded')
+            attempted = True
+            return await self.transport.handle_async_request(request)
+        async def aclose(self):
+            await self.transport.aclose()
+    def wrap(transport):
+        if not isinstance(transport, httpx.AsyncBaseTransport):
+            raise CompletionHeld('native_dispatch_boundary_unavailable')
+        key = id(transport)
+        if key not in wrappers:
+            wrappers[key] = DispatchGuard(transport)
+        return wrappers[key]
+    # HTTPX chooses from these exact owners inside its unmodified dispatch.
+    transport = wrap(http._transport)
+    mounts = {pattern: wrap(value) if value is not None else None
+              for pattern, value in http._mounts.items()}
+    http._transport, http._mounts = transport, mounts
+
+
 def call_deadline(timeout):
     if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 5:
         raise CompletionHeld('invalid_bounded_request')
@@ -246,13 +292,16 @@ async def complete(*, config, messages, max_output_tokens, timeout, deadline=Non
     own_deadline = call_deadline(timeout)
     deadline = own_deadline if deadline is None else min(deadline, own_deadline)
     # Deliver pending cancellation before any synchronous credential/config I/O.
-    async with asyncio.timeout_at(deadline):
-        await asyncio.sleep(0)
-        result = await _complete(config=config, messages=messages,
-                                 max_output_tokens=max_output_tokens, timeout=timeout, deadline=deadline)
-        if asyncio.get_running_loop().time() >= deadline:
-            raise TimeoutError('bounded completion deadline exceeded')
-        return result
+    try:
+        async with asyncio.timeout_at(deadline):
+            await asyncio.sleep(0)
+            result = await _complete(config=config, messages=messages,
+                                     max_output_tokens=max_output_tokens, timeout=timeout, deadline=deadline)
+            if asyncio.get_running_loop().time() >= deadline:
+                raise TimeoutError('bounded completion deadline exceeded')
+            return result
+    except _DispatchDeadlineExpired:
+        raise TimeoutError('bounded completion deadline exceeded') from None
 
 
 async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -> CompletionResult:
@@ -320,6 +369,7 @@ async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -
             raise CompletionHeld('resolved_endpoint_cap_unverified')
         client._client.follow_redirects = False
         _install_response_limit(client._client)
+        _install_dispatch_guard(client._client, deadline)
         remaining = remaining_budget(deadline)
         bounded = client.with_options(max_retries=0, timeout=remaining)
         create = bounded.chat.completions.with_streaming_response.create
@@ -410,6 +460,7 @@ async def _native_complete(client, model, route, cap, messages, tokens, timeout,
         headers['content-type'] = 'application/json'
         data = bytearray()
         async with http:
+            _install_dispatch_guard(http, deadline)
             remaining = remaining_budget(deadline)
             async with asyncio.timeout_at(deadline):
                 async with http.stream('POST',url,json=payload,headers=headers,timeout=remaining) as response:
