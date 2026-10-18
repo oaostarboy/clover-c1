@@ -57,6 +57,8 @@ def prepare_offer_turn(agent: Any, row: Any) -> None:
     The gateway takes it once after a successful ordinary reply. Corrections and
     Feedback events themselves are never opportunities for unsolicited offers.
     """
+    if hasattr(agent, '_presence_turn'):
+        agent._presence_turn = None
     if hasattr(agent, "_presence_shadow"):
         agent._presence_shadow = None
     settings = ws.load_settings()
@@ -101,6 +103,8 @@ def prepare_offer_turn(agent: Any, row: Any) -> None:
         try:
             from agent.presence_shadow import prepare_shadow
             prepare_shadow(agent, agent._workstream_suggestion_turn, now=_now())
+            from agent.presence_runtime import prepare_presence
+            prepare_presence(agent, agent._workstream_suggestion_turn)
         except Exception:
             logger.debug("optional presence admission unavailable", exc_info=True)
     elif hasattr(db, "_presence_pending"):

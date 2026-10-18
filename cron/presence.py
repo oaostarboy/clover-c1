@@ -20,7 +20,7 @@ from agent.presence_state import ContextKey, EvidenceRef, Thought, PresenceStore
 from agent.workstreams import Scope
 from clover_constants import get_clover_home
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 MAX_RECORDS = 128  # Per profile, each table, including tombstones.
 MAX_STORE_BYTES = 64 * 1024
 _SOURCE_DDL = """CREATE TABLE presence_invalidations (
@@ -75,6 +75,19 @@ def _check_capacity(conn: sqlite3.Connection) -> None:
     guards, guard_size = conn.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(context || source_owner || source_id || status AS BLOB)) + 8),0) FROM presence_invalidations").fetchone()
     if count > MAX_RECORDS or guards > MAX_RECORDS or size + guard_size > MAX_STORE_BYTES:
         raise PresenceStoreError("presence capacity exceeded")
+    if conn.execute("PRAGMA user_version").fetchone()[0] >= 2:
+        for table in ('presence_budget', 'presence_publications'):
+            if conn.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] > MAX_RECORDS:
+                raise PresenceStoreError("presence owner capacity exceeded")
+        owner_size = conn.execute("SELECT COALESCE(SUM(LENGTH(CAST(record AS BLOB))),0) FROM presence_publications").fetchone()[0]
+        if size + guard_size + owner_size > MAX_STORE_BYTES:
+            raise PresenceStoreError("presence payload capacity exceeded")
+        epoch = conn.execute("SELECT epoch,stopped FROM presence_epoch WHERE id=1").fetchone()
+        if epoch is None or type(epoch[0]) is not int or epoch[0] < 0 or epoch[1] not in (0, 1):
+            raise PresenceStoreError("invalid initiative epoch")
+        for state, raw in conn.execute("SELECT state,record FROM presence_publications"):
+            if state not in {'proposed','claimed','attempting','acknowledged','unknown','held'} or not isinstance(json.loads(raw), dict):
+                raise PresenceStoreError("invalid publication receipt")
 
 
 class ThoughtStore:
@@ -110,9 +123,11 @@ class ThoughtStore:
             # byte-unchanged, including when an admission is attempted.
             version = conn.execute("PRAGMA user_version").fetchone()[0]
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
-            if version not in (0, SCHEMA_VERSION) or (version == 0 and tables):
+            original_tables = {"presence_thoughts", "presence_invalidations"}
+            owner_tables = {"presence_epoch", "presence_budget", "presence_publications"}
+            if version not in (0, 1, SCHEMA_VERSION) or (version == 0 and tables):
                 raise PresenceStoreError("unsupported presence schema")
-            if version == SCHEMA_VERSION and tables != {"presence_thoughts", "presence_invalidations"}:
+            if version and tables != original_tables | (owner_tables if version == 2 else set()):
                 raise PresenceStoreError("incomplete presence schema")
             if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise PresenceStoreError("corrupt presence store")
@@ -122,8 +137,13 @@ class ThoughtStore:
                     # schema. No deployed legacy emotion data is imported.
                     conn.execute(_DDL)
                     conn.execute(_SOURCE_DDL)
+                if version < 2:
+                    conn.execute("CREATE TABLE presence_epoch (id INTEGER PRIMARY KEY CHECK(id=1), epoch INTEGER NOT NULL, stopped INTEGER NOT NULL)")
+                    conn.execute("INSERT INTO presence_epoch VALUES (1,0,0)")
+                    conn.execute("CREATE TABLE presence_budget (event_id TEXT PRIMARY KEY, thought_id TEXT NOT NULL, revision INTEGER NOT NULL, day TEXT NOT NULL, tokens INTEGER NOT NULL, UNIQUE(thought_id,revision))")
+                    conn.execute("CREATE TABLE presence_publications (thought_id TEXT NOT NULL, revision INTEGER NOT NULL, event_id TEXT UNIQUE NOT NULL, epoch INTEGER NOT NULL, state TEXT NOT NULL, owner TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(thought_id,revision))")
                     conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
-            if version == SCHEMA_VERSION:
+            if version:
                 _check_capacity(conn)
                 _validate_records(conn)
             yield conn
@@ -219,6 +239,98 @@ class ThoughtStore:
             rows = conn.execute("SELECT record FROM presence_thoughts WHERE context=? AND source_owner=? AND source_id=? AND source_revision>=?",
                                 (_context(key), source.owner, source.source_id, source.revision))
             return all((old := _decode(row[0])).source == source and old.status == "pending" for row in rows)
+
+    def initiative_status(self) -> tuple[int, bool]:
+        with self._transaction() as conn:
+            if conn is None or conn.execute("PRAGMA user_version").fetchone()[0] < 2:
+                return (0, False)
+            row = conn.execute("SELECT epoch,stopped FROM presence_epoch WHERE id=1").fetchone()
+            if row is None or type(row[0]) is not int or row[0] < 0 or row[1] not in (0, 1):
+                raise PresenceStoreError("invalid initiative epoch")
+            return row[0], bool(row[1])
+
+    def stop(self) -> int:
+        """Profile-wide revocation; attempted sends stay ambiguous, never replay."""
+        with self._transaction(write=True) as conn:
+            conn.execute("UPDATE presence_epoch SET epoch=epoch+1,stopped=1 WHERE id=1")
+            conn.execute("UPDATE presence_publications SET state=CASE WHEN state='attempting' THEN 'unknown' ELSE 'held' END WHERE state IN ('proposed','claimed','attempting')")
+            return conn.execute("SELECT epoch FROM presence_epoch WHERE id=1").fetchone()[0]
+
+    def resume(self) -> int:
+        """Explicit reset admits future thoughts only; never replay old records."""
+        with self._transaction(write=True) as conn:
+            conn.execute("UPDATE presence_epoch SET epoch=epoch+1,stopped=0 WHERE id=1")
+            conn.execute("UPDATE presence_publications SET state=CASE WHEN state='attempting' THEN 'unknown' ELSE 'held' END WHERE state IN ('proposed','claimed','attempting')")
+            for raw, in conn.execute("SELECT record FROM presence_thoughts").fetchall():
+                old = _decode(raw)
+                if old.status == 'pending':
+                    new = replace(old, status='invalidated', summary='', revision=old.revision+1)
+                    conn.execute("UPDATE presence_thoughts SET record=? WHERE thought_id=?", (_encode(new), old.thought_id))
+            return conn.execute("SELECT epoch FROM presence_epoch WHERE id=1").fetchone()[0]
+
+    def reserve_assessment(self, *, event_id: str, thought_id: str, revision: int,
+                           day: str, max_calls: int, tokens: int) -> bool:
+        if (type(max_calls) is not int or not 1 <= max_calls <= 3
+                or type(tokens) is not int or not 1 <= tokens <= 512):
+            return False
+        with self._transaction(write=True) as conn:
+            if conn.execute("SELECT stopped FROM presence_epoch WHERE id=1").fetchone()[0]:
+                return False
+            if conn.execute("SELECT COUNT(*) FROM presence_budget").fetchone()[0] >= MAX_RECORDS:
+                return False
+            if conn.execute("SELECT COUNT(*) FROM presence_budget WHERE day=?", (day,)).fetchone()[0] >= max_calls:
+                return False
+            result = conn.execute("INSERT OR IGNORE INTO presence_budget VALUES (?,?,?,?,?)",
+                                  (event_id, thought_id, revision, day, tokens))
+            return result.rowcount == 1
+
+    def propose(self, thought_id: str, revision: int, event_id: str, epoch: int, record: dict,
+                *, thought: Thought | None = None) -> bool:
+        encoded = json.dumps(record, sort_keys=True, allow_nan=False)
+        if len(encoded.encode()) > 4096:
+            return False
+        with self._transaction(write=True) as conn:
+            if thought is not None:
+                row = conn.execute("SELECT record FROM presence_thoughts WHERE thought_id=?", (thought_id,)).fetchone()
+                if (thought.thought_id != thought_id or thought.revision != revision
+                        or thought.status != 'pending' or row is None or row[0] != _encode(thought)):
+                    return False
+            if conn.execute("SELECT epoch,stopped FROM presence_epoch WHERE id=1").fetchone() != (epoch, 0):
+                return False
+            result = conn.execute("INSERT OR IGNORE INTO presence_publications VALUES (?,?,?,?,?,?,?)",
+                                  (thought_id, revision, event_id, epoch, 'proposed', '', encoded))
+            return result.rowcount == 1
+
+    def _transition(self, thought_id: str, revision: int, owner: str, epoch: int,
+                    before: str, after: str) -> bool:
+        with self._transaction(write=True) as conn:
+            if conn.execute("SELECT epoch,stopped FROM presence_epoch WHERE id=1").fetchone() != (epoch, 0):
+                return False
+            result = conn.execute("UPDATE presence_publications SET state=?,owner=? WHERE thought_id=? AND revision=? AND epoch=? AND state=? AND (owner='' OR owner=?)",
+                                  (after, owner, thought_id, revision, epoch, before, owner))
+            return result.rowcount == 1
+
+    def claim(self, thought_id: str, revision: int, owner: str, epoch: int) -> bool:
+        return self._transition(thought_id, revision, owner, epoch, 'proposed', 'claimed')
+
+    def attempt(self, thought_id: str, revision: int, owner: str, epoch: int) -> bool:
+        return self._transition(thought_id, revision, owner, epoch, 'claimed', 'attempting')
+
+    def acknowledge(self, thought_id: str, revision: int, owner: str, epoch: int) -> bool:
+        return self._transition(thought_id, revision, owner, epoch, 'attempting', 'acknowledged')
+
+    def unknown(self, thought_id: str, revision: int, owner: str) -> None:
+        with self._transaction(write=True) as conn:
+            conn.execute("UPDATE presence_publications SET state='unknown' WHERE thought_id=? AND revision=? AND owner=? AND state='attempting'",
+                         (thought_id, revision, owner))
+
+    def publications(self) -> tuple[dict, ...]:
+        with self._transaction() as conn:
+            if conn is None or conn.execute("PRAGMA user_version").fetchone()[0] < 2:
+                return ()
+            return tuple(dict(thought_id=r[0], revision=r[1], event_id=r[2], epoch=r[3],
+                              state=r[4], owner=r[5], **json.loads(r[6])) for r in conn.execute(
+                                  "SELECT * FROM presence_publications ORDER BY event_id"))
 
     def list(self, key: ContextKey) -> tuple[Thought, ...]:
         with self._transaction() as conn:

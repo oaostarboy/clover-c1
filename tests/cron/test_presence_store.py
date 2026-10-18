@@ -340,7 +340,8 @@ def test_empty_v0_database_migrates_and_never_contains_affect(host):
     assert state.admit(host.ref, "A thought, not an emotion history")
     assert state.affect.commit(state.affect.begin(host.ref), {"valence": -1, "arousal": 1, "confidence": 1})
     with sqlite3.connect(store.path) as conn:
-        assert conn.execute("PRAGMA user_version").fetchone()[0] == 1
+        from cron.presence import SCHEMA_VERSION
+        assert conn.execute("PRAGMA user_version").fetchone()[0] == SCHEMA_VERSION
         record = conn.execute("SELECT record FROM presence_thoughts").fetchone()[0]
         assert all(name not in record for name in ("valence", "arousal", "confidence", "AffectReading"))
 

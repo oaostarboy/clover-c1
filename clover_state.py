@@ -12618,7 +12618,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         return cols
 
     def set_latest_user_api_content(
-        self, session_id: str, content: Any, api_content: str
+        self, session_id: str, content: Any, api_content: str, *, expected_row_id: Optional[int] = None
     ) -> int:
         """Backfill the ``api_content`` sidecar onto the newest ACTIVE user row.
 
@@ -12642,8 +12642,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                 "SELECT id FROM messages "
                 "WHERE session_id = ? AND role = 'user' AND active = 1 "
                 "ORDER BY id DESC LIMIT 1"
-                ") AND content IS ?",
-                (_scrub_surrogates(api_content), session_id, encoded),
+                ") AND content IS ? AND (? IS NULL OR id = ?)",
+                (_scrub_surrogates(api_content), session_id, encoded, expected_row_id, expected_row_id),
             )
             return cursor.rowcount
 

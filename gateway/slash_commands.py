@@ -3646,6 +3646,9 @@ class GatewaySlashCommandsMixin:
             return str(exc)
         can_change = self._proactive_caller_is_admin(event.source)
         args = event.get_command_args().strip()
+        if args == 'presence' or args.startswith('presence '):
+            from gateway.presence_controls_host import command
+            return await command(self, event, args[len('presence'):].strip(), can_change=can_change)
         if args.lower().startswith("watcher "):
             if not can_change:
                 return "Watcher controls locked by current scoped admin policy."

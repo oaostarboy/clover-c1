@@ -7309,6 +7309,39 @@ def resolve_provider_client(
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
+async def presence_completion(*, messages: list, max_output_tokens: int, timeout: float) -> str:
+    """One physical, cancellable request. Never use the general retry/fallback loop.
+
+    Candidate supports explicit OpenAI-compatible API-key routes only. OAuth,
+    auto selection, probes and compatibility wrappers hold until separately audited.
+    Reservation is the authenticated caller's responsibility, before this entry.
+    """
+    import asyncio
+    import json
+    import openai
+    from clover_cli.config import load_config
+
+    route = load_config().get("auxiliary", {}).get("presence", {})
+    if (not isinstance(route, dict) or route.get("provider") not in {"openai", "custom"}
+            or not isinstance(route.get("model"), str) or not route["model"].strip()
+            or type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 512
+            or type(timeout) not in (int, float) or not 0 < timeout <= 5
+            or len(json.dumps(messages, ensure_ascii=False).encode()) > 6144):
+        raise ValueError("unsupported bounded presence route")
+    client, model = resolve_provider_client(route["provider"], model=route["model"],
+                                           async_mode=True, api_mode="chat_completions")
+    if type(client) is not openai.AsyncOpenAI:
+        raise ValueError("presence route requires native async chat transport")
+    try:
+        bounded = client.with_options(max_retries=0, timeout=timeout)
+        result = await asyncio.wait_for(bounded.chat.completions.create(
+            model=model, messages=messages, max_tokens=max_output_tokens,
+            stream=False), timeout=timeout)
+        return result.choices[0].message.content or ""
+    finally:
+        await client.close()
+
+
 def get_text_auxiliary_client(
     task: str = "",
     *,

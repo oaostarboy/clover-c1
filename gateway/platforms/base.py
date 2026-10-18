@@ -7303,6 +7303,9 @@ class BasePlatformAdapter(ABC):
                         metadata=_final_thread_metadata,
                     )
                     _record_delivery(result)
+                    # Exact requested-text ACK; presence callbacks never treat
+                    # a failed send or finally cleanup as a successful reply.
+                    event._presence_requested_reply_ack = getattr(result, 'success', False) is True
                     if _obligation_id is not None:
                         try:
                             from gateway.delivery_ledger import (

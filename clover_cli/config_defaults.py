@@ -2940,6 +2940,10 @@ DEFAULT_CONFIG = {
     # ``active`` is only reachable after the canary gates in PLAN-v1. No
     # setting here grants authority — dispatch authority comes only from the
     # original runtime continuation plan.
+    "presence": {
+        "enabled": False,
+        "denied_categories": [],
+    },
     "proactive": {
         "enabled": False,
         "mode": "shadow",

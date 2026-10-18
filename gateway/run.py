@@ -7051,6 +7051,9 @@ class TurnRunner:
         except Exception:
             logger.debug("optional workstream offer deferred", exc_info=True)
 
+        if isinstance(result, dict) and getattr(agent, '_presence_turn', None) is not None:
+            result['_presence_turn'] = agent._presence_turn
+            agent._presence_turn = None
         ctx.result_holder[0] = result
 
         # Signal the stream consumer that the agent is done. Pass the
@@ -7332,6 +7335,8 @@ class TurnRunner:
             "session_id": effective_session_id,
             "response_previewed": result.get("response_previewed", False),
             "response_transformed": result.get("response_transformed", False),
+            **({"_presence_turn": result["_presence_turn"]}
+               if "_presence_turn" in result else {}),
             **({"workstream_suggestion": result["workstream_suggestion"]}
                if "workstream_suggestion" in result else {}),
             # Pass through the agent_persisted flag so the persistence block
@@ -23069,6 +23074,13 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 **_completion_kwargs,
             )
             _turn_seconds = time.monotonic() - _turn_started_monotonic
+
+            try:
+                if isinstance(agent_result, dict) and '_presence_turn' in agent_result:
+                    from agent.presence_runtime import register_after_reply
+                    register_after_reply(self, event, agent_result, _quick_key, run_generation)
+            except Exception:
+                logger.debug("optional presence after-reply unavailable", exc_info=True)
 
             from gateway.actionable_suggestions import after_reply as _action_after_reply
 

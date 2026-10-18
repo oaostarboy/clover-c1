@@ -43,7 +43,7 @@ def _clamp(value, lo: float, hi: float, default: float) -> float:
         return default
     try:
         v = float(value)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, OverflowError):
         return default
     if not math.isfinite(v):
         return default
@@ -113,6 +113,19 @@ def admit_affect(agent: Any, turn: Any, sample: dict, *, now: datetime) -> bool:
     if (not isinstance(section, dict) or section.get("enabled") is not True
             or not settings.enabled or not settings.suggestions_enabled):
         return False
+    rows = agent._session_db.get_messages_around(
+        thought.session_id, thought.source_row_id, window=0)["window"]
+    if (not rows or origin.text_digest(rows[0].get("content")) != thought.source_digest
+            or not origin.ingress_is_valid(turn.ingress, profile=thought.scope.profile)):
+        agent._session_db._presence_pending = None
+        return False
+    latest_config = load_config()
+    latest_section = latest_config.get('presence', {})
+    latest_settings = ws.load_settings(latest_config)
+    if (not isinstance(latest_section, dict) or latest_section.get('enabled') is not True
+            or not latest_settings.enabled or not latest_settings.suggestions_enabled):
+        agent._session_db._presence_pending = None
+        return False
     reading = AffectReading(
         _clamp(sample.get("valence"), -1, 1, 0),
         _clamp(sample.get("arousal"), 0, 1, 0),
@@ -135,6 +148,13 @@ def evaluate_shadow(agent: Any, turn: Any, *, settings: ws.ProactiveSettings,
         # run_conversation retires ingress in its finally block before gateway
         # presentation (run_agent.py). The gateway owns post-turn generation;
         # while a capability is still attached, also enforce its live binding.
+        from clover_cli.config import load_config
+        config = load_config()
+        section = config.get("presence", {})
+        fresh = ws.load_settings(config)
+        if (not isinstance(section, dict) or section.get("enabled") is not True
+                or not fresh.enabled or not fresh.suggestions_enabled):
+            return False
         attached = getattr(agent, "_trusted_human_ingress", None)
         return (is_current()
                 and getattr(agent, "_presence_turn_stop", None) == (

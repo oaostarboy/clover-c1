@@ -238,6 +238,20 @@ def test_affect_admission_rejects_foreign_or_stale_source(host, change):
         "valence": -1, "arousal": 1, "confidence": 1}, now=host.clock[0])
 
 
+def test_source_read_revocation_rejects_shadow_assessment(host, monkeypatch):
+    from agent import presence_shadow as presence
+    turn = prepare(host, 'Carry thought: deployment packaging verification')
+    real = host.db.get_messages_around
+    def read(*args, **kwargs):
+        rows = real(*args, **kwargs)
+        host.config['presence']['enabled'] = False
+        (host.home/'config.yaml').write_text(yaml.safe_dump(host.config))
+        return rows
+    monkeypatch.setattr(host.db, 'get_messages_around', read)
+    assert not presence.admit_affect(host.agent, turn,
+        {'valence':-1, 'arousal':1, 'confidence':1}, now=host.clock[0])
+
+
 def test_duplicate_admission_does_not_reset_expiry_or_rearm_offer(host):
     from agent import presence_shadow as presence
     source = prepare(host, "Carry thought: deployment packaging verification")

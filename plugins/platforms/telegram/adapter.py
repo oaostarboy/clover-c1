@@ -5668,6 +5668,15 @@ class TelegramAdapter(BasePlatformAdapter):
         except Exception:
             return SendResult(success=False, error="watcher delivery unconfirmed")
 
+    async def send_presence(self, payload: dict):
+        """One native plain-text attempt owned by the presence claim ledger.
+
+        No Markdown fallback, chunk splitting, flood retry or generic delivery
+        replay: an exception or missing ACK is unknown and held by the owner.
+        """
+        message = await self._bot.send_message(**payload)
+        return str(message.message_id) if message is not None else None
+
     async def send(
         self,
         chat_id: str,
