@@ -273,20 +273,11 @@ def ensure_closed_code_fences(text: str) -> str:
     backtick: an orphaned `` ` `` makes the remainder of the message
     render as inline code.
 
-    Triple-backtick: count `` ``` `` occurrences.  If odd, append a
-    closing fence on its own line.  This is safe because nested
-    triple-backtick fences (e.g. a literal `` ``` `` inside a code block)
-    are exceedingly rare in model output and, when they do appear, the
-    extra closing fence just creates a brief empty code block at the end
-    of the message — far less harmful than the entire message being one
-    giant code block.
-
-    Single backtick: after balancing triple-backtick fences, strip all
-    complete `` ```…``` `` regions and count remaining standalone `` ` ``.
-    If odd, append a closing inline-code backtick.  Same trade-off: a
-    stray closing backtick may produce a brief empty inline-code span,
-    which is far less harmful than the rest of the message being rendered
-    as inline code.
+    Fences close on their own line (or at the terminal delimiter supported by
+    Telegram). Inline triple backticks inside a block remain literal content.
+    Existing whitespace is never trimmed when adding a missing closing fence.
+    Standalone inline-code spans outside those protected regions are balanced
+    separately.
 
     Returns:
         The input text with closing markers appended if needed, or the
@@ -295,17 +286,22 @@ def ensure_closed_code_fences(text: str) -> str:
     if not isinstance(text, str) or not text:
         return text
 
-    # Step 1: fix triple-backtick code-block fences (existing logic)
-    if text.count("```") % 2 == 1:
-        text = text.rstrip("\n") + "\n```"
+    from gateway.platforms.helpers import text_has_unclosed_fence
+
+    # Code literals may contain inline triple backticks. Only line fences
+    # affect context, and existing blank lines are part of the code body.
+    if text_has_unclosed_fence(text):
+        text = text + "\n```"
 
     # Step 2: fix single-backtick inline-code spans
     # Remove complete ```…``` regions so their internal backticks don't
     # pollute the standalone count.  Also remove any trailing unclosed
     # ``` that leaks through (defence in depth).
-    import re
-    without_fences = re.sub(r"```.*?```", "", text, flags=re.DOTALL)
-    without_fences = re.sub(r"```[^`]*$", "", without_fences)
+    from gateway.platforms.helpers import fenced_code_regions
+
+    without_fences = text
+    for start, _body_start, _body_end, end, _lang, _closed in reversed(list(fenced_code_regions(text))):
+        without_fences = without_fences[:start] + without_fences[end:]
 
     if without_fences.count("`") % 2 == 1:
         text = text + "`"
@@ -1970,13 +1966,15 @@ class GatewayStreamConsumer:
                     if (
                         not self._use_native_streaming
                         and _len_fn(self._accumulated) > _safe_limit
-                        and self._message_id is None
+                        and (self._message_id is None or (
+                            self._edit_supported and '```' in self._accumulated
+                        ))
                     ):
-                        # No existing message to edit (first message or after a
-                        # segment break).  Seal only the overflowing head chunks
-                        # as fixed messages, then keep the trailing chunk in
-                        # _accumulated so the normal send/edit path below makes
-                        # it the active preview.  That lets chunk 2, 3, ... keep
+                        # Seal overflowing code heads through the same splitter
+                        # for an existing preview and a fresh send, then keep
+                        # the trailing chunk in _accumulated so the normal
+                        # send/edit path below makes it the active preview.
+                        # That lets chunk 2, 3, ... keep
                         # updating in-place as later streamed deltas arrive
                         # instead of posting every split as an immutable message.
                         chunks = self._truncate_for_stream(
@@ -1992,12 +1990,17 @@ class GatewayStreamConsumer:
                         chunks_delivered = False
                         reply_to = self._initial_reply_to_id
                         all_heads_delivered = len(chunks) > 1
-                        for chunk in chunks[:-1]:
-                            new_id = await self._send_new_chunk(
-                                chunk,
-                                reply_to,
-                                final=got_done,
-                            )
+                        edit_head = self._message_id is not None
+                        for index, chunk in enumerate(chunks[:-1]):
+                            if index == 0 and edit_head:
+                                ok = await self._send_or_edit(
+                                    chunk, finalize=True, is_turn_final=False,
+                                )
+                                new_id = self._message_id if ok else None
+                            else:
+                                new_id = await self._send_new_chunk(
+                                    chunk, reply_to, final=got_done,
+                                )
                             if new_id is None or new_id == reply_to:
                                 # Failed to deliver a sealed head; keep the
                                 # full accumulated text intact so the gateway's
@@ -2644,7 +2647,11 @@ class GatewayStreamConsumer:
         if not callable(truncate):
             return self._split_text_chunks(text, limit, len_fn)
 
-        if isinstance(self.adapter, _BasePlatformAdapter):
+        if truncate is _BasePlatformAdapter.truncate_message and '```' in text:
+            # Streaming retains an open, unnumbered tail for future deltas.
+            chunks = truncate(text, limit, len_fn=len_fn,
+                              add_indicators=False, close_tail=False)
+        elif isinstance(self.adapter, _BasePlatformAdapter):
             chunks = truncate(text, limit, len_fn=len_fn)
         else:
             chunks = truncate(text, limit)
@@ -3590,7 +3597,14 @@ class GatewayStreamConsumer:
         # orphaned ``` which, on Discord/Slack/Matrix, causes the entire
         # remaining output to render as a single code block.  This covers
         # the streaming edit path (G2) and first-send path alike.
+        # The cursor is display wrapper syntax, never part of a fence's
+        # closing line or its literal body. Balance the source before adding it.
+        cursor = self.cfg.cursor if self.cfg.cursor and text.endswith(self.cfg.cursor) else ''
+        if cursor:
+            text = text[:-len(cursor)]
         text = ensure_closed_code_fences(text)
+        if cursor:
+            text += ('\n' if text.endswith('```') else '') + cursor
         # A bare streaming cursor is not meaningful user-visible content and
         # can render as a stray tofu/white-box message on some clients.
         visible_without_cursor = text

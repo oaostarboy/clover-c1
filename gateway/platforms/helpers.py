@@ -575,17 +575,30 @@ def compile_mention_patterns(
 # match the module's existing import style.
 
 
-def text_has_unclosed_fence(text: str) -> bool:
-    """Return True when *text* ends inside an unclosed ``` code fence.
+def fenced_code_regions(text: str):
+    """Yield (start, body_start, body_end, end, language, closed).
 
-    Scans line by line, toggling in/out state on lines starting with ```.
-    An odd number of toggles means the trailing fence is unclosed.
+    Inline openings remain compatible with the existing Telegram renderer.
+    Only a line or terminal closing delimiter ends a block; inline triple-
+    backtick literals inside it remain data. Offsets refer to source text.
     """
-    in_fence = False
-    for line in text.split('\n'):
-        if line.startswith('```'):
-            in_fence = not in_fence
-    return in_fence
+    opening = re.compile(r'(?<![\\`])```([^`\r\n]*)\r?\n')
+    closing = re.compile(r'(?m)^```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\r?$)|```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\Z)')
+    pos = 0
+    while match := opening.search(text, pos):
+        close = closing.search(text, match.end())
+        end = close.end() if close else len(text)
+        tag = match.group(1).strip()
+        yield (match.start(), match.end(), close.start() if close else end,
+               end, tag.split()[0] if tag else '', close is not None)
+        if close is None:
+            break
+        pos = end
+
+
+def text_has_unclosed_fence(text: str) -> bool:
+    """True only when a source fenced region has no closing delimiter."""
+    return any(not region[5] for region in fenced_code_regions(text))
 
 
 def text_ends_with_table_row(text: str) -> bool:
@@ -853,6 +866,14 @@ def split_text_fence_aware(
 
     if not text:
         return []
+
+    if balance_fences and not prefer_paragraphs and '```' in text:
+        # The streaming fallback shares the canonical lossless code splitter.
+        # Keep the historical paragraph strategy for plain prose and Yuanbao.
+        from gateway.platforms.base import BasePlatformAdapter
+        return BasePlatformAdapter.truncate_message(
+            text, limit, len_fn=_len, add_indicators=False,
+        )
 
     if prefer_paragraphs:
         chunks = _chunk_markdown_paragraphs(text, limit, len_fn)

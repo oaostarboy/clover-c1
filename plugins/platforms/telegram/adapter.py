@@ -512,7 +512,7 @@ def _separate_chunk_indicator_from_fence(text: str) -> str:
     back to plain text. Put the indicator on its own line immediately after the
     closing fence.
     """
-    return _CHUNK_INDICATOR_ON_FENCE_RE.sub(r'```\n\g<indicator>', text)
+    return _CHUNK_INDICATOR_ON_FENCE_RE.sub(r'```\n \g<indicator>', text)
 
 
 # ---------------------------------------------------------------------------
@@ -9269,23 +9269,20 @@ class TelegramAdapter(BasePlatformAdapter):
         #    before the normal MarkdownV2 conversions run.
         text = _wrap_markdown_tables(text)
 
-        # 1) Protect fenced code blocks (``` ... ```)
-        #    Per MarkdownV2 spec, \ and ` inside pre/code must be escaped.
-        def _protect_fenced(m):
-            raw = m.group(0)
-            # Split off opening ``` (with optional language) and closing ```
-            open_end = raw.index('\n') + 1 if '\n' in raw[3:] else 3
-            opening = raw[:open_end]
-            body_and_close = raw[open_end:]
-            body = body_and_close[:-3]
-            body = body.replace('\\', '\\\\').replace('`', '\\`')
-            return _ph(opening + body + '```')
+        # 1) Protect source fenced bodies before any inline Markdown handling.
+        #    Use the same fence grammar as the splitter, so inline ``` literals
+        #    cannot terminate a block or become inline-code delimiters.
+        from gateway.platforms.helpers import fenced_code_regions
 
-        text = re.sub(
-            r'(```(?:[^\n]*\n)?[\s\S]*?```)',
-            _protect_fenced,
-            text,
-        )
+        parts = []
+        pos = 0
+        for start, body_start, body_end, end, language, _closed in fenced_code_regions(text):
+            parts.append(text[pos:start])
+            body = text[body_start:body_end].replace('\\', '\\\\').replace('`', '\\`')
+            parts.append(_ph(f'```{language}\n{body}```'))
+            pos = end
+        parts.append(text[pos:])
+        text = ''.join(parts)
 
         # 2) Protect inline code (`...`)
         #    Escape \ inside inline code per MarkdownV2 spec.
