@@ -9284,11 +9284,12 @@ class TelegramAdapter(BasePlatformAdapter):
         parts.append(text[pos:])
         text = ''.join(parts)
 
-        # 2) Protect inline code (`...`)
-        #    Escape \ inside inline code per MarkdownV2 spec.
+        # 2) Protect inline code. Match a whole delimiter run, never a
+        #    single pair inside ``...`` / ```...``` (phantom visible ticks).
+        #    Source delimiters are syntax; Telegram uses one backtick pair.
         text = re.sub(
-            r'(`[^`]+`)',
-            lambda m: _ph(m.group(0).replace('\\', '\\\\')),
+            r'(?<!`)(`+)(?!`)([^`]+)\1(?!`)',
+            lambda m: _ph('`' + m.group(2).replace('\\', '\\\\').replace('`', '\\`') + '`'),
             text,
         )
 

@@ -2,7 +2,7 @@
   "$comment": "GENERATED — do not hand-edit. Regenerate with clover-c1 scripts/generate_conformance_vectors.py; the native renderers are the oracle (executable spec).",
   "oracle": {
     "repo": "clover-c1",
-    "commit": "40eebc7d70f3d8e95c429c8aa482f31ba6c867f6",
+    "commit": "62f4b490a20c90dc74bf7637af909f0f77dfba56",
     "generator": "scripts/generate_conformance_vectors.py",
     "generator_version": 1
   },
@@ -267,8 +267,8 @@
       "category": "adversarial",
       "expect": "divergent",
       "input": "```python\nprint('never closed')",
-      "native_output": "\\`\\`\\`python\nprint\\('never closed'\\)",
-      "note": "unterminated fence: native escapes as prose, connector HTML may close the block — degraded either way, never a 400"
+      "native_output": "```python\nprint('never closed')```",
+      "note": "unterminated fence: native closes a MarkdownV2 code wrapper without changing body bytes; connector HTML closure may differ — no byte-parity promise"
     },
     {
       "id": "pathological-nesting",
@@ -319,7 +319,7 @@
       "category": "adversarial",
       "expect": "semantic",
       "input": "```\na\n```\nmid\n```\nb\n```\nend ```inline``` tail",
-      "native_output": "```\na\n```\nmid\n```\nb\n```\nend ```inline``` tail"
+      "native_output": "```\na\n```\nmid\n```\nb\n```\nend `inline` tail"
     }
   ]
 }

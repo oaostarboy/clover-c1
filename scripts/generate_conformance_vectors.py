@@ -164,7 +164,7 @@ _EXPECT_OVERRIDES: Dict[str, Dict[str, tuple]] = {
         # that plain-text comparison is noise — documented divergence.
         "table-simple": ("divergent", "native wraps tables into row groups; connector renders <pre> — content preserved, layout differs"),
         "table-cjk": ("divergent", "same as table-simple (CJK width alignment is native-only)"),
-        "unclosed-fence": ("divergent", "unterminated fence: native escapes as prose, connector HTML may close the block — degraded either way, never a 400"),
+        "unclosed-fence": ("divergent", "unterminated fence: native closes a MarkdownV2 code wrapper without changing body bytes; connector HTML closure may differ — no byte-parity promise"),
         "placeholder-injection": ("divergent", "NUL placeholder tokens are renderer-internal; each side neutralizes its own pattern"),
         "whitespace-only": ("divergent", "native collapses to empty-ish prose, connector HTML preserves — cosmetic"),
     },
