@@ -58,3 +58,35 @@ def test_receipt_acceptance_error_keeps_already_streamed_requested_reply(monkeyp
             client.close()
     finally:
         h.close()
+
+
+@pytest.mark.parametrize('outcome', ['ack', 'failed', 'unknown', 'truthy', 'foreign'])
+def test_reconciliation_requires_literal_ack_and_exact_owner(monkeypatch, tmp_path, outcome):
+    from types import SimpleNamespace
+    from gateway.platforms.base import SendResult
+    from tests.gateway.test_trusted_human_origin_ingress import SESSION_KEY
+    h, requests, bot = setup_host(monkeypatch, tmp_path)
+    try:
+        source = _user_source()
+        generation = h.runner._begin_session_run_generation(SESSION_KEY)
+        owner = RequestedReplyOwner.capture(h.runner, source, SESSION_KEY, generation)
+        result = SendResult(success=outcome in {'ack', 'foreign'}, message_id='final',
+                            continuation_message_ids=('head', 'tail'))
+        if outcome == 'unknown':
+            result = SimpleNamespace(message_id='unknown')
+        elif outcome == 'truthy':
+            result = SimpleNamespace(success=1, message_id='not-a-literal-ack')
+        adapter = object() if outcome == 'foreign' else h.adapter
+        receipt = owner.receipt_for_edit(adapter, result, 'Complete final with footer')
+        assert (receipt is not None) == (outcome=='ack')
+        if receipt is not None:
+            assert receipt.transport_acks[0].content=='Complete final with footer'
+            assert receipt.transport_acks[0].message_ids==('final', 'head', 'tail')
+            event = SimpleNamespace(source=source, internal=False)
+            assert receipt.accepts(h.runner, event, SESSION_KEY, generation, receipt.text)
+            assert not receipt.accepts(h.runner, event, SESSION_KEY, generation, 'footer')
+            source.thread_id = 'foreign-thread'
+            assert not receipt.accepts(h.runner, event, SESSION_KEY, generation, receipt.text)
+        assert not requests and bot.send_message.await_count==0
+    finally:
+        h.close()
