@@ -181,11 +181,13 @@ def test_real_receipt_backed_source_change_clears_durable_and_affect(ingress_hos
     saved = state.admit(ref, "Verify package compatibility")
     assert saved is not None
     assert state.affect.commit(state.affect.begin(ref), {"valence": -1, "arousal": 1, "confidence": 1})
+    pending_ticket = state.affect.begin(ref)
     with sqlite3.connect(h.home / "state.db") as conn:
         if operation == "correct":
             conn.execute("UPDATE messages SET content=? WHERE id=?", ("Corrected question", turn.row_id))
         else:
             conn.execute("DELETE FROM messages WHERE id=?", (turn.row_id,))
+    assert not state.affect.commit(pending_ticket, {"valence": -1, "arousal": 1, "confidence": 1})
     restored = ps.ThoughtState(key, reader, ThoughtStore(), clock=lambda: h.clock[0], enabled=True)
     assert restored.list_pending() == ()
     assert state.affect.posture == "ordinary"
@@ -198,3 +200,40 @@ def test_correction_during_assessment_begin_prevents_provider_ticket(host):
         return host.source[0]
     host.state.reader = reader
     assert host.state.begin(host.ref) is None
+
+
+@pytest.mark.parametrize("field", ["valence", "arousal", "confidence"])
+def test_oversized_integer_never_throws_or_increases_confidence(host, field):
+    sample = {"valence": -1, "arousal": 1, "confidence": 1}
+    sample[field] = 10 ** 400
+    assert not host.state.commit(host.state.begin(host.ref), sample)
+    assert host.state.latest is None
+    assert host.state.posture == "ordinary"
+
+
+@pytest.mark.parametrize("operation", ["delete", "correct"])
+def test_source_change_before_commit_rejects_and_invalidates_ticket(host, operation):
+    ticket = host.state.begin(host.ref)
+    original = host.source[0]
+    host.source[0] = None if operation == "delete" else replace(original, ref=replace(host.ref, revision=2))
+    assert not host.state.commit(ticket, {"valence": -1, "arousal": 1, "confidence": 1})
+    host.source[0] = original
+    assert not host.state.commit(ticket, {"valence": -1, "arousal": 1, "confidence": 1})
+    assert host.state.latest is None
+
+
+@pytest.mark.parametrize("revocation", ["effective_policy", "epoch"])
+def test_fresh_policy_epoch_fence_after_owner_read_prevents_affect_commit(host, revocation):
+    live = {"enabled": True, "epoch": 1}
+    captured_epoch = live["epoch"]
+    def current():
+        return live["enabled"] and live["epoch"] == captured_epoch
+    state = ps.AffectState(host.key, lambda key, ref: host.source[0], clock=lambda: host.clock[0], enabled=True, is_current=current)
+    ticket = state.begin(host.ref)
+    def revoked_reader(key, ref):
+        if revocation == "effective_policy": live["enabled"] = False
+        else: live["epoch"] += 1
+        return host.source[0]
+    state.reader = revoked_reader
+    assert not state.commit(ticket, {"valence": -1, "arousal": 1, "confidence": 1})
+    assert state.posture == "ordinary"

@@ -15,6 +15,16 @@ from typing import Callable, Mapping, Protocol
 from agent.workstreams import Scope
 
 
+def _current(enabled: bool, fence: Callable[[], bool] | None) -> bool:
+    """Host-owned effective-policy/epoch fence, never inferred from model text."""
+    if enabled is not True:
+        return False
+    try:
+        return fence is None or fence() is True
+    except Exception:
+        return False
+
+
 def _identifier(value: object, label: str, limit: int = 512) -> None:
     if (not isinstance(value, str) or not value.strip()
             or len(value.encode("utf-8")) > limit or any(ord(c) < 32 for c in value)):
@@ -165,20 +175,26 @@ class ThoughtState:
     """
 
     def __init__(self, key: ContextKey, reader: EvidenceReader, store: ThoughtRepository,
-                 *, clock: Callable[[], datetime], enabled: bool = False):
+                 *, clock: Callable[[], datetime], enabled: bool = False,
+                 is_current: Callable[[], bool] | None = None):
         self.key, self.reader, self.store, self.clock = key, reader, store, clock
         self.enabled = enabled is True
-        self.affect = AffectState(key, self._affect_source_reader, clock=clock, enabled=enabled)
+        self._is_current = is_current
+        self.affect = AffectState(key, self._affect_source_reader, clock=clock,
+                                  enabled=enabled, is_current=self._active)
         self.last_error: str | None = None
 
+    def _active(self) -> bool:
+        return _current(self.enabled, self._is_current)
+
     def _affect_source_reader(self, key: ContextKey, source: EvidenceRef) -> EvidenceSnapshot | None:
-        if not self.enabled or key != self.key:
+        if not self._active() or key != self.key:
             return None
         snapshot = self.reader(key, source)
         try:
             # Revocation can come from another context owner/process even when
             # the original message itself remains unchanged after feedback.
-            return snapshot if self.store.source_is_current(key, source) else None
+            return snapshot if self.store.source_is_current(key, source) and self._active() else None
         except PresenceStoreError:
             self.last_error = "store_unavailable"
             return None
@@ -189,7 +205,8 @@ class ThoughtState:
 
     def admit(self, source: EvidenceRef, summary: str, *, purpose: str = "follow_up",
               ttl: timedelta = timedelta(hours=1)) -> Thought | None:
-        if not self.enabled or not evidence_matches(self.reader, self.key, source):
+        if (not self._active() or not evidence_matches(self.reader, self.key, source)
+                or not self._active()):
             return None
         if not isinstance(summary, str) or not summary.strip() or len(summary.encode("utf-8")) > 2048:
             raise ValueError("summary must contain 1..2048 UTF-8 bytes")
@@ -213,8 +230,8 @@ class ThoughtState:
         A delivery owner must also check its own epoch/lease immediately before
         publication. There is no atomic transaction with the source-owner DB.
         """
-        return (self.enabled and isinstance(thought, Thought) and thought.key == self.key
-                and thought in self.list_pending() and thought in self.inspect())
+        return (self._active() and isinstance(thought, Thought) and thought.key == self.key
+                and thought in self.list_pending() and thought in self.inspect() and self._active())
 
     def invalidate_source(self, source: EvidenceRef, *, status: str = "corrected") -> int:
         """Authenticated source-owner correction/delete; revokes in-flight affect."""
@@ -240,7 +257,7 @@ class ThoughtState:
             return ()
 
     def list_pending(self) -> tuple[Thought, ...]:
-        if not self.enabled:
+        if not self._active():
             return ()
         pending = []
         now = self.clock()
@@ -263,14 +280,16 @@ class ThoughtState:
         # Another owner/connection may have corrected a record during source
         # readback. Recheck the durable revision before returning a candidate.
         final = self.inspect()
-        return tuple(thought for thought in pending if self.enabled and thought in final)
+        return tuple(thought for thought in pending if self._active() and thought in final)
 
 
 class AffectState:
     """One context's latest synthetic/host assessment; never persisted."""
 
     def __init__(self, key: ContextKey, reader: EvidenceReader, *,
-                 clock: Callable[[], datetime], enabled: bool = False):
+                 clock: Callable[[], datetime], enabled: bool = False,
+                 is_current: Callable[[], bool] | None = None):
+        self._is_current = is_current
         self.key = key
         self.reader = reader
         self.clock = clock
@@ -278,6 +297,9 @@ class AffectState:
         self._generation = 0
         self._latest: AffectReading | None = None
         self._ticket: AssessmentTicket | None = None
+
+    def _active(self) -> bool:
+        return _current(self.enabled, self._is_current)
 
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled is True
@@ -292,17 +314,23 @@ class AffectState:
     def begin(self, source: EvidenceRef) -> AssessmentTicket | None:
         self.correct()
         generation = self._generation
-        if (not self.enabled or not evidence_matches(self.reader, self.key, source)
-                or not self.enabled or generation != self._generation):
+        if (not self._active() or not evidence_matches(self.reader, self.key, source)
+                or not self._active() or generation != self._generation):
             return None
         self._ticket = AssessmentTicket(self.key, source, self._generation, self.clock())
         return self._ticket
 
     def commit(self, ticket: AssessmentTicket | None, sample: object) -> bool:
-        if (not isinstance(ticket, AssessmentTicket) or not self.enabled or ticket is not self._ticket or ticket.generation != self._generation
+        if (not isinstance(ticket, AssessmentTicket) or ticket is not self._ticket
+                or ticket.generation != self._generation):
+            return False
+        if (not self._active()
                 or not timedelta(0) <= self.clock() - ticket.observed_at < timedelta(seconds=120)
                 or not evidence_matches(self.reader, self.key, ticket.source)
-                or ticket is not self._ticket or ticket.generation != self._generation):
+                or not self._active() or ticket is not self._ticket
+                or ticket.generation != self._generation):
+            if ticket is self._ticket:
+                self.correct()
             return False
         self._ticket = None
         self._latest = None
@@ -322,12 +350,12 @@ class AffectState:
 
     @property
     def latest(self) -> AffectReading | None:
-        if not self.enabled:
+        if not self._active():
             self.correct()
             return None
         reading = self._latest
         if reading and (not evidence_matches(self.reader, self.key, reading.source)
-                or reading is not self._latest
+                or reading is not self._latest or not self._active()
                 or not timedelta(0) <= self.clock() - reading.observed_at < timedelta(seconds=120)):
             self.correct()
         return self._latest

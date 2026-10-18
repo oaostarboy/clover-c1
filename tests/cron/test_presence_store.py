@@ -388,3 +388,19 @@ def test_correction_from_another_owner_revokes_existing_and_future_affect(host):
     assert state.affect.latest is None
     assert state.affect.begin(host.ref) is None
     assert make_state(host).affect.begin(host.ref) is None
+
+
+@pytest.mark.parametrize("revocation", ["effective_policy", "epoch"])
+def test_fresh_policy_epoch_fence_after_source_read_prevents_persistence(host, revocation):
+    from cron.presence import ThoughtStore
+    live = {"enabled": True, "epoch": 1}
+    captured_epoch = live["epoch"]
+    def current():
+        return live["enabled"] and live["epoch"] == captured_epoch
+    def reader(key, ref):
+        if revocation == "effective_policy": live["enabled"] = False
+        else: live["epoch"] += 1
+        return host.sources[ref]
+    state = ps.ThoughtState(host.key, reader, ThoughtStore(), clock=lambda: host.clock[0], enabled=True, is_current=current)
+    assert state.admit(host.ref, "Must not commit after revoked read") is None
+    assert not host.home.exists()

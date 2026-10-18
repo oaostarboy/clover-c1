@@ -33,7 +33,13 @@ restart. There are no diagnoses, attachment scores or personality updates.
   marks/tombstones without creating a database. ThoughtState's affect reader uses
   it so feedback from another owner/process also revokes existing readings and
   future old-source assessments, even if the original message remains unchanged.
-- `ThoughtState(key, reader, store, clock=..., enabled=False)`:
+- `ThoughtState(key, reader, store, clock=..., enabled=False, is_current=...)`:
+  `is_current` is a fresh, zero-argument trusted-host predicate that must return
+  exactly True while effective policy, captured initiative epoch and input
+  generation still permit this operation. It is checked before/after owner reads
+  and again for active record reads. Exceptions/non-True hold. Standalone tests
+  may omit it; production integration must inject the current policy/epoch fence.
+  W1 does not invent a second persisted Stop epoch or read raw config as policy.
   - `admit(ref, redacted_summary, purpose='follow_up', ttl=one_hour) -> Thought |
     None`. The host must redact before admission. Source readback is mandatory.
   - `list_pending() -> tuple[Thought, ...]`. Reads validate scope, TTL, source
@@ -56,11 +62,16 @@ Allowed thought purposes are follow_up, project_connection and shared_language.
 Shared_language is only a purpose tag: a separate confirmed shared-context owner
 and its confirmation controls are not implemented here.
 
+`AffectState` accepts the same optional trusted `is_current` predicate and checks
+it around evidence readback, before ticket commit and on reading retrieval.
+`ThoughtState.affect` inherits its owning state's fence automatically.
 `AffectState` publishes `begin(ref) -> AssessmentTicket | None`,
 `commit(ticket, sample) -> bool`, `correct()`, `set_enabled(bool)`, `latest` and
 `posture`. A ticket captures generation and observation time **before inference**;
 it is consumed once. New input, correction, revocation or a newer begin rejects
-older completions. Caller must call `correct()` when new input arrives even if no
+older completions. Deleted/corrected source readback permanently invalidates the
+captured ticket, even if a later read sees the old source again. Caller must call
+`correct()` when new input arrives even if no
 new assessment is attempted. The core performs no inference or budget reservation.
 W2 owns those pre-invocation gates, event IDs, policy epoch, budget and deadline.
 
@@ -108,6 +119,12 @@ an implicit retention policy hidden in this library.
 
 ## Integration obligations / remaining gates
 
+- W4's S0 findings were mirrored in W1: oversized integers are rejected before
+  float conversion without confident fallback; real owner correction/deletion
+  before affect commit rejects and invalidates the ticket; fresh policy/epoch
+  changes during owner reads prevent affect/persistent admission. W1 fixes do
+  **not** modify S0. W0 must fix/replace the old _clamp/admit_affect/current guards
+  and independently rerun W4's S0 adversarial suite at the integration checkpoint.
 - W0 must provide production receipt-backed evidence adapters and replace its
   ephemeral shadow storage at its owned seam. Its `PendingThought`/AffectReading
   shapes differ; no implicit conversion is installed by this packet.
