@@ -7309,12 +7309,24 @@ def resolve_provider_client(
 
 # ── Public API ──────────────────────────────────────────────────────────────
 
+class PresenceOutputBudgetUnsupported(ValueError):
+    """Explicit Codex presence is held without resolving credentials or spending.
+
+    A local stream cutoff cannot bound server generation (including hidden
+    reasoning). Keep the hard reservation contract until this endpoint has a
+    verified server-enforced cap; do not reuse the general threaded adapter.
+    """
+
+    reason = "codex_output_budget_unsupported"
+
+
 async def presence_completion(*, messages: list, max_output_tokens: int, timeout: float) -> str:
     """One physical, cancellable request. Never use the general retry/fallback loop.
 
-    Candidate supports explicit OpenAI-compatible API-key routes only. OAuth,
-    auto selection, probes and compatibility wrappers hold until separately audited.
-    Reservation is the authenticated caller's responsibility, before this entry.
+    Explicit OpenAI-compatible API-key routes use native async chat. Explicit
+    Codex/OAuth holds with a budget-specific reason: its endpoint has no verified
+    server-enforced output cap. Auto selection, probes and compatibility wrappers
+    remain unsupported. Reservation is the caller's responsibility, before entry.
     """
     import asyncio
     import json
@@ -7322,12 +7334,20 @@ async def presence_completion(*, messages: list, max_output_tokens: int, timeout
     from clover_cli.config import load_config
 
     route = load_config().get("auxiliary", {}).get("presence", {})
-    if (not isinstance(route, dict) or route.get("provider") not in {"openai", "custom"}
+    if (not isinstance(route, dict) or route.get("provider") not in {"openai", "custom", "openai-codex"}
             or not isinstance(route.get("model"), str) or not route["model"].strip()
             or type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 512
             or type(timeout) not in (int, float) or not 0 < timeout <= 5
             or len(json.dumps(messages, ensure_ascii=False).encode()) > 6144):
         raise ValueError("unsupported bounded presence route")
+    if route["provider"] == "openai-codex":
+        # The existing Codex adapter and main Codex transport intentionally omit
+        # max_output_tokens. SDK serialization support is NOT endpoint support.
+        # Hold before token selection/refresh, client construction or any probe.
+        raise PresenceOutputBudgetUnsupported(
+            "Codex presence held: no verified server-enforced output cap; "
+            "the hard output reservation cannot be guaranteed"
+        )
     base_url = route.get('base_url')
     if route['provider'] == 'custom' and (not isinstance(base_url, str)
             or not base_url or base_url != base_url.strip()):
