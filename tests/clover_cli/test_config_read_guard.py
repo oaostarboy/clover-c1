@@ -16,6 +16,10 @@ Canonical owners:
   * ``gateway/run.py`` — ``_load_gateway_config()``'s monkeypatched-home
     fallback path (delegates to ``read_raw_config`` when paths agree).
 
+  * ``clover_cli/settings_projection.py`` — cold presence-status projection
+    only; normal config imports initialize runtime/auth and are forbidden on
+    this settings-only path (see docs/design/cold-settings-projection.md).
+
 Everything else must import one of those. If this test fails on your new
 code, use ``load_config()``/``load_config_readonly()`` for behavioral reads,
 or ``read_user_config_raw()`` for write-back round-trips — do not add your
@@ -42,6 +46,12 @@ ALLOWLIST = {
     # Reads the MANAGED-scope config.yaml (/etc/clover/...), not the user's —
     # it IS the overlay source; the canonical loaders call into it.
     "clover_cli/managed_scope.py",
+    # Cold status owner: read_presence_status_settings returns ONLY projected
+    # presence/proactive/route leaves with fresh strict managed overlay,
+    # canonical model normalization and rejection (not expansion) of ${...}.
+    # No raw API, startup/auth/plugin imports, secrets, migrations or writes.
+    # agent/emotions_config delegates here; it is NOT an additional raw owner.
+    "clover_cli/settings_projection.py",
     # Parse-health probe: intentionally answers "does the raw file parse?".
     "gateway/readiness.py",
 }
