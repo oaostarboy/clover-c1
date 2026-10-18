@@ -46,9 +46,10 @@ class RequestedReplyOwner:
     def receipt(self, consumer, final_text):
         from gateway.stream_consumer import GatewayStreamConsumer
         if (isinstance(consumer, GatewayStreamConsumer) and consumer.adapter is self.adapter
-                and consumer.chat_id == self.scope[2]
-                and consumer.has_confirmed_final_delivery(final_text)):
-            return RequestedReplyReceipt(self, final_text, tuple(consumer._final_transport_acks))
+                and consumer.chat_id == self.scope[2]):
+            acks = consumer.confirmed_final_transport_acks(final_text)
+            if acks:
+                return RequestedReplyReceipt(self, final_text, acks)
         return None
 
     def receipt_for_edit(self, adapter, result, final_text):

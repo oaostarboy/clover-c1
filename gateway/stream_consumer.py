@@ -388,7 +388,15 @@ class _FencedAdapterIO:
             if (consumer._final_delivery_active
                     and ((name == "edit_message" and kwargs.get("finalize") is True)
                          or (name == "send" and (kwargs.get("metadata") or {}).get("notify") is True))):
-                consumer._record_transport_ack(name, kwargs.get("content", ""), result)
+                consumer._observe_transport_ack(
+                    name, kwargs.get("content", ""), result,
+                    terminal=consumer._final_delivery_terminal,
+                )
+            if name == "delete_message" and result is True:
+                # A deleted preview/part cannot prove surviving final content.
+                message_id = kwargs.get("message_id", args[1] if len(args) > 1 else None)
+                if message_id is not None:
+                    consumer._deleted_final_message_ids.add(str(message_id))
             return result
 
         return _call
@@ -471,7 +479,12 @@ class GatewayStreamConsumer:
         self.adapter = adapter
         self._io = _FencedAdapterIO(self)
         self._final_delivery_active = False
+        self._final_delivery_terminal = True
         self._final_transport_acks = []
+        # Split provenance is independent of receipt recording. A lost head
+        # receipt must not shrink the set of payloads that require proof.
+        self._final_receipt_splits = []
+        self._deleted_final_message_ids = set()
         self._delivery_cancelled = False
         self.chat_id = chat_id
         self.cfg = config or StreamConsumerConfig()
@@ -873,22 +886,79 @@ class GatewayStreamConsumer:
         except Exception:
             pass
 
-    def has_confirmed_final_delivery(self, final_text: str) -> bool:
-        """Only a terminal ACK plus exact complete payload can admit presence.
+    def _record_receipt_split(self, source, chunks):
+        # Proof bookkeeping is optional; unavailable provenance holds presence
+        # without interrupting the requested reply's existing delivery path.
+        try:
+            self._final_receipt_splits.append((source, tuple(chunks)))
+        except Exception:
+            self._final_receipt_splits = None
 
-        The split/fallback recorder runs only after all heads and the final
-        tail succeeded. Its unsplit ledger must match the completed result.
-        Uncertain sends may still suppress duplicates, but never mint ACKs.
+    def _observe_transport_ack(self, operation, content, result, *, terminal=True):
+        # Optional storage, including a replaced recorder, cannot change the
+        # transport outcome and send the ordinary requested reply again.
+        try:
+            self._record_transport_ack(operation, content, result, terminal=terminal)
+        except Exception:
+            pass
+
+    def confirmed_final_transport_acks(self, final_text: str) -> tuple:
+        """Return exact surviving-part proof, or no proof (never a retry signal).
+
+        Replay the actual split transformations, including adapter numbering
+        and fence balancing, against the completed source. Do not concatenate
+        ACK text with lossy normalization, or use the optimistic whole ledger
+        as evidence for missing parts. Later edits replace, not add to, the
+        proof for a physical message. A fresh complete replacement may stand
+        alone; a tail/footer may not.
         """
         try:
-            return (any(ack.terminal for ack in self._final_transport_acks) and not self._delivery_cancelled
-                    and not self._abandoned and self._run_still_current()
-                    and self._final_response_sent is True
-                    and self._delivered_final_text is not None
-                    and self._delivered_final_text == ensure_closed_code_fences(
-                        self._clean_for_display(final_text or "")).strip())
+            if (self._delivery_cancelled or self._abandoned or not self._run_still_current()
+                    or self._final_response_sent is not True):
+                return ()
+            clean = self._clean_for_display
+            canonical = lambda text: ensure_closed_code_fences(clean(text or "")).strip()
+            target = canonical(final_text)
+            if not target or self._delivered_final_text != target:
+                return ()
+            surviving = []
+            for ack in self._final_transport_acks:
+                ids = set(ack.message_ids)
+                if not ids or ids & self._deleted_final_message_ids:
+                    continue
+                overlaps = [index for index, old in enumerate(surviving)
+                            if ids.intersection(old.message_ids)]
+                position = overlaps[0] if overlaps else len(surviving)
+                surviving = [old for old in surviving if not ids.intersection(old.message_ids)]
+                surviving.insert(position, ack)
+            # Complete replacement evidence is sufficient in its own right.
+            for ack in reversed(surviving):
+                if ack.terminal and ack.content.strip() == target:
+                    return (ack,)
+            expected = []
+            remaining = clean(final_text or "")
+            for source, chunks in self._final_receipt_splits:
+                source = clean(source)
+                # Agent completion strips boundary whitespace; split payloads
+                # retain it (and may append numbering after it). Restore only
+                # that boundary whitespace, never missing body characters.
+                if remaining.rstrip() == source.rstrip():
+                    remaining = source
+                if not remaining.startswith(source):
+                    return ()
+                expected.extend(canonical(chunk) for chunk in chunks[:-1])
+                remaining = chunks[-1] + remaining[len(source):]
+            expected.append(canonical(remaining))
+            if ([ack.content.strip() for ack in surviving] != expected
+                    or not surviving or not surviving[-1].terminal):
+                return ()
+            return tuple(surviving)
         except Exception:
-            return False
+            return ()
+
+    def has_confirmed_final_delivery(self, final_text: str) -> bool:
+        """Every surviving final part needs its own literal successful ACK."""
+        return bool(self.confirmed_final_transport_acks(final_text))
 
     def delivered_final_matches(self, final_text: str) -> Optional[bool]:
         """Reconcile the recorded turn-final payload against ``final_text``.
@@ -1141,6 +1211,8 @@ class GatewayStreamConsumer:
         self._final_response_sent = False
         self._final_content_delivered = False
         self._final_transport_acks = []
+        self._final_receipt_splits = []
+        self._deleted_final_message_ids = set()
         self._delivered_final_text = None
         self._turn_split_delivery = False
         # Native draft streaming: bump the draft_id so the next text segment
@@ -1849,6 +1921,7 @@ class GatewayStreamConsumer:
                             chunks = self._split_text_chunks(
                                 self._accumulated, _safe_limit, _len_fn,
                             )
+                        self._record_receipt_split(self._accumulated, chunks)
                         chunks_delivered = False
                         reply_to = self._initial_reply_to_id
                         all_heads_delivered = len(chunks) > 1
@@ -1931,9 +2004,12 @@ class GatewayStreamConsumer:
                         continue
                     # Existing message: edit it with the first chunk, then
                     # start a new message for the overflow remainder.
+                    # Seal every overflowing head, including new heads after
+                    # the edited preview. Sending the entire remaining tail to
+                    # an adapter that splits it would leave a multi-message
+                    # preview that a later finalize could resend in full.
                     while (
                         _len_fn(self._accumulated) > _safe_limit
-                        and self._message_id is not None
                         and self._edit_supported
                     ):
                         _cp_budget = _custom_unit_to_cp(
@@ -1953,9 +2029,18 @@ class GatewayStreamConsumer:
                         # messages, NOT the turn-final answer, so the fresh-final
                         # path (opt-in fresh_final_after_seconds) must not mark
                         # the turn delivered on it (#29346 semantics).
-                        ok = await self._send_or_edit(
-                            chunk, finalize=True, is_turn_final=False,
-                        )
+                        self._record_receipt_split(self._accumulated, (
+                            chunk, self._accumulated[split_at:].lstrip("\n"),
+                        ))
+                        if self._message_id is None:
+                            head_id = await self._send_new_chunk(
+                                chunk, self._initial_reply_to_id, final=got_done,
+                            )
+                            ok = head_id is not None and head_id != self._initial_reply_to_id
+                        else:
+                            ok = await self._send_or_edit(
+                                chunk, finalize=True, is_turn_final=False,
+                            )
                         if self._fallback_final_send or not ok:
                             # Edit failed (or backed off due to flood control)
                             # while attempting to split an oversized message.
@@ -2406,7 +2491,7 @@ class GatewayStreamConsumer:
                 # These heads are sealed, including heads sent before finish.
                 # Preserve their physical receipts but do not let a head alone
                 # count as the turn-final tail ACK.
-                self._record_transport_ack("send", text, result, terminal=False)
+                self._observe_transport_ack("send", text, result, terminal=False)
                 self._message_id = str(result.message_id)
                 self._track_preview_ids_from_result(result)
                 self._already_sent = True
@@ -2614,6 +2699,8 @@ class GatewayStreamConsumer:
                 logger.debug("per-chat limit resolution failed: %s", e)
         safe_limit = max(500, raw_limit - 100)
         chunks = self._split_text_chunks(continuation, safe_limit, len_fn=_len_fn)
+        if len(chunks) > 1:
+            self._record_receipt_split(continuation, chunks)
 
         stale_message_id = self._message_id  # partial message to clean up
         last_message_id: Optional[str] = None
@@ -3381,6 +3468,8 @@ class GatewayStreamConsumer:
         self._final_response_sent = False
         self._final_content_delivered = False
         self._final_transport_acks = []
+        self._final_receipt_splits = []
+        self._deleted_final_message_ids = set()
         self._delivered_final_text = None
         self._turn_split_delivery = False
         logger.info(
@@ -3392,11 +3481,15 @@ class GatewayStreamConsumer:
         self, text: str, *, finalize: bool = False, is_turn_final: bool = True,
     ) -> bool:
         previous = self._final_delivery_active
-        self._final_delivery_active = bool(finalize and is_turn_final)
+        previous_terminal = self._final_delivery_terminal
+        # Finalized overflow edits seal durable heads, not just the tail.
+        self._final_delivery_active = bool(finalize)
+        self._final_delivery_terminal = bool(is_turn_final)
         try:
             return await self._send_or_edit_impl(text, finalize=finalize, is_turn_final=is_turn_final)
         finally:
             self._final_delivery_active = previous
+            self._final_delivery_terminal = previous_terminal
 
     async def _send_or_edit_impl(
         self, text: str, *, finalize: bool = False, is_turn_final: bool = True,

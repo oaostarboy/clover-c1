@@ -14,7 +14,7 @@ from cron.presence import ThoughtStore
 from gateway.platforms.base import SendResult
 
 
-def enable_native_stream(monkeypatch, h, text='ack', preview_gate=None):
+def enable_native_stream(monkeypatch, h, text='ack', preview_gate=None, first_delta=None):
     from run_agent import AIAgent
     h.runner.config.streaming.enabled = True
     h.runner.config.streaming.transport = 'edit'
@@ -30,12 +30,17 @@ def enable_native_stream(monkeypatch, h, text='ack', preview_gate=None):
                 choices=[dict(index=0, delta={'content': text}, finish_reason=None)]),
                 dict(id='synthetic', object='chat.completion.chunk', created=0, model='synthetic',
                 choices=[dict(index=0, delta={}, finish_reason='stop')])]
+            if first_delta is not None:
+                assert text.startswith(first_delta)
+                events[0]['choices'][0]['delta']['content'] = first_delta
+                events.insert(1, dict(id='synthetic', object='chat.completion.chunk', created=0, model='synthetic',
+                    choices=[dict(index=0, delta={'content': text[len(first_delta):]}, finish_reason=None)]))
             if preview_gate is not None:
                 class DelayedStream(httpx.SyncByteStream):
                     def __iter__(self):
                         yield ('data: '+json.dumps(events[0])+'\n\n').encode()
                         assert preview_gate.wait(3), 'preview transport did not acknowledge'
-                        yield ('data: '+json.dumps(events[1])+'\n\ndata: [DONE]\n\n').encode()
+                        yield (''.join('data: '+json.dumps(event)+'\n\n' for event in events[1:])+'data: [DONE]\n\n').encode()
                 return httpx.Response(200, headers={'content-type':'text/event-stream'}, stream=DelayedStream())
             return httpx.Response(200, headers={'content-type':'text/event-stream'},
                 content=''.join('data: '+json.dumps(e)+'\n\n' for e in events)+'data: [DONE]\n\n')
