@@ -579,20 +579,24 @@ def fenced_code_regions(text: str):
     """Yield (start, body_start, body_end, end, language, closed).
 
     Inline openings remain compatible with the existing Telegram renderer.
-    Only a line (with 0–3 leading spaces) or terminal closing delimiter ends
-    a block; inline triple-backtick literals inside it remain data. Closing
-    indentation is syntax, not body whitespace. Offsets refer to source text.
+    A closing line allows 0–3 leading spaces; inline triple-backtick literals
+    remain data. Nonterminal closing indentation is syntax. Legacy terminal
+    delimiters keep preceding body whitespace (including whitespace-only split
+    tails) so a no-final-newline body remains lossless. Offsets refer to source.
     """
     opening = re.compile(r'(?<![\\`])```([^`\r\n]*)\r?\n')
-    closing = re.compile(r'(?m)^ {0,3}```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\r?$)|(?<![\\`])```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\Z)')
+    closing = re.compile(r'(?m)^ {0,3}```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\r?\n)|(?<![\\`])```(?=[ \t]*(?P<indicator>\\?\(\d+/\d+\\?\))?\Z)')
     pos = 0
     while match := opening.search(text, pos):
         close = closing.search(text, match.end())
         if close:
-            # Keep legacy inline terminal closings, but do not let that
-            # alternative accept a deeply indented or tab-indented code line.
+            # Keep legacy inline terminal closings, including numbered split
+            # tails consisting only of code whitespace. Without a synthetic
+            # indicator, a deeply indented or tab-indented line remains data.
             line_prefix = text[text.rfind('\n', 0, close.start()) + 1:close.start()]
-            if line_prefix and not line_prefix.strip(' \t'):
+            if (line_prefix and not line_prefix.strip(' \t')
+                    and (len(line_prefix) > 3 or '\t' in line_prefix)
+                    and not close.group('indicator')):
                 close = None
         end = close.end() if close else len(text)
         tag = match.group(1).strip()

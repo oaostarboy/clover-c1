@@ -8045,6 +8045,14 @@ class BasePlatformAdapter(ABC):
         # Source offsets, rather than a partially sliced fence/escape sequence,
         # determine code context. Never infer context from an isolated tail.
         regions = list(fenced_code_regions(content))
+        # Normalize only recognized closing-line indentation before slicing.
+        # If a chunk ends on that fence, it becomes a terminal delimiter; its
+        # syntax spaces must not then be mistaken for literal code-body spaces.
+        # Terminal inline closings keep all preceding body whitespace intact.
+        for _start, _body_start, body_end, end, _lang, closed in reversed(regions):
+            if closed and content[body_end:end].startswith(" "):
+                content = content[:body_end] + content[body_end:end].lstrip(" ") + content[end:]
+        regions = list(fenced_code_regions(content))
 
         def code_at(pos):
             return next((r for r in regions if r[1] <= pos <= r[2]
