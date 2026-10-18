@@ -37,7 +37,10 @@ HUMAN = "human"
 HUMAN_ORIGIN_TTL_SECONDS = 24 * 3600
 
 _SECRET = secrets.token_bytes(32)
-_LOCK = threading.Lock()
+# Allocations under this lock (including optional policy loading) can run GC.
+# An older event's weakref callback then re-enters the same registry on this
+# thread. Keep cross-thread exclusion without deadlocking that cleanup.
+_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
