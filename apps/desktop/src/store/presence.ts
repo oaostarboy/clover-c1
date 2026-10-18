@@ -88,7 +88,10 @@ export async function controlPresence(entry: PresenceEntry, action: 'inspect' | 
   const result = await entry.request('presence.control', { session_id: entry.sessionId, token: entry.controlToken, action }) as { accepted?: boolean; text?: string }
 
   if (result?.accepted !== true) {throw new Error(result?.text || 'Presence control expired. Reopen from the current conversation.')}
-  clearPresence(entry.profile, entry.sessionId)
+
+  if (action !== 'inspect' && $presenceFeed.get()[presenceKey(entry.profile, entry.sessionId)] === entry) {
+    clearPresence(entry.profile, entry.sessionId)
+  }
 
   return result.text || ''
 }

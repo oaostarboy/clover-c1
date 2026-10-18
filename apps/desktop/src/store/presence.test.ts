@@ -1,12 +1,27 @@
 import { describe, expect, it, vi } from 'vitest'
 
-import { $presenceFeed, acceptPresenceInitiative, presenceKey } from './presence'
+import { $presenceFeed, acceptPresenceInitiative, controlPresence, presenceKey } from './presence'
 
 const payload = { type: 'presence.initiative', schema_version: 1, thought_id: 'thought-1', revision: 1,
   event_id: 'event-1', epoch: 0, generation: 1, text: 'A thought to check: verify manifest checksum.',
   ack_token: 'synthetic-ack', control_token: 'synthetic-control', focus: false, navigate: false }
 
 describe('presence status feed owner', () => {
+  it('keeps Inspect read-only so the same card can still Stop', async () => {
+    $presenceFeed.set({})
+    const request = vi.fn(async () => ({ accepted: true, text: 'Current thought' }))
+    await acceptPresenceInitiative('profile-a', 'session-a', payload, request)
+    const key = presenceKey('profile-a', 'session-a')
+    const entry = $presenceFeed.get()[key]
+
+    expect(await controlPresence(entry, 'inspect')).toBe('Current thought')
+    expect($presenceFeed.get()[key]).toBe(entry)
+    await controlPresence(entry, 'stop')
+    expect($presenceFeed.get()[key]).toBeUndefined()
+    expect(request).toHaveBeenLastCalledWith('presence.control', {
+      session_id: 'session-a', token: payload.control_token, action: 'stop'
+    })
+  })
   it('publishes a scoped row before acknowledging, without focus or navigation', async () => {
     $presenceFeed.set({})
 

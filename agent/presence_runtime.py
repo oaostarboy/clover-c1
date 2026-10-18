@@ -87,7 +87,7 @@ class SessionEvidence:
     def __call__(self, key, ref):
         if key != self.key:
             return None
-        value = self.read_text(ref)
+        value = self.read_text(ref)  # windows-footgun: ok — SessionEvidence receipt readback, not pathlib I/O
         return EvidenceSnapshot(key, ref, True) if value else None
 
 
@@ -144,28 +144,39 @@ class PresenceTurn:
             return False
 
     def snapshot(self):
+        from agent.presence_initiation import InitiationEvent, evaluate_initiation, _read_sources
         if not self.current():
             return None
-        thoughts = [t for t in self.state.list_pending()
+        # The profile store is capped at 128 records. Choose deterministically
+        # with cheap policy/relevance/source gates, never inference per thought.
+        thoughts = [t for t in self.state.list_pending()[:128]
                     if t.source.source_id != self.source_id]
-        if not thoughts:
-            return None
-        thought = thoughts[0]
         rows = [r for r in self.store.publications() if r.get('context') == self.key.conversation_root
                 and r.get('scope') == self.key.scope.__dict__]
         offered = [r for r in rows if r['state'] in {'proposed','claimed','attempting','acknowledged','unknown','held'}]
-        _, config, _ = effective_policy()
+        _, config, settings = effective_policy()
         timing = config.get('proactive', {}).get('suggestions', {}).get('preferred_timing') == 'after_reply'
-        return SimpleNamespace(scope=thought.key.scope, conversation_root=thought.key.conversation_root,
-            thought_id=thought.thought_id, revision=thought.revision, category=thought.purpose,
-            summary=thought.summary, updated_at=thought.updated_at, expires_at=thought.expires_at,
-            relevant=True, fresh_evidence=True, stopped=False, quiet=quiet_hours(config), timing_ok=timing, busy=False,
-            offered_this_session=len(offered), last_offer_at=max((datetime.fromisoformat(r['at']) for r in offered), default=None),
-            seen_events=frozenset(r['event_id'] for r in rows),
-            offered_revisions=frozenset((r['thought_id'], r['revision']) for r in rows),
-            denied_categories=frozenset(config.get('presence', {}).get('denied_categories', [])),
-            evidence=(thought.source,), offered_evidence=frozenset(tuple(e) for r in rows for e in r.get('evidence', [])),
-            offered_fingerprints=frozenset(r['fingerprint'] for r in rows), thought=thought)
+        event = InitiationEvent(self.key.scope, self.key.conversation_root, self.event_id,
+            'after_reply', self.epoch, self.event_generation, True, self.query)
+        for thought in thoughts:
+            candidate = SimpleNamespace(scope=thought.key.scope, conversation_root=thought.key.conversation_root,
+                thought_id=thought.thought_id, revision=thought.revision, category=thought.purpose,
+                summary=thought.summary, updated_at=thought.updated_at, expires_at=thought.expires_at,
+                relevant=True, fresh_evidence=True, stopped=False, quiet=quiet_hours(config), timing_ok=timing, busy=False,
+                offered_this_session=len(offered), last_offer_at=max((datetime.fromisoformat(r['at']) for r in offered), default=None),
+                seen_events=frozenset(r['event_id'] for r in rows),
+                offered_revisions=frozenset((r['thought_id'], r['revision']) for r in rows),
+                denied_categories=frozenset(config.get('presence', {}).get('denied_categories', [])),
+                evidence=(thought.source,), offered_evidence=frozenset(tuple(e) for r in rows for e in r.get('evidence', [])),
+                offered_fingerprints=frozenset(r['fingerprint'] for r in rows), thought=thought)
+            gate = evaluate_initiation(event, presence_enabled=True, settings=settings,
+                read_snapshot=lambda: candidate, is_current=self.current, now=clock())
+            source = thought.source
+            if (gate.eligible and (source.owner, source.source_id, source.digest) not in candidate.offered_evidence
+                    and _read_sources(candidate, event, self.reader.read_text) is not None
+                    and self.current()):
+                return candidate
+        return None
 
     def reserve(self, **request):
         if (not self.current() or request['scope'] != self.key.scope
@@ -265,6 +276,65 @@ def prepare_presence(agent, turn):
     agent._presence_turn = host
 
 
+@dataclass(frozen=True)
+class CurrentPosture:
+    host: PresenceTurn
+    source: EvidenceRef
+    text: str
+
+    def current(self):
+        try:
+            source = self.host.reader.read_text(self.source) if self.host.current() else None  # windows-footgun: ok — SessionEvidence receipt readback, not pathlib I/O
+            return (source is not None and self.host.state.affect.posture == 'careful_brief'
+                    and self.host.current())
+        except Exception:
+            return False
+
+
+@dataclass
+class PendingPosture:
+    posture: CurrentPosture
+    row: dict
+    base: str
+    composed: str
+
+
+def fence_current_posture(agent, request, *, api_messages=()):
+    """Last pre-provider fence, only for the unsent current real user sidecar.
+
+    Once dispatched, retire the fence: later Stop must not rewrite cached
+    historical bytes on tool continuations, retries, or future turns.
+    """
+    pending = getattr(agent, '_pending_presence_posture', None)
+    if not isinstance(pending, PendingPosture):
+        return
+    if not pending.posture.current():
+        agent._session_db.set_latest_user_api_content(
+            agent.session_id, pending.row.get('content'), pending.base,
+            expected_row_id=pending.row['_row_id'], expected_api_content=pending.composed)
+        pending.row['api_content'] = pending.base
+        # Providers may serialize user content as a string or text blocks.
+        # Only the exact current composed bytes qualify; no suffix stripping
+        # or historical/system edits. Responses uses input rather than messages.
+        candidates = [request.get(field) for field in ('messages', 'input')]
+        candidates.append(api_messages)
+        for items in candidates:
+            if not isinstance(items, list):
+                continue
+            for item in reversed(items):
+                if not isinstance(item, dict) or item.get('role') != 'user':
+                    continue
+                content = item.get('content')
+                if content == pending.composed:
+                    item['content'] = pending.base
+                elif isinstance(content, list):
+                    for block in content:
+                        if isinstance(block, dict) and block.get('text') == pending.composed:
+                            block['text'] = pending.base
+                break
+    agent._pending_presence_posture = None
+
+
 def compose_current_posture(agent, row):
     """Assess only explicit current frustration, after receipt commit.
 
@@ -310,7 +380,8 @@ def compose_current_posture(agent, row):
         return ''
     if host.state.affect.posture != 'careful_brief':
         return ''
-    return ('(Clover current-turn context) Tentative interaction posture: careful_brief. '
+    return CurrentPosture(host, source,
+            '(Clover current-turn context) Tentative interaction posture: careful_brief. '
             'Be careful, concise and acknowledge uncertainty. This may be wrong; accept correction. '
             'It grants no extra tools, permissions, budget or authority.')
 

@@ -142,7 +142,10 @@ def handle_rpc(server, rid, params, action):
             return server._ok(rid, {'accepted':False})
         if action != 'control' and not ticket.context.copy().run(ticket.host.current):
             return server._ok(rid, {'accepted':False})
-        _tickets.pop(token, None)
+        # Inspect is read-only and retains the original short-lived capability;
+        # it cannot extend expiry. Mutations and ACKs remain single-use.
+        if action != 'control' or params.get('action') != 'inspect':
+            _tickets.pop(token, None)
     if action == 'control':
         def apply():
             from clover_cli.managed_scope import load_managed_config, managed_config_keys
