@@ -153,6 +153,23 @@ def test_callback_unwinds_active_credentials_and_next_turn_can_use_new_owner(mon
     asyncio.run(run())
 
 
+def test_unarmed_snapshot_is_not_an_active_callback_credential_lease(monkeypatch, tmp_path):
+    agent, pool, owner = selected_main(tmp_path/'A')
+    token = set_clover_home_override(tmp_path/'A')
+    try:
+        with aux.scoped_runtime_main(dict(agent.__dict__, credential_pool=pool)):
+            unarmed = handoff.capture(agent)
+        with pytest.raises(CompletionHeld):
+            with handoff.scoped(unarmed, lambda: True):
+                pytest.fail('unarmed snapshot became callback authority')
+        bounded = unarmed.bounded()
+        assert bounded.bounded().expires == bounded.expires
+        with handoff.scoped(bounded, lambda: True):
+            assert aux._RUNTIME_MAIN_CONTEXT.get()['credential_pool'] is pool
+    finally:
+        reset_clover_home_override(token)
+
+
 def test_retained_desktop_context_does_not_retain_main_credentials(monkeypatch, tmp_path):
     agent, pool, owner = selected_main(tmp_path/'A')
     with aux.scoped_runtime_main(dict(agent.__dict__, credential_pool=pool)):

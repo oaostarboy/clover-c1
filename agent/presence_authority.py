@@ -35,17 +35,19 @@ class SelectedOwner:
     selected_digest: bytes = field(repr=False)
     source_digest: bytes = field(repr=False)
     profile: str
-    expires: float = float('inf')
+    expires: float | None = None
 
     def bounded(self):
         # Ordinary requested replies may take arbitrarily long. The optional
         # callback starts its short lease only at the actual delivery handoff.
-        return replace(self, expires=min(self.expires, time.monotonic() + 30))
+        return replace(self, expires=min(self.expires if self.expires is not None else float('inf'),
+                                         time.monotonic() + 30))
 
     def runtime(self):
         from agent.workstreams import current_profile
         agent = self.agent()
-        if agent is None or current_profile() != self.profile or time.monotonic() >= self.expires:
+        if (agent is None or current_profile() != self.profile or self.expires is None
+                or time.monotonic() >= self.expires):
             _held('selected_authority_revoked')
         runtime = _agent_runtime(agent)
         if _identity(runtime) != self.runtime_digest:
@@ -60,6 +62,10 @@ class SelectedOwner:
                     or _fingerprint(_pool_disk_state(pool.provider, selected.id)) != self.source_digest):
                 _held('credential_authority_changed')
             runtime['credential_pool'] = pool
+        # Synchronous owner/source readback cannot be preempted. Do not admit
+        # a physical dispatch if that read crossed this capability's lease.
+        if time.monotonic() >= self.expires:
+            _held('selected_authority_revoked')
         return runtime
 
 
