@@ -96,10 +96,15 @@ def select_route(config: dict) -> Route:
     if base is None and owner is not None:
         base = owner.endpoint
     if base is not None:
-        parsed = urlparse(base) if isinstance(base, str) else None
+        try:
+            parsed = urlparse(base) if isinstance(base, str) else None
+            if parsed is not None:
+                parsed.port  # Reject malformed/out-of-range ports before auth.
+        except ValueError:
+            raise CompletionHeld('invalid_configured_endpoint') from None
         if (parsed is None or parsed.scheme not in {'https','http'} or not parsed.hostname
                 or parsed.username or parsed.password or parsed.query or parsed.fragment
-                or base != base.strip()):
+                or base != base.strip() or any(ord(c) < 32 or ord(c) == 127 for c in base)):
             raise CompletionHeld('invalid_configured_endpoint')
     if provider == 'custom' and not base:
         raise CompletionHeld('custom_endpoint_required_no_detection')

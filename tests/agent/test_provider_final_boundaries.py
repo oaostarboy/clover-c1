@@ -376,3 +376,18 @@ def test_legitimate_main_persistence_can_move_global_owner_into_profile(monkeypa
     assert pool._credential_source[0] == str((tmp_path/'profile'/'auth.json').resolve())
     aux._RUNTIME_MAIN_CONTEXT.get()['credential_pool'] = pool
     assert run(config).text == 'synthetic' and len(requests) == 1
+
+
+
+@pytest.mark.parametrize('source', ['mapping','task'])
+@pytest.mark.parametrize('base', [' https://unrelated.invalid/v1', 'https://unrelated.invalid/v1 ',
+    'https://unrelated.invalid/\n/v1', 'https://unrelated.invalid:bad/v1'])
+def test_alias_endpoint_tokens_are_not_silently_repaired(monkeypatch, source, base):
+    requests = []
+    config = route_fixture(monkeypatch, 'openai', lambda req: requests.append(req) or response_for('openai'))
+    config['providers'] = {'gemini':{'base_url':base if source == 'mapping' else 'https://owned.invalid/v1'}}
+    task = config['auxiliary']['presence'] = {'provider':'gemini','model':'literal'}
+    if source == 'task': task['base_url'] = base
+    monkeypatch.setattr(aux, 'resolve_provider_client',lambda *a,**kw:pytest.fail('invalid endpoint reached auth'))
+    with pytest.raises(CompletionHeld,match='invalid_configured_endpoint'): run(config)
+    assert not requests
