@@ -90,10 +90,10 @@ def select_route(config: dict) -> Route:
         if (not isinstance(value, str) or not value or value == 'auto' or value != value.strip()
                 or len(value.encode()) > 512 or any(ord(c) < 32 for c in value)):
             raise CompletionHeld('configured_provider_and_model_required')
-    from agent.bounded_provider_metadata import metadata
-    owner = metadata(config, provider)
+    from agent.bounded_provider_metadata import configured_metadata
+    owner = configured_metadata(config, provider)
     base = task.get('base_url', main.get('base_url') if inherited or provider == primary else None)
-    if base is None and owner.configured:
+    if base is None and owner is not None:
         base = owner.endpoint
     if base is not None:
         parsed = urlparse(base) if isinstance(base, str) else None
@@ -108,14 +108,20 @@ def select_route(config: dict) -> Route:
         raise CompletionHeld('unsupported_budget_mode')
     assert isinstance(provider,str) and isinstance(model,str)
     api_mode = task.get('api_mode', main.get('api_mode') if inherited or provider == primary else None)
-    if api_mode is None and owner.configured:
+    if api_mode is None and owner is not None:
         api_mode = owner.api_mode
-    if api_mode is None and not owner.configured:
-        from clover_cli.models import opencode_provider_family, opencode_model_api_mode
-        if opencode_provider_family(provider) is not None:
-            api_mode = opencode_model_api_mode(provider, model)
     return Route(provider, model, base, mode, api_mode,
-                 main.get('openai_runtime') if inherited or provider == primary else None, owner.configured)
+                 main.get('openai_runtime') if inherited or provider == primary else None, owner is not None)
+
+
+def _dispatch_route(config):
+    """Enrich only assessment dispatch, never the cold settings/status API."""
+    route = select_route(config)
+    if route.api_mode is None and not route.configured:
+        from clover_cli.models import opencode_provider_family, opencode_model_api_mode
+        if opencode_provider_family(route.provider) is not None:
+            route = replace(route, api_mode=opencode_model_api_mode(route.provider, route.model))
+    return route
 
 
 def capabilities(route: Route) -> Capabilities:
@@ -248,7 +254,7 @@ async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -
     if (any(role == 'system' and i != 0 for i,role in enumerate(roles))
             or any(left == right for left,right in zip(roles,roles[1:]))):
         raise CompletionHeld('invalid_role_sequence')
-    route = select_route(config)
+    route = _dispatch_route(config)
     cap = admitted(route)  # MUST precede auth, resolver, refresh or network.
     if asyncio.get_running_loop().time() >= deadline:
         raise TimeoutError('bounded completion deadline exceeded')

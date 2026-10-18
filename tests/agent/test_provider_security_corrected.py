@@ -585,3 +585,42 @@ def test_concurrent_config_change_cannot_pair_new_secret_with_old_endpoint(monke
     monkeypatch.setattr(bounded_auth, 'metadata', switch)
     with pytest.raises(CompletionHeld, match='configured_route_changed'): run(config)
     assert not requests
+
+
+def test_select_route_cold_is_supplied_config_only_without_env_catalog_auth_or_writes():
+    import os, subprocess, sys
+    script = r"""
+import builtins, os, sys
+from agent.bounded_completion import select_route
+original_import = builtins.__import__
+forbidden = ('agent.auxiliary_client', 'agent.bounded_auth', 'clover_cli.auth', 'agent.models_dev',
+             'clover_cli.runtime_provider', 'run_agent', 'providers')
+def guarded_import(name, *a, **kw):
+    assert not any(name == prefix or name.startswith(prefix + '.') for prefix in forbidden), name
+    return original_import(name, *a, **kw)
+builtins.__import__ = guarded_import
+os.getenv = lambda *a, **kw: (_ for _ in ()).throw(AssertionError('select_route read environment'))
+def audit(event, args):
+    if event == 'open':
+        path, mode, flags = args
+        if isinstance(path, (str, bytes)):
+            text = os.fsdecode(path)
+            assert not text.endswith(('.json', '.yaml', '.yml', '.env')), text
+        assert not (isinstance(mode, str) and any(c in mode for c in 'wax+')), args
+        assert not (isinstance(flags, int) and flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND)), args
+sys.dont_write_bytecode = True
+sys.addaudithook(audit)
+configs = [
+    {'model': {'provider':'openai-api', 'default':'exact-model'}, 'presence': {'enabled':False}},
+    {'model': {'provider':'custom','default':'exact-model','base_url':'http://localhost:8080/v1','api_mode':'codex_responses'}, 'auxiliary': {'presence': {'provider':'custom'}}},
+    {'model': {'provider':'beans','default':'exact-model'}, 'custom_providers':[{'name':'beans','base_url':'http://localhost:8080/v1'}]},
+    {'model': {'provider':'codex','default':'exact-model'}, 'providers': {'codex': {'base_url':'http://localhost:8080/v1'}}},
+]
+for config in configs:
+    route = select_route(config)
+    assert route.model == 'exact-model'
+assert not any(name in sys.modules for name in forbidden)
+"""
+    result = subprocess.run([sys.executable, '-c', script], cwd=Path(__file__).resolve().parents[2],
+                            env=os.environ.copy(), capture_output=True, text=True)
+    assert result.returncode == 0, result.stderr

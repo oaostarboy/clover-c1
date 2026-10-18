@@ -6519,8 +6519,8 @@ def resolve_provider_client(
         # Separate offline acquisition lane. Ordinary main/aux auth behavior is
         # intentionally unchanged; no ordinary resolver executes in this lane.
         from agent.bounded_auth import build_client
-        from agent.bounded_completion import select_route
-        return build_client(bounded_config, select_route(bounded_config), async_mode=async_mode,
+        from agent.bounded_completion import _dispatch_route
+        return build_client(bounded_config, _dispatch_route(bounded_config), async_mode=async_mode,
                             source_config=bounded_source_config)
     _validate_proxy_env_urls()
     # Preserve the original provider name before alias normalization so a

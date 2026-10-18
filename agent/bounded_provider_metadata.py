@@ -36,9 +36,8 @@ class ProviderMetadata:
     configured: bool = False
 
 
-def metadata(config, name):
-    """Resolve explicit user mapping before built-ins, with network disabled."""
-    from providers import get_provider_profile
+def configured_metadata(config, name):
+    """Supplied-settings projection only: no env, catalog, auth or runtime I/O."""
     entry = configured_entry(config, name)
     if entry is not None:
         owner = (resolve_user_provider(name.lower(), config.get('providers'))
@@ -49,6 +48,18 @@ def metadata(config, name):
             }.get(owner.transport, 'chat_completions')
             return ProviderMetadata(owner.id, owner.base_url, mode, owner.auth_type,
                                     owner.api_key_env_vars, True)
+    return None
+
+
+def metadata(config, name):
+    """Dispatch-only offline registry/endpoint metadata; may read local catalog/env.
+
+    Status uses configured_metadata/select_route, never this enrichment layer.
+    """
+    configured = configured_metadata(config, name)
+    if configured is not None:
+        return configured
+    from providers import get_provider_profile
     if name in DIRECT_API_BASE_URLS:
         return ProviderMetadata(name, DIRECT_API_BASE_URLS[name], 'chat_completions',
                                 'api_key', ('OPENAI_API_KEY',))
