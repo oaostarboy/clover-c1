@@ -139,6 +139,7 @@ def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
 # issues never authorize private status, and commands never redeem a chat turn.
 _COMMAND_ISSUED: Dict[int, tuple] = {}
 _COMMAND_DELIVERIES: Dict[tuple, float] = {}
+_COMMAND_UPDATES: Dict[tuple, float] = {}
 
 
 def _command_binding(event):
@@ -165,6 +166,11 @@ def mint_human_command(event, *, platform: str, command: str, profile_home=None)
         if (event.internal or not event.allow_gateway_control or event.get_command() != command
                 or event.source.platform.value != platform or event.source.is_bot):
             return False
+        # Telegram always supplies its native integer Update.update_id. Missing
+        # or malformed identity cannot be repaired from message/chat fields.
+        update_id = event.platform_update_id
+        if platform == 'telegram' and (type(update_id) is not int or not 0 <= update_id < 2**63):
+            return False
         binding = _command_binding(event)
         from clover_constants import get_clover_home
         from pathlib import Path
@@ -173,6 +179,8 @@ def mint_human_command(event, *, platform: str, command: str, profile_home=None)
         profile = str(Path(profile_home).resolve() if profile_home is not None else get_clover_home().resolve())
         delivery = (profile, platform, event.source.transport_profile, event.source.profile,
                     event.source.chat_id, event.message_id)
+        update = ((profile, platform, event.source.transport_profile, event.source.profile, update_id)
+                  if platform == 'telegram' else None)
         if not event.message_id:
             return False
         key = id(event)
@@ -186,13 +194,18 @@ def mint_human_command(event, *, platform: str, command: str, profile_home=None)
         return False
     with _LOCK:
         now = time.monotonic()
-        for old, expiry in list(_COMMAND_DELIVERIES.items()):
-            if expiry <= now:
-                _COMMAND_DELIVERIES.pop(old, None)
-        if key in _COMMAND_ISSUED or delivery in _COMMAND_DELIVERIES or len(_COMMAND_DELIVERIES) >= 4096:
+        for registry in (_COMMAND_DELIVERIES, _COMMAND_UPDATES):
+            for old, expiry in list(registry.items()):
+                if expiry <= now:
+                    registry.pop(old, None)
+        if (key in _COMMAND_ISSUED or delivery in _COMMAND_DELIVERIES
+                or (update is not None and (update in _COMMAND_UPDATES or len(_COMMAND_UPDATES) >= 4096))
+                or len(_COMMAND_DELIVERIES) >= 4096):
             return False
         expiry = now + 24 * 3600
         _COMMAND_DELIVERIES[delivery] = expiry
+        if update is not None:
+            _COMMAND_UPDATES[update] = expiry
         _COMMAND_ISSUED[key] = (ref, binding, platform, command, profile, expiry)
     return True
 
@@ -204,11 +217,14 @@ def redeem_human_command(event, *, platform: str, command: str):
         issue = _COMMAND_ISSUED.pop(id(event), None)
     if issue is None or issue[0]() is not event or issue[2:4] != (platform, command):
         return None
-    def current():
+    def current(*, profile_observed=None):
+        # A read-only host may supply the resolved profile from its sealed
+        # revision snapshot for a final non-I/O binding check. Not user input.
         try:
             from clover_constants import get_clover_home
+            profile = str(get_clover_home().resolve()) if profile_observed is None else profile_observed
             return (time.monotonic() < issue[5] and _command_binding(event) == issue[1]
-                    and str(get_clover_home().resolve()) == issue[4])
+                    and profile == issue[4])
         except (AttributeError, TypeError, ValueError):
             return False
     return current if current() else None

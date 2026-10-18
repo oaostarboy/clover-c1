@@ -247,7 +247,7 @@ def _owner_ref(key):
         return entry[0] if entry else None
 
 
-def _disclosure_current(key, owner, reading, config, text):
+def _read_disclosure(key, owner, reading, config, text):
     from agent.emotions_config import snapshot
     try:
         if snapshot() != config:
@@ -262,6 +262,40 @@ def _disclosure_current(key, owner, reading, config, text):
         return False
 
 
+def _telegram_authority(runner, event, route_key):
+    """Snapshot the existing auth owner's inputs; never recompute its policy.
+
+    Authorization itself may read pairing files. Watch the exact approved file
+    and compare live local grant/route/generation bindings without I/O at return.
+    No tokens or credential environments are inspected.
+    """
+    from copy import deepcopy
+    from gateway.authz_mixin import _auth_env
+    source = event.source
+    authorize = runner._is_user_authorized
+    adapter = runner._adapter_for_source(source)
+    pairing = runner._pairing_store_for(source)
+    paths = (pairing._approved_path('telegram'),) if pairing is not None else ()
+    names = ('TELEGRAM_ALLOWED_USERS', 'TELEGRAM_ALLOW_ALL_USERS',
+             'GATEWAY_ALLOWED_USERS', 'GATEWAY_ALLOW_ALL_USERS')
+    def grants():
+        extra = getattr(getattr(adapter, 'config', None), 'extra', None) or {}
+        return (tuple(_auth_env(name) for name in names), deepcopy(extra.get('allow_from')))
+    grant = grants()
+    bot = getattr(adapter, '_bot', None)
+    state = runner._peek_session_state(route_key)
+    generation = state.persistent.run_generation if state is not None else 0
+    def current():
+        # These existing owners only consult in-memory mappings. Do not replace
+        # with a config loader, pairing read, credential fingerprint or resolver.
+        return (runner._is_user_authorized == authorize and grants() == grant
+                and runner._adapter_for_source(source) is adapter
+                and getattr(adapter, '_bot', None) is bot
+                and runner._pairing_store_for(source) is pairing
+                and runner._is_session_run_current(route_key, generation))
+    return paths, current
+
+
 async def telegram(runner, event):
     from agent.workstream_origin import redeem_human_command
     command_current = redeem_human_command(event, platform='telegram', command='emotions')
@@ -274,13 +308,17 @@ async def telegram(runner, event):
         return '/emotions is read only and takes no arguments.'
     from agent import workstreams as ws
     from agent.presence_state import ContextKey
+    from agent.emotions_snapshot import ReadFence
     withheld = 'Current authenticated conversation changed; emotional state withheld.'
     store = runner.session_store
+    fence = None
     try:
         route_key = store._generate_session_key(event.source)
         entry = store.lookup_by_session_key(route_key)
         db = getattr(store, '_db', None)
         stored_id = entry.session_id if entry else None
+        authority_paths, local_authority = _telegram_authority(runner, event, route_key)
+        fence = ReadFence(db, session_id=stored_id, authority_paths=authority_paths)
         scope = ws.scope_for_surface(platform='telegram', chat_type=event.source.chat_type,
                                     chat_id=event.source.chat_id, user_id=event.source.user_id)
         key = None
@@ -291,25 +329,35 @@ async def telegram(runner, event):
                 pass  # No proven durable owner: configuration-only status.
         owner = _owner_ref(key)
         reading = owner._latest if owner else None
+        fence.bind(key, owner if reading is not None else None)
         from agent.emotions_config import snapshot
         config = snapshot()
         text = render(key=key)
-        if not _disclosure_current(key, owner, reading, config, text):
-            return withheld
         current_root = _conversation_root(db, stored_id, surface='telegram') if key else None
+        disclosure_valid = _read_disclosure(key, owner, reading, config, text)
         current_entry = store.lookup_by_session_key(route_key)
-        if (not command_current() or not runner._is_user_authorized(event.source)
-                or runner.session_store is not store or getattr(store, '_db', None) is not db
-                or store._generate_session_key(event.source) != route_key
-                or current_entry is not entry or (entry and entry.session_id != stored_id)
-                or ws.scope_for_surface(platform='telegram', chat_type=event.source.chat_type,
-                    chat_id=event.source.chat_id, user_id=event.source.user_id) != scope
-                or (key and current_root != key.conversation_root)
-                or (owner is not None and _owner_ref(key) not in (None, owner))):
+        # Collect all path/config/source/authorization observations BEFORE seal.
+        authority_valid = (command_current() and runner._is_user_authorized(event.source)
+                and runner.session_store is store and getattr(store, '_db', None) is db
+                and store._generate_session_key(event.source) == route_key
+                and current_entry is entry and (not entry or entry.session_id == stored_id)
+                and ws.scope_for_surface(platform='telegram', chat_type=event.source.chat_type,
+                    chat_id=event.source.chat_id, user_id=event.source.user_id) == scope
+                and (not key or current_root == key.conversation_root))
+        fence.seal()
+        # FINAL non-I/O decision: no source/root/config helper after this point.
+        if not (authority_valid and disclosure_valid
+                and command_current(profile_observed=str(fence.home)) and local_authority()
+                and runner.session_store is store and getattr(store, '_db', None) is db
+                and (not entry or entry.session_id == stored_id)
+                and fence.current(private='confidence=' in text)):
             return withheld
         return text
     except Exception:
         return withheld
+    finally:
+        if fence is not None:
+            fence.close()
 
 
 def desktop(server, params):
@@ -317,6 +365,7 @@ def desktop(server, params):
     from clover_constants import set_clover_home_override, reset_clover_home_override
     from tui_gateway.methods_browser_control import _is_authenticated_identity, _principal_digest
     from agent.presence_state import ContextKey
+    from agent.emotions_snapshot import ReadFence
     from agent import workstreams as ws
     sid = params.get('session_id')
     if not literal_session_id(sid):
@@ -328,12 +377,15 @@ def desktop(server, params):
     project = str(Path(server._session_cwd(session)).resolve())
     identity_instance = transport.auth_identity
     identity = dict(identity_instance)
+    local_paths = (session.get('profile_home'), session.get('cwd'), server._clover_home)
     token = set_clover_home_override(home)
+    fence = None
     try:
         key = None
         agent = session.get('agent')
         db = getattr(agent,'_session_db',None)
         stored_key = session.get('session_key')
+        fence = ReadFence(db, session_id=stored_key)
         if db is not None and stored_key:
             try:
                 key = ContextKey(ws.scope_for_surface(platform='desktop',chat_type='dm',
@@ -343,24 +395,35 @@ def desktop(server, params):
                 pass  # Fresh or unprovable root never selects an affect owner.
         owner = _owner_ref(key)
         reading = owner._latest if owner else None
+        fence.bind(key, owner if reading is not None else None)
         from agent.emotions_config import snapshot
         config = snapshot()
         text = render(key=key)
-        if not _disclosure_current(key, owner, reading, config, text):
-            return 'Current authenticated conversation changed; emotional state withheld.'
         current_root = _conversation_root(db, stored_key, surface='desktop') if key else None
+        disclosure_valid = _read_disclosure(key, owner, reading, config, text)
         actual_transport, actual_session = server._current_session_steer_authority(sid)
-        if (actual_transport is not transport or actual_session is not session or transport.closed
-                or transport.auth_identity is not identity_instance or transport.auth_identity != identity
-                or server._session_home(session) != home
-                or str(Path(server._session_cwd(session)).resolve()) != project
-                or session.get('agent') is not agent or getattr(agent, '_session_db', None) is not db
-                or session.get('session_key') != stored_key
-                or (key and current_root != key.conversation_root)
-                or (owner is not None and _owner_ref(key) not in (None, owner))):
+        authority_valid = (actual_transport is transport and actual_session is session and not transport.closed
+                and transport.auth_identity is identity_instance and transport.auth_identity == identity
+                and server._session_home(session) == home
+                and str(Path(server._session_cwd(session)).resolve()) == project
+                and session.get('agent') is agent and getattr(agent, '_session_db', None) is db
+                and session.get('session_key') == stored_key
+                and (not key or current_root == key.conversation_root))
+        fence.seal()
+        # FINAL non-I/O decision; even disappearing registry ownership revokes.
+        final_transport, final_session = server._current_session_steer_authority(sid)
+        if not (authority_valid and disclosure_valid
+                and final_transport is transport and final_session is session and not transport.closed
+                and transport.auth_identity is identity_instance and transport.auth_identity == identity
+                and (session.get('profile_home'), session.get('cwd'), server._clover_home) == local_paths
+                and session.get('agent') is agent and getattr(agent, '_session_db', None) is db
+                and session.get('session_key') == stored_key
+                and fence.current(private='confidence=' in text)):
             return 'Current authenticated conversation changed; emotional state withheld.'
         return text
     except Exception:
         return 'Current authenticated conversation changed; emotional state withheld.'
     finally:
+        if fence is not None:
+            fence.close()
         reset_clover_home_override(token)

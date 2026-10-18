@@ -17,27 +17,13 @@ def _merge(base, overlay):
 
 
 def _model(config):
-    model = config.get('model', {})
+    from clover_cli.model_config import normalize_root_model_keys
+    model = normalize_root_model_keys(config).get('model', {})
     if isinstance(model, str):
         model = {'default': model}
     if not isinstance(model, dict):
         raise ValueError('invalid model settings')
-    model = deepcopy(model)
-    value = model.get('default') or model.get('model') or model.get('name')
-    if isinstance(value, dict):
-        if model.get('provider') in (None, '', 'auto') and value.get('provider'):
-            model['provider'] = value['provider']
-        value = value.get('model') or value.get('default') or value.get('name')
-    if value is not None:
-        model['default'] = value
-    model.pop('model', None)
-    model.pop('name', None)
-    for name in ('provider', 'base_url', 'api_base'):
-        if not model.get(name) and config.get(name):
-            model[name] = config[name]
-    if not model.get('base_url') and model.get('api_base'):
-        model['base_url'] = model['api_base']
-    return {k: v for k, v in model.items() if k in
+    return {k: deepcopy(v) for k, v in model.items() if k in
             {'provider', 'default', 'base_url', 'api_mode', 'openai_runtime'}}
 
 
