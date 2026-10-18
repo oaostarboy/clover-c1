@@ -11,7 +11,7 @@ import time
 import weakref
 from typing import Any
 
-from agent.bounded_auth import _fingerprint, _held, _pool_disk_state
+from agent.bounded_auth import _fingerprint, _held, _pool_disk_state, _reconcile_persisted_owner
 
 _FIELDS = ('provider', 'requested_provider', 'model', 'base_url', 'api_key', 'api_mode', 'auth_mode')
 _ACTIVE: ContextVar[Any] = ContextVar('presence_selected_callback_owner', default=None)
@@ -24,6 +24,10 @@ def _agent_runtime(agent):
 
 def _identity(runtime):
     return _fingerprint(tuple(runtime.get(name, '') for name in _FIELDS))
+
+
+def _source_state(pool, selected):
+    return getattr(pool, '_credential_source', None), _pool_disk_state(pool.provider, selected.id)
 
 
 @dataclass(frozen=True)
@@ -58,9 +62,16 @@ class SelectedOwner:
         if pool is not None:
             selected = self.selected()
             if (selected is None or pool.current() is not selected
-                    or _fingerprint(selected.to_dict()) != self.selected_digest
-                    or _fingerprint(_pool_disk_state(pool.provider, selected.id)) != self.source_digest):
+                    or selected.provider != pool.provider
+                    or _fingerprint(selected.to_dict()) != self.selected_digest):
                 _held('credential_authority_changed')
+            source = _source_state(pool, selected)
+            if _fingerprint(source) != self.source_digest:
+                _held('credential_authority_changed')
+            # Reuse the bounded owner's actual persisted-schema/expiry checks,
+            # including time-based expiry after inference and before publishing.
+            rows = source[1][1]
+            _reconcile_persisted_owner(pool, selected, rows[0] if rows else selected.to_dict())
             runtime['credential_pool'] = pool
         # Synchronous owner/source readback cannot be preempted. Do not admit
         # a physical dispatch if that read crossed this capability's lease.
@@ -88,7 +99,7 @@ def capture(agent):
     return SelectedOwner(weakref.ref(agent), weakref.ref(pool) if pool is not None else None,
         weakref.ref(selected) if selected is not None else None, _identity(normalized),
         _fingerprint(selected.to_dict()) if selected is not None else b'',
-        _fingerprint(_pool_disk_state(pool.provider, selected.id)) if selected is not None and pool is not None else b'',
+        _fingerprint(_source_state(pool, selected)) if selected is not None and pool is not None else b'',
         current_profile())
 
 
