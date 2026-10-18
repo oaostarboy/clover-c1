@@ -278,6 +278,11 @@ def acquire(config, route, *, source_config=None):
             def disk_state():
                 return _pool_disk_state(pool.provider, selected_id)
             disk_source, disk_rows, has_rows = disk_state()
+            original_source = getattr(pool, '_credential_source', None)
+            if original_source is not None:
+                if not disk_source[2] or original_source != (disk_source[1], disk_source[3], disk_source[4]):
+                    _held('credential_authority_changed')
+                checks.append(_owned_reader(lambda: getattr(pool, '_credential_source', None), original_source))
             if (disk_source[2] or has_rows) and len(disk_rows) != 1:
                 _held('credential_authority_revoked')
             if disk_rows:

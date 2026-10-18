@@ -324,3 +324,55 @@ def test_profile_selected_owner_ignores_unrelated_corrupt_global_store(monkeypat
     assert run(config).text == 'synthetic' and len(requests) == 1
     assert global_file.read_text() == 'unrelated-malformed-store'
     assert not global_file.with_suffix('.json.corrupt').exists()
+
+
+@pytest.mark.parametrize('change', ['unchanged','file-removed','source-replaced','version-changed'])
+def test_genuinely_loaded_main_owner_retains_original_persisted_source(monkeypatch, tmp_path, change):
+    from agent.credential_pool import load_pool
+    from tests.agent.test_provider_security_corrected import genuine_pool_route, entry
+    monkeypatch.setenv('CLOVER_HOME', str(tmp_path / 'profile'))
+    config, _, requests = genuine_pool_route(monkeypatch, [entry('a')])
+    monkeypatch.setattr('clover_cli.config.load_config_readonly',lambda:config)
+    file = tmp_path / 'profile' / 'auth.json'
+    file.parent.mkdir(exist_ok=True)
+    payload = {'version':1,'credential_pool':{'openai-codex':[entry('a').to_dict()]}}
+    file.write_text(json.dumps(payload))
+    pool = load_pool('openai-codex')
+    assert pool.select().id == 'a'
+    aux._RUNTIME_MAIN_CONTEXT.get()['credential_pool'] = pool
+    if change == 'file-removed': file.unlink()
+    elif change == 'source-replaced':
+        global_file = tmp_path / 'global-auth.json'
+        global_file.write_text(json.dumps(payload))
+        monkeypatch.setattr('clover_cli.auth._global_auth_file_path',lambda:global_file)
+        file.write_text(json.dumps({'credential_pool':{}}))
+    elif change == 'version-changed':
+        payload['version'] = 99
+        file.write_text(json.dumps(payload))
+    if change == 'unchanged':
+        assert run(config).text == 'synthetic' and len(requests) == 1
+    else:
+        with pytest.raises(CompletionHeld,match='credential_authority_changed|credential_authority_revoked'):
+            run(config)
+        assert not requests
+
+
+
+def test_legitimate_main_persistence_can_move_global_owner_into_profile(monkeypatch, tmp_path):
+    from agent.credential_pool import load_pool
+    from tests.agent.test_provider_security_corrected import genuine_pool_route, entry
+    monkeypatch.setenv('CLOVER_HOME', str(tmp_path / 'profile'))
+    config, _, requests = genuine_pool_route(monkeypatch, [entry('a')])
+    monkeypatch.setattr('clover_cli.config.load_config_readonly',lambda:config)
+    file = tmp_path / 'global-auth.json'
+    file.write_text(json.dumps({'version':1,'credential_pool':{'openai-codex':[entry('a').to_dict()]}}))
+    monkeypatch.setattr('clover_cli.auth._global_auth_file_path',lambda:file)
+    pool = load_pool('openai-codex')
+    assert pool.select().id == 'a'
+    assert pool._credential_source[0] == str(file.resolve())
+    # Ordinary main persistence/refresh remains allowed. Only bounded presence
+    # must refuse to change or rotate the authority while it is assessing.
+    pool._persist()
+    assert pool._credential_source[0] == str((tmp_path/'profile'/'auth.json').resolve())
+    aux._RUNTIME_MAIN_CONTEXT.get()['credential_pool'] = pool
+    assert run(config).text == 'synthetic' and len(requests) == 1

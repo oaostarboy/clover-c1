@@ -1539,6 +1539,24 @@ def is_runtime_provider_routable(provider_id: str) -> bool:
     return True
 
 
+def _credential_pool_source(provider_id: str):
+    """Non-secret provenance for the main pool's already-loaded owner.
+
+    Bounded callers re-read and reconcile this source themselves; this helper
+    does not select, refresh, probe or change ordinary main auth policy.
+    """
+    local = _load_auth_store()
+    rows = local.get('credential_pool', {}).get(provider_id, [])
+    if isinstance(rows, list) and rows:
+        return (str(_auth_file_path().resolve()), local.get('version'), local.get('authority_version'))
+    path = _global_auth_file_path()
+    global_store = _load_global_auth_store()
+    rows = global_store.get('credential_pool', {}).get(provider_id, [])
+    if path is not None and isinstance(rows, list) and rows:
+        return (str(path.resolve()), global_store.get('version'), global_store.get('authority_version'))
+    return None
+
+
 def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
     """Return the persisted credential pool, or one provider slice.
 

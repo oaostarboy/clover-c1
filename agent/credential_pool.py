@@ -704,6 +704,8 @@ class CredentialPool:
         self.provider = provider
         self._entries = sorted(entries, key=lambda entry: entry.priority)
         self._current_id: Optional[str] = None
+        # Source identity only, never a second credential/cache authority.
+        self._credential_source = None
         self._strategy = get_pool_strategy(provider)
         # RLock: the mutation primitives below (_replace_entry/_persist)
         # self-acquire this lock so the DEFERRED single-use-token refresh
@@ -835,6 +837,17 @@ class CredentialPool:
                 [entry.to_dict() for entry in self._entries],
                 removed_ids=removed_ids,
             )
+            self._capture_credential_source()
+
+    def _capture_credential_source(self):
+        # Main auth may legitimately persist a refreshed pool into a profile.
+        # Record that owner's source, without changing refresh/select policy.
+        try:
+            source = auth_mod._credential_pool_source(self.provider)
+        except (OSError, ValueError, TypeError, AttributeError):
+            return
+        if source is not None:
+            self._credential_source = source
 
     def _is_terminal_auth_failure(
         self,
@@ -3295,4 +3308,6 @@ def load_pool(provider: str) -> CredentialPool:
             [entry.to_dict() for entry in sorted(entries, key=lambda item: item.priority)],
             removed_ids=disk_ids - new_ids,
         )
-    return CredentialPool(provider, entries)
+    pool = CredentialPool(provider, entries)
+    pool._capture_credential_source()
+    return pool
