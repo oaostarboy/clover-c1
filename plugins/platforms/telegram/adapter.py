@@ -10600,8 +10600,23 @@ class TelegramAdapter(BasePlatformAdapter):
         # events never pass through here.
         # Inspecting affect is not new conversational evidence or revocation.
         # Keep human provenance; only the optional presence generation is inert.
-        mint_human_ingress(event, platform="telegram",
-                           presence_input=event.get_command() != "emotions")
+        if event.get_command() == "emotions":
+            from agent.workstream_origin import mint_human_command
+            # Bind the same existing runtime namespace before the gateway's
+            # profile wrapper enters it; never loosen audience/text binding to
+            # tolerate middleware retargeting after mint.
+            try:
+                runner = getattr(self, "gateway_runner", None)
+                profile_home = None
+                if getattr(getattr(runner, "config", None), "multiplex_profiles", False):
+                    if not event.source.profile:
+                        event.source.profile = self._session_key_profile(event.source)
+                    profile_home = runner._resolve_profile_home_for_source(event.source)
+                mint_human_command(event, platform="telegram", command="emotions", profile_home=profile_home)
+            except Exception:
+                pass  # An unprovable command has no authority; ordinary input is unaffected.
+        else:
+            mint_human_ingress(event, platform="telegram")
         self._enqueue_text_event(event)
 
     async def _handle_owner_verification(self, message: Message) -> bool:

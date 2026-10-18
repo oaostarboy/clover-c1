@@ -108,24 +108,59 @@ The formatter separates Clover's interaction posture (ordinary/careful response
 style, not felt emotion) from a tentative user-affect reading, with confidence,
 age/remaining expiry and a fixed redacted evidence explanation. It shows the
 configured provider/model, feature state, initiative holds and effective budgets.
-Disabled/no recent/expired/invalid policy/unsupported capability/stopped/exhausted
-quota are not invented neutral emotions.
+The route is **configured metadata only**: status does not check dispatch
+admission, discover endpoints, resolve credentials or certify a server cap.
+Disabled/no recent/expired/invalid policy/stopped/exhausted quota are not invented
+neutral emotions. The CLI has no authenticated affect owner binding and displays
+unknown affect, but reads the current profile's existing durable Stop and daily
+quota metadata even without an owner key. A zero budget is not spent quota.
 
 A bounded ephemeral map references only the current affect owner for the exact
 original profile/project/audience/root/conversation. It stores no emotional
 history, raw source excerpts or inferred labels. Explicit initiative links do not
-link emotion status by coincident IDs. The existing affect owner revalidates
-source, policy, TTL, generation and Stop on reads and purges expired/invalid state.
-The command performs no model call, credential lookup, background task, reset,
-resume or settings write. Off status does not create the optional database.
+link emotion status by coincident IDs. Status checks the existing owner's
+source receipt, source invalidation, policy, TTL, generation and Stop without
+calling its mutating startup-policy reader, correcting the owner, changing a
+pending assessment ticket or flushing queued token writes. Expiry removes only
+the ephemeral status registry reference. Unknown/deleted/broken durable lineage
+cannot select a private reading; status never rebinds an owner to repair it.
 
-Telegram requires both current transport authorization and an unredeemed
-adapter-minted human submission capability. Reading status preserves that proof
-but does not mint new conversational evidence or advance the optional generation.
-Private/group/mention/owner policies remain with existing ingress owners. Desktop
-requires the exact authenticated owning transport/session; a guessed same ID or
-another authenticated transport cannot read it. An exec quick command named
-`emotions` cannot shadow the read-only desktop handler.
+`agent.emotions_config.snapshot` is a separate settings-only projection, not
+`load_config_readonly()` (whose name means no defensive copy, **not** no writes)
+or `load_config(migrate=False)` (which still initializes the home). The ordinary
+config module itself has import-time provider/plugin discovery; cold status
+does not import it. Status reads current `config.yaml` plus a fresh strict
+managed overlay, projects the relevant legacy model aliases **in memory**, and
+leaves all startup migrations/locks/cache behavior with ordinary startup.
+Unresolved `${...}` interpolation holds instead of opening `.env`/auth stores or
+materializing a credential into the display. The ordinary loader is unchanged.
+Malformed user/managed settings hold; status never backs up, repairs or migrates
+them. Missing homes/config/optional databases stay absent. Existing durable
+profile control/quota metadata is opened read-only without importing cron's
+scheduler initializer. No model call, credential lookup, background task,
+reset, resume, prompt/config/schema write or inference is performed.
+
+Telegram requires current transport authorization and a separate adapter-minted
+**single-use command capability**. Generic submission provenance is insufficient.
+The capability binds original actor/audience/platform/text/topic/profile and
+message/update identifiers; redemption removes it. A bounded 24-hour replay
+registry also rejects duplicate platform deliveries reconstructed as new objects;
+capacity exhaustion holds rather than evicts live replay guards. Distinct fresh
+messages remain independent commands. The command creates no conversational
+evidence, advances no presence/chat generation, and does not cancel ongoing work.
+Private/group/mention/owner policies remain with existing ingress owners.
+
+Before disclosure, Telegram rechecks command binding, authorization, source
+principal, routing entry, stored session/root, profile/project, database owner,
+affect-owner identity, source validity and current effective status settings.
+Desktop requires the exact authenticated owning transport/session and validates
+the literal runtime ID before dictionary lookup. It rechecks identity, profile
+home, project, agent/database owner, persisted session key and existing durable
+conversation root after rendering and after the last database read. Unknown or
+changed ownership withholds private output, never changes permissions or repairs
+an owner. Exec quick commands cannot shadow `/emotions`. CLI, Telegram and both
+desktop routes reject arguments with “read only and takes no arguments”; no
+`set`, `on` or `off` mutation command exists.
 
 ## Verification boundary
 

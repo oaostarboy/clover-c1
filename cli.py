@@ -12882,7 +12882,9 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
             self._handle_review_command(cmd_original)
         elif canonical == "emotions":
             from agent.emotions import render
-            self.console.print(render(), markup=False)
+            parts = cmd_original.split(None, 1)
+            text = "/emotions is read only and takes no arguments." if len(parts) > 1 else render()
+            self.console.print(text, markup=False)
         elif canonical == "proactive":
             from clover_cli.proactive import proactive_command
             parts = cmd_original.split(None, 1)

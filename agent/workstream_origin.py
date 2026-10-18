@@ -135,6 +135,85 @@ def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
     return True
 
 
+# Command authority is separate from submission provenance. Generic input
+# issues never authorize private status, and commands never redeem a chat turn.
+_COMMAND_ISSUED: Dict[int, tuple] = {}
+_COMMAND_DELIVERIES: Dict[tuple, float] = {}
+
+
+def _command_binding(event):
+    source = event.source
+    values = {name: getattr(source, name, None) for name in (
+        'chat_id', 'chat_type', 'user_id', 'user_id_alt', 'chat_id_alt',
+        'thread_id', 'scope_id', 'guild_id', 'parent_chat_id', 'profile',
+        'transport_profile', 'is_bot', 'role_authorized', 'profile_route_rejected')}
+    values.update(platform=source.platform.value, text=event.text,
+                  message_id=event.message_id, update_id=event.platform_update_id,
+                  actor=getattr(event, 'user_id', None), internal=event.internal,
+                  control=event.allow_gateway_control)
+    return json.dumps(values, sort_keys=True, ensure_ascii=True, separators=(',', ':'))
+
+
+def mint_human_command(event, *, platform: str, command: str, profile_home=None) -> bool:
+    """Authenticated adapter only. Immutable event/audience binding, not a grant.
+
+    Duplicate transport deliveries are rejected even if rebuilt as new objects.
+    Capacity exhaustion holds instead of evicting live replay guards.
+    """
+    import time
+    try:
+        if (event.internal or not event.allow_gateway_control or event.get_command() != command
+                or event.source.platform.value != platform or event.source.is_bot):
+            return False
+        binding = _command_binding(event)
+        from clover_constants import get_clover_home
+        from pathlib import Path
+        # The receiving adapter resolves the routed runtime home before the
+        # existing gateway wrapper enters its profile scope. No config/auth I/O.
+        profile = str(Path(profile_home).resolve() if profile_home is not None else get_clover_home().resolve())
+        delivery = (profile, platform, event.source.transport_profile, event.source.profile,
+                    event.source.chat_id, event.message_id)
+        if not event.message_id:
+            return False
+        key = id(event)
+        def forget(ref):
+            with _LOCK:
+                old = _COMMAND_ISSUED.get(key)
+                if old is not None and old[0] is ref:
+                    _COMMAND_ISSUED.pop(key, None)
+        ref = weakref.ref(event, forget)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    with _LOCK:
+        now = time.monotonic()
+        for old, expiry in list(_COMMAND_DELIVERIES.items()):
+            if expiry <= now:
+                _COMMAND_DELIVERIES.pop(old, None)
+        if key in _COMMAND_ISSUED or delivery in _COMMAND_DELIVERIES or len(_COMMAND_DELIVERIES) >= 4096:
+            return False
+        expiry = now + 24 * 3600
+        _COMMAND_DELIVERIES[delivery] = expiry
+        _COMMAND_ISSUED[key] = (ref, binding, platform, command, profile, expiry)
+    return True
+
+
+def redeem_human_command(event, *, platform: str, command: str):
+    """Single use. Returns only a readback fence, never conversation authority."""
+    import time
+    with _LOCK:
+        issue = _COMMAND_ISSUED.pop(id(event), None)
+    if issue is None or issue[0]() is not event or issue[2:4] != (platform, command):
+        return None
+    def current():
+        try:
+            from clover_constants import get_clover_home
+            return (time.monotonic() < issue[5] and _command_binding(event) == issue[1]
+                    and str(get_clover_home().resolve()) == issue[4])
+        except (AttributeError, TypeError, ValueError):
+            return False
+    return current if current() else None
+
+
 def submission_is_current(event: Any, *, platform: str) -> bool:
     """Read-only proof for human commands; never redeem or mint a turn."""
     if event is None or getattr(event, "internal", False):
