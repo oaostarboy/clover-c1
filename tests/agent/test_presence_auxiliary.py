@@ -25,7 +25,7 @@ def test_presence_aux_native_timeout_cancels_single_dispatch(monkeypatch):
             await asyncio.sleep(10)
         finally:
             cancelled.append(True)
-    client = openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://synthetic.invalid/v1',
+    client = openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://api.openai.com/v1',
         max_retries=7, http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)))
     monkeypatch.setattr(aux, 'resolve_provider_client', lambda *a, **k: (client, 'synthetic-model'))
     monkeypatch.setattr('clover_cli.config.load_config', lambda **kw: {
@@ -42,7 +42,7 @@ def test_presence_aux_has_one_physical_attempt_and_no_fallback(monkeypatch):
     async def transport(request):
         calls.append(request)
         return httpx.Response(429, json={'error': {'message': 'synthetic limit'}})
-    client = openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://synthetic.invalid/v1',
+    client = openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://api.openai.com/v1',
                                 max_retries=7, http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport)))
     monkeypatch.setattr(aux, 'resolve_provider_client', lambda *a, **k: (client, 'synthetic-model'))
     monkeypatch.setattr('clover_cli.config.load_config', lambda **kw: {
@@ -59,9 +59,9 @@ def test_presence_aux_never_follows_native_http_redirect(monkeypatch, status):
     async def transport(request):
         calls.append(request)
         if len(calls) == 1:
-            return httpx.Response(status, headers={'location':'https://synthetic.invalid/v1/redirected'})
+            return httpx.Response(status, headers={'location':'https://api.openai.com/v1/redirected'})
         return httpx.Response(200, json={'choices':[{'message':{'content':'second physical request'}}]})
-    client = openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://synthetic.invalid/v1',
+    client = openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://api.openai.com/v1',
         max_retries=7, http_client=httpx.AsyncClient(follow_redirects=True,
             transport=httpx.MockTransport(transport)))
     monkeypatch.setattr(aux, 'resolve_provider_client', lambda *a, **k: (client, 'synthetic-model'))

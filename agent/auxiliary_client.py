@@ -3181,7 +3181,7 @@ def _warn_paid_lane_once(model: str) -> None:
     )
 
 
-def _try_openrouter(explicit_api_key: str = None, model: str = None) -> Tuple[Optional[OpenAI], Optional[str]]:
+def _try_openrouter(explicit_api_key: str = None, model: str = None, *, allow_fallback: bool = True) -> Tuple[Optional[OpenAI], Optional[str]]:
     free_only, cfg_model = _aux_openrouter_settings()
     or_model = model or cfg_model
     if free_only and not _is_free_model(or_model):
@@ -3197,7 +3197,8 @@ def _try_openrouter(explicit_api_key: str = None, model: str = None) -> Tuple[Op
     if not _is_free_model(or_model):
         _warn_paid_lane_once(or_model)
 
-    pool_present, entry = _select_pool_entry("openrouter")
+    pool_present, entry = ((False, None) if not allow_fallback and explicit_api_key else
+                           _select_pool_entry("openrouter"))
     if pool_present:
         or_key = explicit_api_key or _pool_runtime_api_key(entry)
         if or_key:
@@ -3205,6 +3206,8 @@ def _try_openrouter(explicit_api_key: str = None, model: str = None) -> Tuple[Op
             logger.debug("Auxiliary client: OpenRouter via pool")
             return _create_openai_client(api_key=or_key, base_url=base_url,
                            default_headers=build_or_headers()), or_model
+        if not allow_fallback:
+            return None, None
         # Pool exists but is exhausted (no usable runtime key) — fall through to
         # the OPENROUTER_API_KEY env-var path rather than failing outright.
         logger.debug("Auxiliary client: OpenRouter pool exhausted, trying OPENROUTER_API_KEY")
@@ -3935,7 +3938,7 @@ def _build_xai_oauth_aux_client(model: str) -> Tuple[Optional[Any], Optional[str
     return CodexAuxiliaryClient(real_client, model), model
 
 
-def _build_codex_client(model: str) -> Tuple[Optional[Any], Optional[str]]:
+def _build_codex_client(model: str, *, allow_fallback: bool = True) -> Tuple[Optional[Any], Optional[str]]:
     """Build a CodexAuxiliaryClient for an explicitly-requested model.
 
     There is no auto-selection of the Codex model: the ChatGPT-account
@@ -3953,6 +3956,8 @@ def _build_codex_client(model: str) -> Tuple[Optional[Any], Optional[str]]:
         )
         return None, None
     pool_present, entry = _select_pool_entry("openai-codex")
+    if pool_present and not allow_fallback and (entry is None or not _pool_runtime_api_key(entry)):
+        return None, None
     if pool_present:
         codex_token = _pool_runtime_api_key(entry)
         if codex_token:
@@ -4090,13 +4095,16 @@ def _try_azure_foundry(
     return client, final_model
 
 
-def _try_anthropic(explicit_api_key: str = None) -> Tuple[Optional[Any], Optional[str]]:
+def _try_anthropic(explicit_api_key: str = None, *, allow_fallback: bool = True, model: Optional[str] = None) -> Tuple[Optional[Any], Optional[str]]:
     try:
         from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token
     except ImportError:
         return None, None
 
-    pool_present, entry = _select_pool_entry("anthropic")
+    pool_present, entry = ((False, None) if not allow_fallback and explicit_api_key else
+                           _select_pool_entry("anthropic"))
+    if pool_present and not allow_fallback and (entry is None or not _pool_runtime_api_key(entry)):
+        return None, None
     if pool_present and entry is not None:
         token = explicit_api_key or _pool_runtime_api_key(entry)
     else:
@@ -4141,7 +4149,7 @@ def _try_anthropic(explicit_api_key: str = None) -> Tuple[Optional[Any], Optiona
 
     from agent.anthropic_adapter import _is_oauth_token
     is_oauth = _is_oauth_token(token)
-    model = _get_aux_model_for_provider("anthropic") or "claude-haiku-4-5-20251001"
+    model = model or _get_aux_model_for_provider("anthropic") or "claude-haiku-4-5-20251001"
     if _aux_probe_active():
         # Availability probe — token + SDK adapter import resolved; skip
         # real client construction.
@@ -6469,6 +6477,7 @@ def resolve_provider_client(
     main_runtime: Optional[Dict[str, Any]] = None,
     is_vision: bool = False,
     task: Optional[str] = None,
+    allow_fallback: bool = True,
 ) -> Tuple[Optional[Any], Optional[str]]:
     """Central router: given a provider name and optional model, return a
     configured client with the correct auth, base URL, and API format.
@@ -6627,6 +6636,8 @@ def resolve_provider_client(
 
     # ── Auto: try all providers in priority order ────────────────────
     if provider == "auto":
+        if not allow_fallback:
+            return None, None
         client, resolved, effective_provider = _resolve_auto_route(
             main_runtime=main_runtime,
             task=task,
@@ -6652,14 +6663,13 @@ def resolve_provider_client(
 
     # ── OpenRouter ───────────────────────────────────────────
     if provider == "openrouter":
-        client, default = _try_openrouter(
-            explicit_api_key=explicit_api_key,
-            model=model,
-        )
+        client, default = (_try_openrouter(explicit_api_key=explicit_api_key, model=model)
+                           if allow_fallback else _try_openrouter(
+                               explicit_api_key=explicit_api_key, model=model, allow_fallback=False))
         if client is None:
             logger.warning(
                 "resolve_provider_client: openrouter requested but %s",
-                _describe_openrouter_unavailable(model=model),
+                _describe_openrouter_unavailable(model=model) if allow_fallback else "unavailable without credential fallback",
             )
             return None, None
         final_model = _normalize_resolved_model(model or default, provider)
@@ -6678,6 +6688,9 @@ def resolve_provider_client(
         if raw_codex:
             # Return the raw OpenAI client for callers that need direct
             # access to responses.stream() (e.g., the main agent loop).
+            if not allow_fallback:
+                wrapper, resolved = _build_codex_client(model, allow_fallback=False)
+                return (wrapper._real_client, resolved) if wrapper is not None else (None, None)
             codex_token = _read_codex_access_token()
             if not codex_token:
                 logger.warning("resolve_provider_client: openai-codex requested "
@@ -6691,7 +6704,8 @@ def resolve_provider_client(
             )
             return (raw_client, final_model)
         # Standard path: wrap in CodexAuxiliaryClient adapter
-        client, default = _build_codex_client(model)
+        client, default = (_build_codex_client(model) if allow_fallback else
+                           _build_codex_client(model, allow_fallback=False))
         if client is None:
             logger.warning("resolve_provider_client: openai-codex requested "
                            "but no Codex OAuth token found (run: clover model)")
@@ -6795,6 +6809,8 @@ def resolve_provider_client(
             client = _wrap_if_needed(client, final_model, wrap_base or custom_base, custom_key)
             return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
                     else (client, final_model))
+        if not allow_fallback:
+            return None, None
         # Try custom first, then API-key providers (Codex excluded here:
         # falling through to Codex with no model is a stale-constant trap).
         for try_fn in (_try_custom_endpoint, _resolve_api_key_provider):
@@ -6991,14 +7007,17 @@ def resolve_provider_client(
 
     if pconfig.auth_type == "api_key":
         if provider == "anthropic":
-            client, default_model = _try_anthropic(explicit_api_key=explicit_api_key)
+            client, default_model = (_try_anthropic(explicit_api_key=explicit_api_key) if allow_fallback else
+                                     _try_anthropic(explicit_api_key=explicit_api_key, allow_fallback=False, model=model))
             if client is None:
                 logger.warning("resolve_provider_client: anthropic requested but no Anthropic credentials found")
                 return None, None
             final_model = _normalize_resolved_model(model or default_model, provider)
             return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode else (client, final_model))
 
-        creds = resolve_api_key_provider_credentials(provider)
+        creds = (resolve_api_key_provider_credentials(provider) if allow_fallback else
+                 resolve_api_key_provider_credentials(provider, allow_fallback=False, explicit_api_key=explicit_api_key,
+                                                      explicit_base_url=explicit_base_url))
         api_key = str(creds.get("api_key", "")).strip()
         # Honour an explicit api_key override (e.g. from a fallback_model entry
         # or a custom_providers entry) so callers that pass an explicit
@@ -7050,7 +7069,7 @@ def resolve_provider_client(
         if explicit_base_url:
             base_url = _to_openai_base_url(explicit_base_url.strip().rstrip("/"))
 
-        default_model = _get_aux_model_for_provider(provider)
+        default_model = None if not allow_fallback and model else _get_aux_model_for_provider(provider)
         final_model = _normalize_resolved_model(model or default_model, provider)
 
         if provider == "gemini":
@@ -7321,54 +7340,20 @@ class PresenceOutputBudgetUnsupported(ValueError):
 
 
 async def presence_completion(*, messages: list, max_output_tokens: int, timeout: float) -> str:
-    """One physical, cancellable request. Never use the general retry/fallback loop.
-
-    Explicit OpenAI-compatible API-key routes use native async chat. Explicit
-    Codex/OAuth holds with a budget-specific reason: its endpoint has no verified
-    server-enforced output cap. Auto selection, probes and compatibility wrappers
-    remain unsupported. Reservation is the caller's responsibility, before entry.
-    """
-    import asyncio
-    import json
-    import openai
+    """Presence entry point; shared bounded transport, no general fallback loop."""
+    from copy import deepcopy
     from clover_cli.config import load_config
-
-    route = load_config().get("auxiliary", {}).get("presence", {})
-    if (not isinstance(route, dict) or route.get("provider") not in {"openai", "custom", "openai-codex"}
-            or not isinstance(route.get("model"), str) or not route["model"].strip()
-            or type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 512
-            or type(timeout) not in (int, float) or not 0 < timeout <= 5
-            or len(json.dumps(messages, ensure_ascii=False).encode()) > 6144):
-        raise ValueError("unsupported bounded presence route")
-    if route["provider"] == "openai-codex":
-        # The existing Codex adapter and main Codex transport intentionally omit
-        # max_output_tokens. SDK serialization support is NOT endpoint support.
-        # Hold before token selection/refresh, client construction or any probe.
-        raise PresenceOutputBudgetUnsupported(
-            "Codex presence held: no verified server-enforced output cap; "
-            "the hard output reservation cannot be guaranteed"
-        )
-    base_url = route.get('base_url')
-    if route['provider'] == 'custom' and (not isinstance(base_url, str)
-            or not base_url or base_url != base_url.strip()):
-        raise ValueError('presence custom route requires an explicit endpoint; no provider detection')
-    client, model = resolve_provider_client(route["provider"], model=route["model"],
-                                           async_mode=True, api_mode="chat_completions",
-                                           explicit_base_url=base_url if route['provider'] == 'custom' else None)
-    if type(client) is not openai.AsyncOpenAI:
-        raise ValueError("presence route requires native async chat transport")
-    try:
-        # Native SDK defaults may follow HTTP redirects even with retries=0.
-        # This resolver owns a fresh native client; preserve its transport/TLS
-        # configuration but forbid a redirect from making a second request.
-        client._client.follow_redirects = False
-        bounded = client.with_options(max_retries=0, timeout=timeout)
-        result = await asyncio.wait_for(bounded.chat.completions.create(
-            model=model, messages=messages, max_tokens=max_output_tokens,
-            stream=False), timeout=timeout)
-        return result.choices[0].message.content or ""
-    finally:
-        await client.close()
+    from agent.bounded_completion import complete, CompletionHeld
+    def binding(config):
+        return deepcopy((config.get('model'), config.get('auxiliary', {}).get('presence', {}),
+                         config.get('presence', {})))
+    config = load_config()
+    captured = binding(config)
+    result = await complete(config=config, messages=messages,
+                            max_output_tokens=max_output_tokens, timeout=timeout)
+    if binding(load_config()) != captured:
+        raise CompletionHeld('configured_route_changed')
+    return result.text
 
 
 def get_text_auxiliary_client(

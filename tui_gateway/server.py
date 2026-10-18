@@ -15158,6 +15158,7 @@ _PENDING_INPUT_COMMANDS: frozenset[str] = frozenset(
         "goal",
         "loop",
         "proactive",
+        "emotions",
         "moa",
         "undo",
         "learn",

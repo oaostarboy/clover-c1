@@ -10598,7 +10598,10 @@ class TelegramAdapter(BasePlatformAdapter):
         # Authorized sender, real inbound Telegram update: the only place a
         # human-origin capability is minted for Telegram text. Synthetic
         # events never pass through here.
-        mint_human_ingress(event, platform="telegram")
+        # Inspecting affect is not new conversational evidence or revocation.
+        # Keep human provenance; only the optional presence generation is inert.
+        mint_human_ingress(event, platform="telegram",
+                           presence_input=event.get_command() != "emotions")
         self._enqueue_text_event(event)
 
     async def _handle_owner_verification(self, message: Message) -> bool:

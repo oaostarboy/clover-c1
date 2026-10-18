@@ -27,7 +27,7 @@ def test_presence_uses_real_resolver_and_exactly_one_synthetic_http_request(monk
     home=tmp_path/'isolated-home';home.mkdir()
     monkeypatch.setenv('CLOVER_HOME',str(home))
     monkeypatch.setenv('OPENAI_API_KEY','synthetic-review-key')
-    (home/'config.yaml').write_text(yaml.safe_dump({'auxiliary':{'presence':{
+    (home/'config.yaml').write_text(yaml.safe_dump({'presence':{'budget_mode':'requests'},'auxiliary':{'presence':{
         'provider':'custom','model':'synthetic-review-model','base_url':'https://synthetic-review.invalid/v1'}}}))
     requests=[]
     def sync_transport(request):

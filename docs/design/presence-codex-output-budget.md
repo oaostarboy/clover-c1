@@ -1,5 +1,11 @@
 # Codex presence: hard output-budget hold
 
+> Historical strict-token snapshot from the earlier compatibility packet.
+> Strict mode still holds. The current provider-agnostic adapter and explicitly
+> selected request-count mode (not a token/cost guarantee) are documented in
+> [presence-provider-adapters-emotions.md](presence-provider-adapters-emotions.md).
+> That native async path is offline-tested candidate code, not live enablement.
+
 Status: **blocked**, not a working OAuth presence transport or release approval.
 The main Codex conversation path is independent and remains unchanged.
 

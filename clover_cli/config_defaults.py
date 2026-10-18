@@ -2942,6 +2942,7 @@ DEFAULT_CONFIG = {
     # original runtime continuation plan.
     "presence": {
         "enabled": False,
+        "budget_mode": "strict_tokens",  # requests is explicit opt-in, NOT a token/cost cap
         "project_return_enabled": False,
         "denied_categories": [],
     },

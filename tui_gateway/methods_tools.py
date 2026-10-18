@@ -474,6 +474,12 @@ def _(rid, params: dict) -> dict:
         name = resolved
     session = _sessions.get(params.get("session_id", ""))
 
+    if name == "emotions":
+        from tui_gateway import server as emotions_server
+        from agent.emotions import desktop
+        text = "/emotions is read only and takes no arguments." if arg else desktop(emotions_server, params)
+        return _ok(rid, {"type":"exec", "output":text})
+
     qcmds = _load_cfg().get("quick_commands", {})
     if name in qcmds:
         qc = qcmds[name]

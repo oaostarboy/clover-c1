@@ -12880,6 +12880,9 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
             self._handle_refine_command(cmd_original)
         elif canonical == "review":
             self._handle_review_command(cmd_original)
+        elif canonical == "emotions":
+            from agent.emotions import render
+            self.console.print(render(), markup=False)
         elif canonical == "proactive":
             from clover_cli.proactive import proactive_command
             parts = cmd_original.split(None, 1)

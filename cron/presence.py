@@ -395,6 +395,17 @@ class ThoughtStore:
                     conn.execute("UPDATE presence_thoughts SET record=? WHERE thought_id=?", (_encode(new), old.thought_id))
             return conn.execute("SELECT epoch FROM presence_epoch WHERE id=1").fetchone()[0]
 
+    def assessment_count(self, day: str) -> int:
+        """Read-only profile request quota, including failures/unknown outcomes.
+
+        The legacy tokens column stores a requested output envelope, not measured
+        consumption. In request mode it is NOT a server-token reservation.
+        """
+        with self._transaction() as conn:
+            if conn is None or conn.execute("PRAGMA user_version").fetchone()[0] < 2:
+                return 0
+            return conn.execute("SELECT COUNT(*) FROM presence_budget WHERE day=?", (day,)).fetchone()[0]
+
     def reserve_assessment(self, *, event_id: str, thought_id: str, revision: int,
                            day: str, max_calls: int, tokens: int, generation: int | None = None) -> bool:
         if (type(max_calls) is not int or not 1 <= max_calls <= 3

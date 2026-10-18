@@ -30,7 +30,7 @@ def setup_host(monkeypatch, tmp_path):
             'model':'synthetic-model', 'choices':[{'index':0,'finish_reason':'stop','message':{
                 'role':'assistant','content':json.dumps(content)}}]})
     def resolve(*a, **kw):
-        return (openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://synthetic.invalid/v1',
+        return (openai.AsyncOpenAI(api_key='synthetic-key', base_url='https://api.openai.com/v1',
             http_client=httpx.AsyncClient(transport=httpx.MockTransport(transport))), 'synthetic-model')
     monkeypatch.setattr(aux, 'resolve_provider_client', resolve)
     bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=77)))

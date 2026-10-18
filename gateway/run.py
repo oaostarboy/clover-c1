@@ -18687,6 +18687,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     def _gateway_plain_command_handlers(self):
         """Return ordinary slash handlers shared by idle and busy dispatch."""
         return {
+            "emotions": self._handle_emotions_command,
             "status": self._handle_status_command,
             "proactive": self._handle_proactive_command,
             "context": self._handle_context_command,

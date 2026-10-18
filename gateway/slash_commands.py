@@ -3631,6 +3631,10 @@ class GatewaySlashCommandsMixin:
         except Exception:
             return False
 
+    async def _handle_emotions_command(self, event: MessageEvent) -> Optional[str]:
+        from agent.emotions import telegram
+        return await telegram(self, event)
+
     async def _handle_proactive_command(self, event: MessageEvent) -> Optional[str]:
         import copy
         import time

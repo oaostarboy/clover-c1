@@ -95,7 +95,8 @@ def _seal(ingress: HumanIngress) -> str:
 
 def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
                        original_text: Optional[str] = None,
-                       is_current: Optional[Callable[[], bool]] = None) -> bool:
+                       is_current: Optional[Callable[[], bool]] = None,
+                       presence_input: bool = True) -> bool:
     """Adapter-side producer. Call only after the adapter authenticated the
     sender on its own transport and built ``event`` from that inbound message.
 
@@ -123,7 +124,7 @@ def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
         source = getattr(event, 'source', None)
         private = (getattr(scope, 'private', False) if scope is not None else
                    getattr(source, 'chat_type', None) in {'dm', 'private'})
-        if private and platform in {'telegram', 'desktop'}:
+        if presence_input is True and private and platform in {'telegram', 'desktop'}:
             try:
                 from agent.presence_lifecycle import note_human_input
                 from agent.workstreams import current_profile
@@ -132,6 +133,22 @@ def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
                 pass  # Ordinary input is unaffected; optional presence holds.
         _ISSUED[key] = _Issue(ref, str(platform), uuid.uuid4().hex, binding, digest, is_current, generation)
     return True
+
+
+def submission_is_current(event: Any, *, platform: str) -> bool:
+    """Read-only proof for human commands; never redeem or mint a turn."""
+    if event is None or getattr(event, "internal", False):
+        return False
+    with _LOCK:
+        issue = _ISSUED.get(id(event))
+        if issue is None or issue.event_ref() is not event or issue.platform != platform:
+            return False
+    try:
+        valid = issue.source_current is None or issue.source_current() is True
+    except Exception:
+        return False
+    with _LOCK:
+        return valid and _ISSUED.get(id(event)) is issue
 
 
 def transfer_human_ingress(source: Any, target: Any, *, platform: str, original_text: str) -> bool:

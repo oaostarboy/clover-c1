@@ -378,6 +378,8 @@ def compose_current_posture(agent, row):
     except Exception:
         host.state.affect.correct()
         return ''
+    from agent.emotions import remember
+    remember(host)
     if host.state.affect.posture != 'careful_brief':
         return ''
     return CurrentPosture(host, source,

@@ -40,7 +40,7 @@ def test_explicit_codex_presence_reports_missing_server_cap_before_credentials(m
     assert Path(aux.__file__).resolve().parents[1] == Path(__file__).resolve().parents[2]
 
 
-@pytest.mark.parametrize("provider", ["auto", "codex-app-server", "anthropic"])
+@pytest.mark.parametrize("provider", ["codex-app-server", "bedrock"])
 def test_unsupported_presence_routes_never_borrow_main_codex(monkeypatch, provider):
     monkeypatch.setattr("clover_cli.config.load_config", lambda **kw: {
         "model": {"provider": "openai-codex", "default": MODEL},

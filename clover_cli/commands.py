@@ -241,6 +241,8 @@ COMMAND_REGISTRY: list[CommandDef] = [
                args_hint="<prompt>", busy_policy="reject", busy_handler="moa"),
     CommandDef("subgoal", "Add or manage extra criteria on the active goal", "Session",
                args_hint="[text | remove N | clear]", busy_policy="dispatch"),
+    CommandDef("emotions", "Inspect tentative affect, interaction posture and presence holds (read only)", "Info",
+               busy_policy="dispatch"),
     CommandDef("status", "Show session, model, token, and context info", "Session",
                busy_policy="dispatch"),
     CommandDef("egress", "Show Docker egress proxy status", "Session",
@@ -1491,7 +1493,7 @@ _SLACK_PRIORITY_ALIASES: tuple[str, ...] = ()
 #     past the 50-cap and silently clamps /usage, breaking parity.
 #   - proactive: profile settings; reached via /clover proactive [status|on|off]
 #     on Slack so the new command does not displace the existing /usage slash.
-_SLACK_VIA_CLOVER_ONLY = frozenset({"proactive", "moa", "council", "debug", "egress", "init", "version", "diff", "update", "repair", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights", "skin", "results"})
+_SLACK_VIA_CLOVER_ONLY = frozenset({"emotions", "proactive", "moa", "council", "debug", "egress", "init", "version", "diff", "update", "repair", "heartbeat", "refine", "review", "pause", "whoami", "platform", "insights", "skin", "results"})
 
 
 def _sanitize_slack_name(raw: str) -> str:
