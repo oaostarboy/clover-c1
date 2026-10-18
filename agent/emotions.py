@@ -274,6 +274,29 @@ def _telegram_authority(runner, event, route_key):
     source = event.source
     authorize = runner._is_user_authorized
     adapter = runner._adapter_for_source(source)
+    # Capture the exact existing transport registration before any snapshot
+    # reads. The general resolver can fall through to profile filesystem I/O
+    # after a registration disappears, so it must not run in the final fence.
+    platform = source.platform
+    adapter_ref = getattr(source, '_transport_adapter_ref', None)
+    adapters = getattr(runner, 'adapters', None)
+    profiles = getattr(runner, '_profile_adapters', None)
+    registry = adapters if adapters is not None and adapters.get(platform) is adapter else None
+    profile_name = None
+    if registry is None and profiles is not None:
+        for name, candidate in profiles.items():
+            if candidate.get(platform) is adapter:
+                profile_name, registry = name, candidate
+                break
+    def registered():
+        if (adapter is None or registry is None
+                or getattr(source, '_transport_adapter_ref', None) is not adapter_ref
+                or not callable(adapter_ref) or adapter_ref() is not adapter):
+            return False
+        if profile_name is None:
+            return getattr(runner, 'adapters', None) is registry and registry.get(platform) is adapter
+        return (profiles is not None and getattr(runner, '_profile_adapters', None) is profiles
+                and profiles.get(profile_name) is registry and registry.get(platform) is adapter)
     pairing = runner._pairing_store_for(source)
     paths = (pairing._approved_path('telegram'),) if pairing is not None else ()
     names = ('TELEGRAM_ALLOWED_USERS', 'TELEGRAM_ALLOW_ALL_USERS',
@@ -289,7 +312,7 @@ def _telegram_authority(runner, event, route_key):
         # These existing owners only consult in-memory mappings. Do not replace
         # with a config loader, pairing read, credential fingerprint or resolver.
         return (runner._is_user_authorized == authorize and grants() == grant
-                and runner._adapter_for_source(source) is adapter
+                and registered()
                 and getattr(adapter, '_bot', None) is bot
                 and runner._pairing_store_for(source) is pairing
                 and runner._is_session_run_current(route_key, generation))
