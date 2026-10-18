@@ -7,7 +7,7 @@ The caller must durably reserve its profile quota before calling complete().
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass
+from dataclasses import dataclass, field, replace
 import json
 import math
 from urllib.parse import urlparse
@@ -21,6 +21,7 @@ class Route:
     mode: str
     api_mode: str | None = None
     runtime: str | None = None
+    configured: bool = False
 
 
 @dataclass(frozen=True)
@@ -57,6 +58,7 @@ class CompletionResult:
     limits: CompletionLimits
     # Includes reasoning only when the endpoint reports total generated tokens.
     reasoning_tokens: int | None = None
+    authority: object = field(default=None, repr=False, compare=False)
 
 
 class CompletionHeld(ValueError):
@@ -88,7 +90,11 @@ def select_route(config: dict) -> Route:
         if (not isinstance(value, str) or not value or value == 'auto' or value != value.strip()
                 or len(value.encode()) > 512 or any(ord(c) < 32 for c in value)):
             raise CompletionHeld('configured_provider_and_model_required')
+    from agent.bounded_provider_metadata import metadata
+    owner = metadata(config, provider)
     base = task.get('base_url', main.get('base_url') if inherited or provider == primary else None)
+    if base is None and owner.configured:
+        base = owner.endpoint
     if base is not None:
         parsed = urlparse(base) if isinstance(base, str) else None
         if (parsed is None or parsed.scheme not in {'https','http'} or not parsed.hostname
@@ -101,8 +107,15 @@ def select_route(config: dict) -> Route:
     if mode not in {'strict_tokens','requests'}:
         raise CompletionHeld('unsupported_budget_mode')
     assert isinstance(provider,str) and isinstance(model,str)
-    return Route(provider, model, base, mode, task.get('api_mode', main.get('api_mode') if inherited else None),
-                 main.get('openai_runtime') if inherited or provider == primary else None)
+    api_mode = task.get('api_mode', main.get('api_mode') if inherited or provider == primary else None)
+    if api_mode is None and owner.configured:
+        api_mode = owner.api_mode
+    if api_mode is None and not owner.configured:
+        from clover_cli.models import opencode_provider_family, opencode_model_api_mode
+        if opencode_provider_family(provider) is not None:
+            api_mode = opencode_model_api_mode(provider, model)
+    return Route(provider, model, base, mode, api_mode,
+                 main.get('openai_runtime') if inherited or provider == primary else None, owner.configured)
 
 
 def capabilities(route: Route) -> Capabilities:
@@ -112,31 +125,22 @@ def capabilities(route: Route) -> Capabilities:
     model remains in the immutable Route; serializer inflation and resolved
     endpoint/model changes are independently refused before HTTP dispatch.
     """
-    from providers import get_provider_profile
-    from clover_cli.providers import get_provider
-    from agent.auxiliary_client import _AUX_DIRECT_API_BASE_URLS
-    profile = get_provider_profile(route.provider)
-    owner = get_provider(route.provider, allow_network=False)
-    import os
-    endpoint_env = getattr(owner, 'base_url_env_var', '')
-    configured_endpoint = os.getenv(endpoint_env, '') if endpoint_env else ''
-    endpoint = (route.base_url or configured_endpoint or _AUX_DIRECT_API_BASE_URLS.get(route.provider)
-                or getattr(profile,'base_url','') or getattr(owner,'base_url',''))
-    declared = {'openai_chat':'chat_completions', 'codex_responses':'codex_responses',
-                'anthropic':'anthropic_messages'}.get(getattr(owner,'transport',''), 'chat_completions')
-    wire = route.api_mode or getattr(profile,'api_mode',None) or declared
-    if route.provider in {'openai-codex','codex'}:
+    from agent.bounded_provider_metadata import metadata
+    owner = metadata({}, route.provider)
+    endpoint = route.base_url or owner.endpoint
+    wire = route.api_mode or owner.api_mode
+    if not route.configured and route.provider in {'openai-codex','codex'}:
         return Capabilities('responses', 'unsupported', output_limit_parameter=None)
     # Cloud SDK/external-process and other OAuth credential owners have no
     # audited native one-shot binding here. Do not resolve/refresh them to guess.
-    if owner is not None and owner.auth_type != 'api_key':
+    if not route.configured and owner.auth_type != 'api_key':
         return Capabilities('unsupported', 'unverified', cancellation='unverified', native_async=False)
     parsed = urlparse(endpoint)
     if wire == 'anthropic_messages':
         verified = (parsed.scheme == 'https' and parsed.hostname == 'api.anthropic.com'
                     and parsed.path.rstrip('/') in {'','/v1'})
         return Capabilities('anthropic_messages', 'verified' if verified else 'unverified')
-    if route.provider == 'gemini':
+    if route.provider == 'gemini' and not route.configured:
         # Candidate-token count/maxOutputTokens is not an all-generated-token cap.
         return Capabilities('gemini_native', 'unverified', output_limit_parameter='maxOutputTokens')
     if wire == 'codex_responses':
@@ -145,7 +149,7 @@ def capabilities(route: Route) -> Capabilities:
         return Capabilities('responses', 'verified' if verified else 'unverified',
                             output_limit_parameter='max_output_tokens' if verified else None)
     if wire == 'chat_completions' and (route.provider in {'openai','custom'} or
-            (owner is not None and owner.auth_type == 'api_key')):
+            route.configured or owner.auth_type == 'api_key'):
         verified = (parsed.scheme == 'https' and parsed.hostname == 'api.openai.com'
                     and parsed.path.rstrip('/') == '/v1')
         return Capabilities('chat_completions', 'verified' if verified else 'unverified',
@@ -160,7 +164,7 @@ def admitted(route: Route) -> Capabilities:
     if cap.transport == 'unsupported':
         raise CompletionHeld('transport_cancellation_unverified')
     if route.mode == 'strict_tokens' and cap.server_output_cap != 'verified':
-        if route.provider in {'openai-codex','codex'}:
+        if not route.configured and route.provider in {'openai-codex','codex'}:
             from agent.auxiliary_client import PresenceOutputBudgetUnsupported
             raise PresenceOutputBudgetUnsupported('Codex presence held: no verified server-enforced output cap')
         raise CompletionHeld('server_output_cap_unverified')
@@ -170,7 +174,7 @@ def admitted(route: Route) -> Capabilities:
                      'responses': {None,'codex_responses'}}
     if (route.api_mode not in allowed_modes.get(cap.transport,set())
             or route.runtime not in {None,'auto'}
-            or (route.provider == 'anthropic' and route.base_url is not None)):
+            or (route.provider == 'anthropic' and not route.configured and route.base_url is not None)):
         raise CompletionHeld('transport_selection_unsupported')
     return cap
 
@@ -213,6 +217,24 @@ def _install_response_limit(http):
 
 
 async def complete(*, config, messages, max_output_tokens, timeout) -> CompletionResult:
+    if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 5:
+        raise CompletionHeld('invalid_bounded_request')
+    # Deliver pending cancellation before any synchronous credential/config I/O.
+    deadline = asyncio.get_running_loop().time() + timeout
+    async with asyncio.timeout_at(deadline):
+        await asyncio.sleep(0)
+        result = await _complete(config=config, messages=messages,
+                                 max_output_tokens=max_output_tokens, timeout=timeout, deadline=deadline)
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError('bounded completion deadline exceeded')
+        return result
+
+
+async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -> CompletionResult:
+    from copy import deepcopy
+    source_config = config
+    config = deepcopy(config)
+    messages = deepcopy(messages)
     if (type(max_output_tokens) is not int or not 1 <= max_output_tokens <= 512
             or type(timeout) not in (int,float) or not math.isfinite(timeout) or not 0 < timeout <= 5
             or not isinstance(messages, list) or not messages
@@ -228,31 +250,36 @@ async def complete(*, config, messages, max_output_tokens, timeout) -> Completio
         raise CompletionHeld('invalid_role_sequence')
     route = select_route(config)
     cap = admitted(route)  # MUST precede auth, resolver, refresh or network.
+    if asyncio.get_running_loop().time() >= deadline:
+        raise TimeoutError('bounded completion deadline exceeded')
     from agent import auxiliary_client as aux
-    task = config.get('auxiliary',{}).get('presence',{})
-    key = task.get('api_key')
-    if not key and (task.get('key_env') or task.get('api_key_env')):
-        key = aux._scoped_key_env(task.get('key_env') or task['api_key_env'])
-    provider, base = route.provider, route.base_url
-    if provider == 'openai':
-        key = key or aux._scoped_key_env('OPENAI_API_KEY')
-    elif provider == 'custom':
-        main = config.get('model',{})
-        key = key or (main.get('api_key') if isinstance(main,dict) else None) or aux._scoped_key_env('OPENAI_API_KEY')
-    # Reuse the established direct-API alias expansion with an exact model.
-    # Passing a concrete provider avoids its auto/fallback resolver entirely.
-    if provider in aux._AUX_DIRECT_API_BASE_URLS:
-        provider, selected_model, base, key, _ = aux._resolve_task_provider_model(
-            provider=provider, model=route.model, base_url=base, api_key=key)
-        if selected_model != route.model:
-            raise CompletionHeld('configured_model_changed')
     native = cap.transport != 'chat_completions'
-    client, model = aux.resolve_provider_client(provider, model=route.model, async_mode=not native,
-        raw_codex=cap.transport == 'responses',
-        explicit_base_url=base, explicit_api_key=key, api_mode=route.api_mode or 'chat_completions',
-        allow_fallback=False)
+    client, model = aux.resolve_provider_client(route.provider, model=route.model, async_mode=not native,
+        raw_codex=cap.transport == 'responses', explicit_base_url=route.base_url,
+        api_mode=route.api_mode or 'chat_completions', allow_fallback=False,
+        bounded_config=config, bounded_source_config=source_config)
+    # The offline resolver cannot perform network I/O. Yield/check the original
+    # deadline before the first and only physical operation, even after slow I/O.
+    try:
+        await asyncio.sleep(0)
+        authority = getattr(client, '_bounded_authority', None)
+        if authority is not None:
+            authority.validate()
+        if asyncio.get_running_loop().time() >= deadline:
+            raise TimeoutError('bounded completion deadline exceeded')
+    except BaseException:
+        raw = getattr(client, '_real_client', client)
+        close = getattr(raw, 'close', None)
+        if close:
+            result = close()
+            if hasattr(result, '__await__'):
+                await result
+        raise
     if native:
-        return await _native_complete(client, model, route, cap, messages, max_output_tokens, timeout)
+        result = await _native_complete(client, model, route, cap, messages, max_output_tokens, timeout)
+        if authority is not None:
+            authority.validate()
+        return replace(result, authority=authority)
     import openai
     if type(client) is not openai.AsyncOpenAI:
         raise CompletionHeld('native_async_transport_unavailable')
@@ -279,8 +306,10 @@ async def complete(*, config, messages, max_output_tokens, timeout) -> Completio
         reasoning = _known_count((usage.get('completion_tokens_details') or {}).get('reasoning_tokens'))
         if route.mode == 'strict_tokens' and total is not None and total > max_output_tokens:
             raise CompletionHeld('provider_exceeded_output_contract_usage_reported')
+        if authority is not None:
+            authority.validate()
         return CompletionResult(text, route, cap, route.mode, 'known' if total is not None else 'unknown', total,
-                                CompletionLimits(max_output_tokens,timeout,route.mode=='strict_tokens'), reasoning)
+                                CompletionLimits(max_output_tokens,timeout,route.mode=='strict_tokens'), reasoning, authority)
     finally:
         await client.close()
 
@@ -338,6 +367,12 @@ async def _native_complete(client, model, route, cap, messages, tokens, timeout)
             url = base+'/responses'
         else:
             raise CompletionHeld('native_transport_type_unverified')
+        headers.update(getattr(client, '_bounded_headers', {}))
+        if getattr(client, '_bounded_keyless', False):
+            # The established public-route policy is anonymous on every native
+            # wire; never serialize its SDK-construction placeholder as auth.
+            headers = {k:v for k,v in headers.items()
+                       if k.lower() not in {'authorization', 'x-api-key', 'x-goog-api-key'}}
         # Fresh native async HTTP, preserving shared TLS/proxy configuration.
         http = aux._openai_http_client_kwargs(base,async_mode=True).get('http_client')
         if not isinstance(http,httpx.AsyncClient):

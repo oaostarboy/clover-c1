@@ -3667,6 +3667,7 @@ def set_runtime_main(
     auth_mode: str = "",
     session_id: str = "",
     cache_scope: str = "",
+    credential_pool: Any = None,
 ) -> contextvars.Token:
     """Record the current context's live main runtime for auxiliary routing.
 
@@ -3695,6 +3696,7 @@ def set_runtime_main(
         "auth_mode": (auth_mode or "").strip().lower(),
         "session_id": (session_id or "").strip(),
         "cache_scope": (cache_scope or "").strip(),
+        "credential_pool": credential_pool,
     }
     # Publish authoritative context before updating locked compatibility
     # mirrors; concurrent sessions never read those mirrors at runtime.
@@ -4195,6 +4197,8 @@ def _normalize_main_runtime(main_runtime: Optional[Dict[str, Any]]) -> Dict[str,
     if not isinstance(main_runtime, dict):
         return {}
     normalized: Dict[str, Any] = {}
+    if main_runtime.get("credential_pool") is not None:
+        normalized["credential_pool"] = main_runtime["credential_pool"]
     for field in _MAIN_RUNTIME_CONTEXT_FIELDS:
         value = main_runtime.get(field)
         # Preserve a callable api_key (Entra ID bearer provider) unchanged.
@@ -6478,6 +6482,8 @@ def resolve_provider_client(
     is_vision: bool = False,
     task: Optional[str] = None,
     allow_fallback: bool = True,
+    bounded_config: Optional[Dict[str, Any]] = None,
+    bounded_source_config: Optional[Dict[str, Any]] = None,
 ) -> Tuple[Optional[Any], Optional[str]]:
     """Central router: given a provider name and optional model, return a
     configured client with the correct auth, base URL, and API format.
@@ -6509,6 +6515,13 @@ def resolve_provider_client(
     Returns:
         (client, resolved_model) or (None, None) if auth is unavailable.
     """
+    if bounded_config is not None:
+        # Separate offline acquisition lane. Ordinary main/aux auth behavior is
+        # intentionally unchanged; no ordinary resolver executes in this lane.
+        from agent.bounded_auth import build_client
+        from agent.bounded_completion import select_route
+        return build_client(bounded_config, select_route(bounded_config), async_mode=async_mode,
+                            source_config=bounded_source_config)
     _validate_proxy_env_urls()
     # Preserve the original provider name before alias normalization so a
     # user-declared ``custom_providers`` entry whose name coincidentally
@@ -7341,18 +7354,23 @@ class PresenceOutputBudgetUnsupported(ValueError):
 
 async def presence_completion(*, messages: list, max_output_tokens: int, timeout: float) -> str:
     """Presence entry point; shared bounded transport, no general fallback loop."""
+    # A pending cancellation must precede even synchronous config/auth reads.
+    import asyncio
+    await asyncio.sleep(0)
     from copy import deepcopy
     from clover_cli.config import load_config
     from agent.bounded_completion import complete, CompletionHeld
     def binding(config):
         return deepcopy((config.get('model'), config.get('auxiliary', {}).get('presence', {}),
-                         config.get('presence', {})))
+                         config.get('presence', {}), config.get('providers'), config.get('custom_providers')))
     config = load_config()
     captured = binding(config)
     result = await complete(config=config, messages=messages,
                             max_output_tokens=max_output_tokens, timeout=timeout)
     if binding(load_config()) != captured:
         raise CompletionHeld('configured_route_changed')
+    if result.authority is not None:
+        result.authority.validate()
     return result.text
 
 
@@ -8223,9 +8241,7 @@ def _get_cached_client(
 # silently fell back to the user's main provider, sending OpenAI model names
 # to e.g. DeepSeek and producing cryptic ``unknown variant 'image_url'``
 # errors (issue #31179).
-_AUX_DIRECT_API_BASE_URLS: Dict[str, str] = {
-    "openai": "https://api.openai.com/v1",
-}
+from agent.bounded_provider_metadata import DIRECT_API_BASE_URLS as _AUX_DIRECT_API_BASE_URLS
 
 
 def _resolve_task_provider_model(

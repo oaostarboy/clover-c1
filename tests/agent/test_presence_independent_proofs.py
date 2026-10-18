@@ -28,7 +28,8 @@ def test_presence_uses_real_resolver_and_exactly_one_synthetic_http_request(monk
     monkeypatch.setenv('CLOVER_HOME',str(home))
     monkeypatch.setenv('OPENAI_API_KEY','synthetic-review-key')
     (home/'config.yaml').write_text(yaml.safe_dump({'presence':{'budget_mode':'requests'},'auxiliary':{'presence':{
-        'provider':'custom','model':'synthetic-review-model','base_url':'https://synthetic-review.invalid/v1'}}}))
+        'provider':'custom','model':'synthetic-review-model','base_url':'https://synthetic-review.invalid/v1',
+        'key_env':'OPENAI_API_KEY'}}}))
     requests=[]
     def sync_transport(request):
         raise AssertionError('presence resolver attempted a synchronous probe')

@@ -32,7 +32,7 @@ def test_presence_aux_native_timeout_cancels_single_dispatch(monkeypatch):
         'auxiliary': {'presence': {'provider': 'openai', 'model': 'synthetic-model'}}})
     with pytest.raises(TimeoutError):
         asyncio.run(aux.presence_completion(messages=[{'role':'user','content':'synthetic capsule'}],
-                                             max_output_tokens=512, timeout=0.05))
+                                             max_output_tokens=512, timeout=0.5))
     assert len(calls) == 1 and cancelled == [True]
 
 

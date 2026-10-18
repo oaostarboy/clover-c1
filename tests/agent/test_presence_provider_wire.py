@@ -22,15 +22,19 @@ def route_fixture(monkeypatch,provider,respond):
     # validation, endpoint and provider identity use the genuine auth owner.
     secrets={'GOOGLE_API_KEY':'AIza'+'synthetic-presence-fixture-not-a-credential',
              'GEMINI_API_KEY':'AIza'+'synthetic-presence-fixture-not-a-credential',
-             'OPENAI_API_KEY':'sk-'+'synthetic-presence-fixture-not-a-credential'}
+             'OPENAI_API_KEY':'sk-'+'synthetic-presence-fixture-not-a-credential',
+             'ANTHROPIC_API_KEY':'sk-ant-'+'synthetic-presence-fixture-not-a-credential'}
     monkeypatch.setattr('clover_cli.config.get_env_value_prefer_dotenv',lambda key:secrets.get(key))
     def http_factory(*a,**kw):
         return {'http_client':(httpx.AsyncClient if kw.get('async_mode') else httpx.Client)(
             transport=httpx.MockTransport(respond),follow_redirects=True)}
     monkeypatch.setattr(aux,'_openai_http_client_kwargs',http_factory)
-    return {'presence':{'budget_mode':'requests'},'auxiliary':{'presence':{
+    config = {'presence':{'budget_mode':'requests'},'auxiliary':{'presence':{
         'provider':provider,'model':'claude-haiku-4-5' if provider=='anthropic' else
         'gemini-2.5-flash' if provider=='gemini' else 'gpt-4o-mini' if provider in {'openai','openai-api'} else 'gpt-6-astra-900k'}}}
+    if provider == 'openai-codex':
+        config['auxiliary']['presence']['api_key'] = 'e30.'+account+'.synthetic-signature'
+    return config
 
 
 def response_for(provider):
