@@ -24,9 +24,8 @@ def _fingerprint(value):
 
 
 def _endpoint(value):
-    # Deliberately exact apart from the SDK's trailing slash. Host equality is
-    # insufficient: tenants on different paths do not own each other's secrets.
-    return str(value or '').rstrip('/')
+    from agent.bounded_provider_metadata import endpoint_identity
+    return endpoint_identity(value)
 
 
 def _config_binding(config):
@@ -86,6 +85,94 @@ def _owned_reader(reader, expected):
     return read
 
 
+def _pool_disk_state(provider, selected_id):
+    """Uncached, read-only selected slice with profile/global source provenance.
+
+    Do not use the ordinary auth loader on persisted files: it can preserve
+    corrupt files and cache global state. Bounded reads must neither write nor
+    accept an unchanged mtime as proof of unchanged authority.
+    """
+    from clover_cli.auth import _auth_file_path, _global_auth_file_path
+    paths = [_auth_file_path(), _global_auth_file_path()]
+    stores = []
+    for path in paths:
+        # Existing profile rows shadow global rows for this provider. An
+        # unrelated global account/store cannot invalidate the selected owner.
+        if stores and stores[0][3]:
+            stores.append((None, False, {}, []))
+            continue
+        if path is None:
+            stores.append((None, False, {}, []))
+            continue
+        try:
+            raw = path.read_text(encoding='utf-8-sig')
+        except FileNotFoundError:
+            stores.append((str(path.resolve()), False, {}, []))
+            continue
+        except OSError:
+            _held('credential_authority_unavailable')
+        try:
+            store = json.loads(raw)
+            if not isinstance(store, dict):
+                _held('credential_authority_unavailable')
+            rows = store.get('credential_pool', {}).get(provider, [])
+            if not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows):
+                _held('credential_authority_unavailable')
+        except (ValueError, AttributeError, TypeError):
+            _held('credential_authority_unavailable')
+        stores.append((str(path.resolve()), True, store, rows))
+    local, global_store = stores
+    owner = local if local[3] else global_store if global_store[3] else local
+    path, exists, store, rows = owner
+    # An absent persisted store leaves the existing exact runtime handle as the
+    # owner. Preserve the reader boundary for non-file/in-memory pool backends.
+    if not any(item[1] for item in stores):
+        from clover_cli.auth import read_credential_pool
+        rows = read_credential_pool(provider)
+    source = (local[0], path, exists, store.get('version'), store.get('authority_version'))
+    selected_rows = [row for row in rows if row.get('id') == selected_id]
+    return source, selected_rows, bool(rows)
+
+
+def _reconcile_persisted_owner(pool, selected, row):
+    """Reconcile the real pool schema, not truthy fields of a stale cache.
+
+    Owned rows persist mandatory access_token. Borrowed rows intentionally omit
+    it and instead persist the source/fingerprint contract from the pool writer.
+    Optional None fields use PooledCredential's own deserialization defaults.
+    """
+    from agent.credential_pool import PooledCredential, _parse_absolute_timestamp
+    from agent.credential_persistence import is_borrowed_credential_source, fingerprint_secret_value
+    persisted = PooledCredential.from_dict(pool.provider, row)
+    borrowed = is_borrowed_credential_source(selected.source, pool.provider)
+    if borrowed:
+        if ('access_token' in row or
+                persisted.secret_fingerprint != fingerprint_secret_value(selected.runtime_api_key)):
+            _held('credential_authority_changed')
+    elif not persisted.runtime_api_key or persisted.runtime_api_key != selected.runtime_api_key:
+        _held('credential_authority_changed')
+    # Do not require unrelated pool membership or freeze counters/labels. These
+    # fields alone identify the selected owner, material, endpoint and version.
+    fields = ('id', 'source', 'auth_type', 'base_url', 'inference_base_url',
+              'expires_at', 'expires_at_ms', 'last_refresh', 'agent_key_expires_at')
+    if not borrowed:
+        fields += ('refresh_token', 'agent_key')
+    if any(getattr(persisted, name) != getattr(selected, name) for name in fields):
+        _held('credential_authority_changed')
+    for name in ('authority_version', 'secret_source', 'secret_fingerprint'):
+        if row.get(name) != selected.to_dict().get(name):
+            _held('credential_authority_changed')
+    if persisted.last_status not in (None, '', 'ok'):
+        _held('credential_authority_revoked')
+    if (pool._entry_needs_refresh(persisted) or
+            (persisted.expires_at_ms is not None and persisted.expires_at_ms <= time.time() * 1000)):
+        _held('credential_expired')
+    if persisted.expires_at is not None:
+        expires = _parse_absolute_timestamp(persisted.expires_at)
+        if expires is None or expires <= time.time():
+            _held('credential_expired')
+
+
 def acquire(config, route, *, source_config=None):
     """Return (owned credential, exact endpoint, immutable revalidation handle).
 
@@ -137,12 +224,16 @@ def acquire(config, route, *, source_config=None):
 
     runtime = aux._RUNTIME_MAIN_CONTEXT.get()
     runtime = runtime if isinstance(runtime, dict) else {}
+    runtime_fields = ('provider', 'requested_provider', 'model', 'base_url', 'api_key', 'api_mode', 'auth_mode')
+    runtime_snapshot = tuple(runtime.get(name) for name in runtime_fields)
     same_runtime_provider = runtime.get('provider') in {route.provider, meta.provider}
     if (not same_runtime_provider and runtime.get('provider') == 'custom'
             and runtime.get('requested_provider') == route.provider
             and (route.provider in DIRECT_API_BASE_URLS or meta.configured)):
         same_runtime_provider = True
-    runtime_base = runtime.get('base_url') or meta.endpoint
+    # A configured name can shadow a built-in. Never infer the endpoint of
+    # its cached built-in credential from the replacement mapping.
+    runtime_base = runtime.get('base_url') or ('' if meta.configured else meta.endpoint)
     if key is None and same_runtime_provider and _endpoint(base) == _endpoint(runtime_base):
         pool = runtime.get('credential_pool')
         if pool is not None:
@@ -154,12 +245,12 @@ def acquire(config, route, *, source_config=None):
                 _held('credential_endpoint_unowned')
             selected_id = selected.id
             selected_key = selected.runtime_api_key
-            selected_state = _fingerprint(selected.to_dict())
+            selected_payload = selected.to_dict()
+            selected_state = _fingerprint(selected_payload)
             def pool_state():
                 current_runtime = aux._RUNTIME_MAIN_CONTEXT.get() or {}
                 current = pool.current()
-                return (current_runtime.get('provider'), current_runtime.get('model'),
-                        current_runtime.get('base_url'), current_runtime.get('api_key'),
+                return (tuple(current_runtime.get(name) for name in runtime_fields),
                         id(current_runtime.get('credential_pool')), current.to_dict() if current else None)
             def pool_valid():
                 current = pool.current()
@@ -180,57 +271,50 @@ def acquire(config, route, *, source_config=None):
             key = selected_key
             if runtime.get('api_key') and runtime['api_key'] != key:
                 _held('credential_authority_changed')
-            checks.append(pool_state)
+            checks.append(_owned_reader(pool_state, (runtime_snapshot, id(pool), selected_payload)))
             valid_checks.append(pool_valid)
             # Read only the exact selected record. Changes to other accounts
             # neither select them nor invalidate an unchanged selected owner.
-            from clover_constants import get_clover_home
             def disk_state():
-                rows = read_credential_pool(pool.provider)
-                selected_rows = [row for row in rows if row.get('id') == selected_id]
-                return (get_clover_home() / 'auth.json').exists(), selected_rows, bool(rows)
-            disk_exists, disk_rows, has_rows = disk_state()
-            if (disk_exists or has_rows) and len(disk_rows) != 1:
+                return _pool_disk_state(pool.provider, selected_id)
+            disk_source, disk_rows, has_rows = disk_state()
+            if (disk_source[2] or has_rows) and len(disk_rows) != 1:
                 _held('credential_authority_revoked')
             if disk_rows:
-                row = disk_rows[0]
-                if row.get('last_status') not in (None, '', 'ok'):
-                    _held('credential_authority_revoked')
-                if row.get('access_token') and row['access_token'] != selected_key:
-                    _held('credential_authority_changed')
-            checks.append(_owned_reader(disk_state, (disk_exists, disk_rows, has_rows)))
+                _reconcile_persisted_owner(pool, selected, disk_rows[0])
+                valid_checks.append(lambda: _reconcile_persisted_owner(pool, selected, disk_rows[0]))
+            checks.append(_owned_reader(disk_state, (disk_source, disk_rows, has_rows)))
         else:
             candidate = runtime.get('api_key')
             if callable(candidate):
                 _held('credential_override_unsupported')
             if candidate:
                 key = candidate
-                runtime_fields = ('provider', 'model', 'base_url', 'api_key')
-                expected_runtime = tuple(runtime.get(k) for k in runtime_fields)
                 checks.append(_owned_reader(lambda: tuple((aux._RUNTIME_MAIN_CONTEXT.get() or {}).get(k)
-                    for k in runtime_fields), expected_runtime))
+                    for k in runtime_fields), runtime_snapshot))
 
     owned_default = _endpoint(base) == _endpoint(meta.endpoint)
     if key is None:
         # Unselected persisted pool entries are NOT authority to choose an
         # account. They also cannot silently fall through to an ambient key.
-        if read_credential_pool(meta.provider):
+        if not meta.configured and read_credential_pool(meta.provider):
             _held('selected_authority_missing')
         from clover_cli.auth import PROVIDER_REGISTRY
-        provider_config = PROVIDER_REGISTRY.get(meta.provider)
+        provider_config = None if meta.configured else PROVIDER_REGISTRY.get(meta.provider)
         declared_envs = tuple(dict.fromkeys((*meta.key_envs,
             *getattr(provider_config, 'api_key_env_vars', ()))))
-        envs = declared_envs if owned_default else ()
+        service_owned = _endpoint(base) == _endpoint(meta.credential_endpoint or meta.endpoint)
+        envs = declared_envs if owned_default and service_owned else ()
         # Anonymous custom main route explicitly pairs OPENAI_API_KEY with its
         # configured endpoint, just as the established custom provider contract.
-        if route.provider == 'custom' and same_main:
+        if not meta.configured and route.provider == 'custom' and same_main:
             envs = ('OPENAI_API_KEY',)
         # Preserve provider-owned .env precedence and profile secret scope,
         # without the ordinary resolver's pool enumeration/refresh fallback.
         from clover_cli.config import get_env_value_prefer_dotenv
         from clover_cli.auth import _secret_matches_declared_prefix, has_usable_secret
         reader = aux._scoped_key_env if route.provider in {'openai', 'custom'} else get_env_value_prefer_dotenv
-        if meta.provider == 'anthropic' and owned_default:
+        if not meta.configured and meta.provider == 'anthropic' and owned_default and service_owned:
             envs = ('ANTHROPIC_TOKEN', 'CLAUDE_CODE_OAUTH_TOKEN', *envs)
         for env in envs:
             candidate = reader(env)
@@ -254,7 +338,7 @@ def acquire(config, route, *, source_config=None):
                 _held('credential_endpoint_unowned')
             key = ACTUAL_LOCAL_NOAUTH_PLACEHOLDER
         else:
-            _held('credential_endpoint_unowned' if not owned_default or route.provider == 'custom'
+            _held('credential_endpoint_unowned' if not owned_default or not service_owned or route.provider == 'custom'
                   else 'selected_authority_missing')
     if not isinstance(key, str) or not key:
         _held('credential_override_unsupported')
@@ -299,7 +383,8 @@ def build_client(config, route, *, async_mode, source_config=None):
         headers = aux._codex_cloudflare_headers(key, base_url=base)
     else:
         from providers import get_provider_profile
-        profile = get_provider_profile(route.provider)
+        service_owned = _endpoint(base) == _endpoint(meta.credential_endpoint or meta.endpoint)
+        profile = None if meta.configured or not service_owned else get_provider_profile(route.provider)
         headers.update(getattr(profile, 'default_headers', {}) or {})
         if aux.base_url_host_matches(base, 'api.kimi.com'):
             headers['User-Agent'] = 'claude-code/0.1.0'

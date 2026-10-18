@@ -7356,22 +7356,26 @@ async def presence_completion(*, messages: list, max_output_tokens: int, timeout
     """Presence entry point; shared bounded transport, no general fallback loop."""
     # A pending cancellation must precede even synchronous config/auth reads.
     import asyncio
-    await asyncio.sleep(0)
-    from copy import deepcopy
-    from clover_cli.config import load_config
-    from agent.bounded_completion import complete, CompletionHeld
-    def binding(config):
-        return deepcopy((config.get('model'), config.get('auxiliary', {}).get('presence', {}),
-                         config.get('presence', {}), config.get('providers'), config.get('custom_providers')))
-    config = load_config()
-    captured = binding(config)
-    result = await complete(config=config, messages=messages,
-                            max_output_tokens=max_output_tokens, timeout=timeout)
-    if binding(load_config()) != captured:
-        raise CompletionHeld('configured_route_changed')
-    if result.authority is not None:
-        result.authority.validate()
-    return result.text
+    from agent.bounded_completion import complete, CompletionHeld, call_deadline, remaining_budget
+    deadline = call_deadline(timeout)
+    async with asyncio.timeout_at(deadline):
+        await asyncio.sleep(0)
+        from copy import deepcopy
+        from clover_cli.config import load_config
+        def binding(config):
+            return deepcopy((config.get('model'), config.get('auxiliary', {}).get('presence', {}),
+                             config.get('presence', {}), config.get('providers'), config.get('custom_providers')))
+        config = load_config()
+        captured = binding(config)
+        remaining_budget(deadline)
+        result = await complete(config=config, messages=messages,
+                                max_output_tokens=max_output_tokens, timeout=timeout, deadline=deadline)
+        if binding(load_config()) != captured:
+            raise CompletionHeld('configured_route_changed')
+        if result.authority is not None:
+            result.authority.validate()
+        remaining_budget(deadline)
+        return result.text
 
 
 def get_text_auxiliary_client(

@@ -222,11 +222,25 @@ def _install_response_limit(http):
     http.event_hooks['response'].insert(0, headers)
 
 
-async def complete(*, config, messages, max_output_tokens, timeout) -> CompletionResult:
+def call_deadline(timeout):
     if type(timeout) not in (int, float) or not math.isfinite(timeout) or not 0 < timeout <= 5:
         raise CompletionHeld('invalid_bounded_request')
+    return asyncio.get_running_loop().time() + timeout
+
+
+def remaining_budget(deadline):
+    # Synchronous local reads cannot be preempted by asyncio. Always check
+    # elapsed time after them, before physical dispatch and before publication.
+    remaining = deadline - asyncio.get_running_loop().time()
+    if remaining <= 0:
+        raise TimeoutError('bounded completion deadline exceeded')
+    return remaining
+
+
+async def complete(*, config, messages, max_output_tokens, timeout, deadline=None) -> CompletionResult:
+    own_deadline = call_deadline(timeout)
+    deadline = own_deadline if deadline is None else min(deadline, own_deadline)
     # Deliver pending cancellation before any synchronous credential/config I/O.
-    deadline = asyncio.get_running_loop().time() + timeout
     async with asyncio.timeout_at(deadline):
         await asyncio.sleep(0)
         result = await _complete(config=config, messages=messages,
@@ -282,7 +296,7 @@ async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -
                 await result
         raise
     if native:
-        result = await _native_complete(client, model, route, cap, messages, max_output_tokens, timeout)
+        result = await _native_complete(client, model, route, cap, messages, max_output_tokens, timeout, deadline)
         if authority is not None:
             authority.validate()
         return replace(result, authority=authority)
@@ -292,7 +306,8 @@ async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -
     try:
         if model != route.model:
             raise CompletionHeld('resolved_model_changed')
-        if route.base_url is not None and str(client.base_url).rstrip('/') != aux._to_openai_base_url(route.base_url).rstrip('/'):
+        from agent.bounded_provider_metadata import endpoint_identity
+        if route.base_url is not None and endpoint_identity(str(client.base_url)) != endpoint_identity(aux._to_openai_base_url(route.base_url)):
             raise CompletionHeld('configured_endpoint_changed')
         actual = urlparse(str(client.base_url))
         if route.mode == 'strict_tokens' and (actual.scheme != 'https'
@@ -300,9 +315,10 @@ async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -
             raise CompletionHeld('resolved_endpoint_cap_unverified')
         client._client.follow_redirects = False
         _install_response_limit(client._client)
-        bounded = client.with_options(max_retries=0, timeout=timeout)
+        remaining = remaining_budget(deadline)
+        bounded = client.with_options(max_retries=0, timeout=remaining)
         create = bounded.chat.completions.with_streaming_response.create
-        async with asyncio.timeout(timeout):
+        async with asyncio.timeout_at(deadline):
             async with create(
                     model=model, messages=messages, stream=False, **{cap.output_limit_parameter: max_output_tokens}) as raw:
                 body = await _read(raw)
@@ -320,7 +336,7 @@ async def _complete(*, config, messages, max_output_tokens, timeout, deadline) -
         await client.close()
 
 
-async def _native_complete(client, model, route, cap, messages, tokens, timeout):
+async def _native_complete(client, model, route, cap, messages, tokens, timeout, deadline):
     """Reuse configured credential owners and native serializers, not thread I/O.
 
     Closing a connection cancels local transport and discards late results. It
@@ -338,7 +354,8 @@ async def _native_complete(client, model, route, cap, messages, tokens, timeout)
         expected_base = route.base_url.rstrip('/') if route.base_url else None
         if cap.transport == 'gemini_native' and expected_base and expected_base.endswith('/openai'):
             expected_base = expected_base[:-len('/openai')]
-        if expected_base is not None and base != expected_base:
+        from agent.bounded_provider_metadata import endpoint_identity
+        if expected_base is not None and endpoint_identity(base) != endpoint_identity(expected_base):
             raise CompletionHeld('configured_endpoint_changed')
         actual = urlparse(base)
         strict_endpoint = ((actual.hostname == 'api.anthropic.com' and actual.path.rstrip('/') in {'','/v1'})
@@ -388,8 +405,9 @@ async def _native_complete(client, model, route, cap, messages, tokens, timeout)
         headers['content-type'] = 'application/json'
         data = bytearray()
         async with http:
-            async with asyncio.timeout(timeout):
-                async with http.stream('POST',url,json=payload,headers=headers,timeout=timeout) as response:
+            remaining = remaining_budget(deadline)
+            async with asyncio.timeout_at(deadline):
+                async with http.stream('POST',url,json=payload,headers=headers,timeout=remaining) as response:
                     # No redirects, retry, credential refresh or recovery here.
                     if response.status_code != 200:
                         raise CompletionHeld('provider_http_'+str(response.status_code)+'_usage_unknown')

@@ -14,6 +14,21 @@ from clover_cli.providers import (
 DIRECT_API_BASE_URLS = {'openai': 'https://api.openai.com/v1'}
 
 
+def endpoint_identity(value):
+    """Structural owner identity; never rewrite the caller's endpoint token.
+
+    Default ports and the SDK's terminal slash are equivalent. Tenant/base
+    paths, non-default ports, and provider/config provenance stay distinct.
+    """
+    from urllib.parse import urlsplit
+    parsed = urlsplit(str(value or ''))
+    port = parsed.port
+    if port is None:
+        port = {'https': 443, 'http': 80}.get(parsed.scheme)
+    return (parsed.scheme, parsed.hostname, port, parsed.path.rstrip('/'),
+            parsed.username, parsed.password, parsed.query, parsed.fragment)
+
+
 def configured_entry(config, name):
     raw = name.lower()
     providers = config.get('providers', {})
@@ -34,6 +49,7 @@ class ProviderMetadata:
     auth_type: str
     key_envs: tuple[str, ...]
     configured: bool = False
+    credential_endpoint: str = ''
 
 
 def configured_metadata(config, name):
@@ -69,10 +85,12 @@ def metadata(config, name):
     owner = get_provider(name, allow_network=False)
     if owner is None:
         return ProviderMetadata(name, '', 'unsupported', 'unknown', ())
+    credential_endpoint = getattr(profile, 'base_url', '') or owner.base_url
     endpoint = (os.getenv(owner.base_url_env_var, '') if owner.base_url_env_var else '')
-    endpoint = endpoint or getattr(profile, 'base_url', '') or owner.base_url
+    endpoint = endpoint or credential_endpoint
     mode = getattr(profile, 'api_mode', None) or {
         'openai_chat': 'chat_completions', 'codex_responses': 'codex_responses',
         'anthropic': 'anthropic_messages'
     }.get(owner.transport, 'chat_completions')
-    return ProviderMetadata(owner.id, endpoint, mode, owner.auth_type, owner.api_key_env_vars)
+    return ProviderMetadata(owner.id, endpoint, mode, owner.auth_type, owner.api_key_env_vars,
+                            credential_endpoint=credential_endpoint)
