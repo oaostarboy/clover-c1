@@ -904,6 +904,10 @@ def _(rid, params: dict) -> dict:
         )
 
     if name == "proactive":
+        if arg.split()[:1] == ['presence']:
+            from tui_gateway import server as presence_server
+            from tui_gateway.presence import desktop_command
+            return _ok(rid, {'type':'exec', 'output':desktop_command(presence_server, params, arg.split()[1:])['text']})
         from clover_cli.proactive import proactive_command
         return _ok(rid, {"type": "exec", "output": proactive_command(arg, can_change=True)})
 

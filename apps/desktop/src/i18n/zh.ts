@@ -3,6 +3,14 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import type { Translations } from './types'
 
 export const zh: Translations = {
+  presence: {
+    title: "一个待核实的想法",
+    inspect: "查看来源",
+    forget: "忘记",
+    correct: "纠正",
+    stop: "全部停止",
+    failed: "未作更改。此操作可能已过期。",
+  },
   common: {
     apply: '应用',
     back: '返回',

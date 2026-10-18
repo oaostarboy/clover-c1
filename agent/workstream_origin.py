@@ -48,6 +48,7 @@ class _Issue:
     scope: tuple = ()
     content_digest: str = ""
     source_current: Optional[Callable[[], bool]] = None
+    presence_generation: int = -1
 
 
 # id(event) -> issue, for events an authenticated adapter minted and the
@@ -75,12 +76,13 @@ class HumanIngress:
     seal: str = ""
     scope: tuple = ()
     content_digest: str = ""
+    presence_generation: int = -1
 
     def _payload(self) -> bytes:
         return json.dumps((
             self.event_id, self.platform, self.profile, self.session_id,
             self.session_key, str(int(self.run_generation)),
-            self.scope, self.content_digest,
+            self.scope, self.content_digest, self.presence_generation,
         ), ensure_ascii=True, separators=(",", ":")).encode("utf-8")
 
 
@@ -114,7 +116,18 @@ def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
             return False
         binding = scope_binding(scope) if scope is not None else ()
         digest = text_digest(original_text) if original_text is not None else ""
-        _ISSUED[key] = _Issue(ref, str(platform), uuid.uuid4().hex, binding, digest, is_current)
+        generation = -1
+        source = getattr(event, 'source', None)
+        private = (getattr(scope, 'private', False) if scope is not None else
+                   getattr(source, 'chat_type', None) in {'dm', 'private'})
+        if private and platform in {'telegram', 'desktop'}:
+            try:
+                from agent.presence_lifecycle import note_human_input
+                from agent.workstreams import current_profile
+                generation = note_human_input(scope.profile if scope is not None else current_profile())
+            except Exception:
+                pass  # Ordinary input is unaffected; optional presence holds.
+        _ISSUED[key] = _Issue(ref, str(platform), uuid.uuid4().hex, binding, digest, is_current, generation)
     return True
 
 
@@ -216,6 +229,7 @@ def redeem_human_ingress(
         session_id=str(session_id), session_key=str(session_key),
         run_generation=int(run_generation),
         scope=issue.scope, content_digest=issue.content_digest,
+        presence_generation=issue.presence_generation,
     )
     return replace(ingress, seal=_seal(ingress))
 

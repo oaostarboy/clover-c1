@@ -4277,6 +4277,11 @@ def save_config(
         if not fb_is_valid:
             parts.append(_FALLBACK_COMMENT)
 
+        # Revoke optional presence before the settings write can race an
+        # in-flight publisher. Re-enable invalidates old records, never replays.
+        if (get_clover_home().resolve() / 'cron' / 'presence.db').exists():
+            from agent.presence_lifecycle import before_config_write
+            before_config_write(raw_existing, normalized)
         if preserve_comments:
             from utils import atomic_roundtrip_yaml_save
 

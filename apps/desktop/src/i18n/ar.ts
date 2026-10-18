@@ -1,6 +1,14 @@
 import { defineLocale } from './define-locale'
 
 export const ar = defineLocale({
+  presence: {
+    title: "فكرة للتحقق",
+    inspect: "فحص المصدر",
+    forget: "نسيان",
+    correct: "تصحيح",
+    stop: "إيقاف في كل مكان",
+    failed: "لم يتم إجراء تغيير. ربما انتهت صلاحية هذا الإجراء.",
+  },
   sendDiagnostics: {
     title: 'إرسال التشخيصات إلى Clover',
     privacyNotice:

@@ -6,11 +6,13 @@ import { type AgentNoticePayload, clearAgentNotice, nativeNoticeInput, showAgent
 import { clearClarifyRequest } from '@/store/clarify'
 import { reconcileSessionCompacting, setSessionCompacting } from '@/store/compaction'
 import { refreshBackgroundProcesses } from '@/store/composer-status'
+import { $gateway } from '@/store/gateway'
 import { applyGoalStatusText } from '@/store/goals'
 import { dispatchNativeNotification } from '@/store/native-notifications'
 import { isDiskFullErrorMessage, notify, notifyError } from '@/store/notifications'
 import { requestDesktopOnboarding } from '@/store/onboarding'
 import { flashPetActivity, setPetActivity } from '@/store/pet'
+import { acceptPresenceInitiative, clearPresence } from '@/store/presence'
 import { clearAllPrompts } from '@/store/prompts'
 import { setTurnStartedAt } from '@/store/session'
 import { clearActiveSessionTodos } from '@/store/todos'
@@ -22,6 +24,23 @@ import type { GatewayEventContext } from './types'
 export function handleStatusEvent(ctx: GatewayEventContext): boolean {
   const { deps, event, payload, sessionId, isActiveEvent, occurredAt } = ctx
   const { compactedTurnRef, failAssistantMessage, flushQueuedDeltas, updateSessionState } = deps
+
+  if (event.type === 'presence.initiative') {
+    const gateway = $gateway.get()
+
+    if (sessionId && ctx.fromActiveSource() && gateway) {
+      void acceptPresenceInitiative(deps.activeGatewayProfile, sessionId, payload,
+        (method, params) => gateway.request(method, params))
+    }
+
+    return true
+  }
+
+  if (event.type === 'presence.clear') {
+    if (sessionId && ctx.fromActiveSource()) {clearPresence(deps.activeGatewayProfile, sessionId)}
+
+    return true
+  }
 
   if (event.type === 'status.update') {
     if (sessionId && payload?.kind === 'compacting') {

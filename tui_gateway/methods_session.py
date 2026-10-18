@@ -3080,6 +3080,12 @@ def _(rid, params: dict) -> dict:
     session, err = _sess_nowait(params, rid)
     if err:
         return err
+    try:
+        from tui_gateway import server as _presence_server
+        from agent.presence_lifecycle import stop_existing_desktop_presence
+        stop_existing_desktop_presence(_presence_server, session)
+    except Exception:
+        logger.debug('Presence epoch Stop failed; ordinary interrupt continues', exc_info=True)
     if _session_uses_compute_host(session):
         sid = str(params.get("session_id") or "")
         try:

@@ -1,129 +1,168 @@
 # Presence integration candidate (not release approval)
 
-This isolated candidate joins the S0/W1/W2/W3 packets. It remains default off.
-It does not authorize deployment, restart, version changes, or real provider use.
+This isolated candidate joins S0/W1/W2/W3 and repairs the reproduced W4 defects.
+It remains **default off**. It does not authorize deployment, restart, a version
+change, paid inference, live configuration changes or real message sends.
 
-## Connected route
+## Connected application paths
 
-Private authenticated Telegram input reaches the existing receipt-backed
-`prepare_offer_turn` seam. `Carry thought: <summary>` admits a durable W1 thought.
-Only the first line is the summary. The complete nominated human row remains
-source evidence; there is no historical scan. A subsequent relevant, successful
-requested text reply must receive the adapter's actual send ACK before the
-existing post-delivery callback can run W2. No timer is installed.
+Private authenticated Telegram and server-authenticated desktop WebSocket input
+reach the existing receipt-backed `prepare_offer_turn` seam. `Carry thought:
+<summary>` admits a durable W1 thought; only the first line is its summary. The
+complete, nominated human row remains evidence. No historical scan is performed.
 
-W2 projects W1 state plus profile-local proposal history from the same
-`cron/presence.db`. It reserves before dispatch: at most one attempt per event
-and thought revision, three/day/profile, and 512 requested output tokens, further
-bounded by existing proactive auxiliary caps. Failed calls, refusals and timeouts
-consume reservations. There are no refunds, retries, provider fallbacks, tools,
-research or guessed currency. The physical auxiliary request is through
-`agent.auxiliary_client.presence_completion`, not `async_call_llm`.
+A subsequent relevant, successful requested reply must receive its real surface
+ACK before W2 can assess an optional initiative. Telegram uses the adapter's
+existing generation-bound post-delivery callback. Desktop stages an opaque,
+transport/principal/session-bound capability on `message.complete`; the actual
+renderer acknowledges the requested reply after storing it. Neither path inserts
+an invented user message or turns the initiative into an ordinary reply footer.
 
-The bounded auxiliary candidate accepts **explicit OpenAI-compatible API-key
-routes only** (`auxiliary.presence.provider: openai` or `custom`, plus an explicit
-model). Custom requires `auxiliary.presence.base_url` explicitly; a missing
-endpoint holds before the general resolver and cannot trigger another API-key
-provider's detection/fallback. OAuth, auto-selection and compatibility wrappers
-hold. Credentials stay
-in the existing credential owner, never in presence state/config. The native
-async SDK receives `max_retries=0`; cancellation propagates. The normal agent's
-provider and its retry behavior are unchanged.
+W2 reads bounded W1 state and shared profile-local history in `cron/presence.db`.
+Before inference it reserves at most one physical attempt per event and thought
+revision, three calls/day/profile, and 512 requested output tokens, further
+bounded by existing proactive caps. Failed calls, refusals and timeouts consume
+reservations. No refunds, generic retries, provider fallbacks, tools, sensors,
+background research or guessed cost accounting are added.
 
-W3 validates the proposal, then the same profile store CAS-claims it. The
-Telegram adapter owns a distinct plain-text `sendMessage` attempt. This is not
-an inline footer and not an invented user utterance. No initiative is inserted
-into provider history. An adapter ACK transitions to acknowledged; exceptions,
-cancellation, missing ACK or revoked state hold as unknown. Attempting/claimed
-records are never automatically replayed, including after restart. An unresolved
-attempting record is ambiguous, not an ACK. No exactly-once guarantee is claimed.
+The auxiliary route is `agent.auxiliary_client.presence_completion`, not the
+general retrying call helper. Only explicit OpenAI-compatible API-key routes
+(`auxiliary.presence.provider: openai` or `custom`, plus an explicit model) are
+supported. Custom also requires its explicit `base_url`; missing endpoints hold
+before auto-detection. OAuth, auto-selection and compatibility wrappers hold.
+Credentials remain in the existing credential owner. The native async SDK uses
+`max_retries=0`, a bounded timeout and cancellation. Ordinary provider calls are
+unchanged.
 
-## Current-turn posture
+W3 validates, CAS-claims and attempts a distinct publication through the surface
+owner. Telegram makes one plain `sendMessage` attempt without Markdown fallback,
+splitting, delivery-ledger retry or notification escalation. Desktop emits a
+bounded `presence.initiative` status-feed frame with `focus: false` and
+`navigate: false`. The mounted renderer stores a profile/session-scoped row and
+round-trips its opaque ACK to that exact authenticated owner. It never inserts a
+chat bubble, navigates or takes focus. Its card offers Inspect, Forget, Correct
+and Stop. Labels exist in all shipped desktop locales.
 
-Only a current authenticated bounded human input containing explicit
-`frustrated`/`frustrating` language is screened for tentative affect. This is a
-narrow first assessment producer, not a general emotion detector. Its request
-shares the same profile/day/event budget. W1 validates the optional VA/confidence
-reading, evidence and generation. Low confidence, invalid JSON/numerics, expiry,
-Stop, source deletion/correction, invalid managed policy or provider failure
-produces ordinary composition.
+An ACK marks the durable receipt acknowledged only while source/policy/generation
+remain current. Cancellation, revoked state or a missing/ambiguous ACK holds.
+Attempting/claimed/unknown records never replay automatically, including after
+restart or a process ending between durable attempt and ACK. There is no
+exactly-once delivery or atomic cross-database/network guarantee.
 
-A careful/brief posture is appended only to the current real user message's
-`api_content` sidecar, before the ordinary provider request. Raw user content,
-cached system prefix, previous messages and tools do not change. Exact sent
-sidecar bytes are persisted to keep later replay cache-stable; raw emotional
-samples/history are not stored. `Presence: ordinary` is a current-turn correction;
-a following ordinary reply has no posture injection. No affect grants authority.
-MoA and Codex app-server composition are not enabled by this candidate.
+## Explicit cross-surface sharing
 
-## Controls and settings
+Unlinked conversations do not share thoughts. A numeric user ID, matching project
+name, client `principal_id` or display name is never an identity link.
 
-In a development profile, existing configuration commands can set
-`presence.enabled`; this is independent of and subordinate to proactive master,
-active mode, suggestions, managed policy, and the explicit after-reply timing
-preference. No live profile was changed by this implementation.
+1. In an authenticated private Telegram conversation, use `/proactive presence
+   link` under the existing scoped admin and managed-policy gates.
+2. In your authenticated desktop conversation in the **same profile and exact
+   project**, use `/proactive presence link <code> confirm` within five minutes.
+   Both conversations must first have a real requested turn.
+3. Both authenticated owners now refer to one canonical presence context. Only
+   future explicitly carried thoughts enter it; no old thoughts/history migrate.
+4. `/proactive presence unlink` from either linked conversation revokes the link
+   and advances the shared epoch. Re-linking creates a new context, not a replay.
 
-Private Telegram controls use the existing `/proactive` command's current scoped
-admin authorization, source admission, stale-command and managed-policy gates:
+The one-use challenge is stored only as a hash. The existing W1 store owns link
+membership, budget, proposals, claims, generation and revocation; there is no
+second scheduler, identity authority or publication database. Exact source-row
+reads additionally verify the persisted session owner/surface and digest.
 
-- `/proactive presence status`: exact-conversation dormant thought inspection.
-- `/proactive presence stop`: durable profile-wide initiative epoch revocation;
-  ordinary requested replies remain available.
-- `/proactive presence forget <exact-id>`: tombstone the source-derived thought
-  and stop pending initiative. It does not delete the original session message.
-- `/proactive presence correct <exact-id>`: invalidate the old thought and stop;
-  a new authenticated `Carry thought:` input can supply a replacement.
-- `/proactive presence resume`: explicit reset for future thoughts only. It
-  invalidates old pending thoughts and does not enable any disabled settings,
-  replay unknown sends, or refund provider budget.
+## Explicit project return
 
-Optional `presence.quiet_hours: {start_utc: 22, end_utc: 7}` gates opportunities
-and affect inference. Values are integer UTC hours 0..24; malformed schedules
-hold, equal endpoints mean all day. No schedule means no additional quiet window;
-the existing explicit after-reply attention preference remains mandatory for
-initiative. `presence.denied_categories` can veto W1 thought purposes.
+`presence.project_return_enabled` is a separate **false-by-default** narrowing
+control. Global presence/proactive/managed/attention policy must still allow it.
+A successful authenticated desktop reply can advertise this capability to its
+renderer. The actual composer status stack sends one `presence.project_return`
+opportunity when the user selects that backend-enabled conversation; no timer,
+visibility poll or history scan runs. An ordinary selected conversation with no
+backend capability sends no presence RPC.
 
-## State and rollback
+The server verifies the exact current session, login identity object, transport,
+profile/project, idle state and retained authenticated context anchor. It creates
+an opportunity, not a human-ingress receipt or user utterance. Its topic is the
+last nominated visible human topic, not a manufactured instruction. It advances
+the shared generation, refreshes the current linked context and uses the same
+W1/W2/W3 path. Quiet hours, relevance, caps, source validity, Stop and no-replay
+rules still apply. After a server restart a fresh authenticated requested turn
+must establish an anchor; no unsolicited history recovery is attempted.
 
-Schema 2 adds epoch/budget/publication tables to the existing W1 presence store.
-Schema 1 migrates additively on an authorized write, never on a read. Unknown or
-corrupt schemas hold. Tables retain at most 128 rows; logical thought/receipt
-payload is bounded. No automatic tombstone or reservation eviction is implemented;
-capacity exhaustion holds and needs an explicit reviewed retention/reset design.
+## Current-turn emotional context
 
-Disabling effective policy stops provider/context/publication at each fence.
-Use the explicit Stop control for a durable epoch revocation, then disable the
-setting for rollback. Generic config off/on transitions do not yet have a
-profile-wide mutation hook, so automatic rollback/re-enable acceptance remains a
-release blocker. Dormant inspect/forget stays available under authorization.
+Only current authenticated bounded input containing explicit `frustrated` or
+`frustrating` language is screened. This narrow producer is not a general emotion
+detector or accuracy evaluation. It shares the same profile/day/event budget.
+W1 validates optional VA/confidence, exact evidence, expiry and generation.
+Invalid JSON/numerics, low confidence, Stop, deletion/correction, invalid managed
+policy or provider failure produce ordinary composition.
 
-## Exact remaining release work
+Careful/brief posture reaches only the current real user message's `api_content`
+sidecar before the ordinary request. Raw user content, cached system prefix,
+previous messages and tools do not change. Exact sent bytes persist through an
+expected-row guard for cache-stable replay. Raw affect samples/history are not
+stored. `Presence: ordinary` corrects the next current turn. No affect changes
+permissions, tools, budget, obligations or authority. This path is exercised on
+both Telegram and desktop. MoA/Codex app-server are not enabled by this candidate.
 
-- Desktop: W3 payload/control contracts are integrated, but no authenticated
-  desktop initiative producer, renderer/status-feed consumer, transport ACK or
-  native controls are wired. No desktop speak-first claim. Explicit identity
-  linkage across Telegram/desktop must be implemented; numeric IDs are not links.
-- Actual project-return event producer is not wired; only after-reply is live in
-  the candidate. No general automatic thought extraction or general affect model.
-- Existing `/stop` interrupts its ordinary session/generation, but is not yet
-  bound to the new profile-wide epoch. Use `/proactive presence stop` for the
-  durable presence Stop in this candidate. Cross-surface correction/input needs
-  linkage and a shared durable generation owner, not the current gateway run map.
-- Readback fences surround provider, proposal, claim and native publication, but
-  SessionDB source mutation, presence transactions and physical transport are not
-  one atomic transaction. Independent cross-process source/Stop/publish race and
-  crash/lease recovery acceptance remains required. There is no automatic resend.
-- Multiplex-profile callback-context acceptance and a bounded authorized retention
-  reset remain required before enabling beyond the tested single-profile route.
-- Supported provider role serialization outside the tested native chat route,
-  streaming-final ACK handoff, MoA/Codex app-server parity and emotional accuracy
-  remain unproven. Streaming-only requested responses conservatively do not offer.
-- Full repository suite, independent merged specification/security review and
-  fresh W4 recheck, native Windows/macOS/Linux, migration/rollback product tests,
-  Nix/Docker built-artifact license/NOTICE audit and native desktop acceptance are
-  release gates. Linux targeted tests do not imply any of these gates passed.
+## Controls, rollback and storage
 
-No source was copied into a running release. No paid inference or external send
-was performed. Test providers use native SDK requests against synthetic HTTP
-transports; application networking is blocked. Test Telegram sends end at a
-scripted native Bot boundary. See the integration handoff for source-pinned logs.
+Native `/proactive presence status | stop | resume | forget <id> | correct <id> |
+link | unlink` controls use existing authenticated surface ownership and managed
+policy. Desktop link confirmation uses the syntax above. Status is a dormant
+exact-context inspection. Forget/correct tombstones the derivative, not the
+original session message, and stops pending initiative. Resume admits future
+thoughts only; it does not enable disabled settings, refund budget or replay
+unknown sends. Scoped admin authorization still applies on Telegram.
+
+Generic Telegram `/stop` and authenticated desktop `session.interrupt` now revoke
+the shared profile presence epoch as well as performing their existing ordinary
+Stop behavior. Normal configuration OFF writes revoke before saving; OFF->ON
+resets old pending records before enabling. A corrupt presence DB remains
+untouched and fails closed, but does not prevent saving OFF. Disabling optional
+presence does not disable requested replies.
+
+Optional `presence.quiet_hours: {start_utc: 22, end_utc: 7}` gates inference and
+publication; malformed schedules hold. `presence.denied_categories` can veto W1
+purposes. The explicit proactive after-reply timing preference remains mandatory.
+
+Schema 4 additively extends candidate schemas 1/2/3 on authorized writes, never on
+reads. Unknown/corrupt schemas hold without repair. Human input generation is
+captured at the authenticated mint, including queued input, and sealed into the
+existing ingress capability. Independent processes share its SQLite counter.
+Proposal/claim/attempt/ACK transactions compare generation and epoch under the
+existing SQLite write lock. Link changes and Stop invalidate old work.
+
+Thought, tombstone and owner tables retain at most 128 records; identity tables
+have separate 32-row caps, with aggregate logical payload bounds. Expired link
+challenges can be removed on a new issue. No unsafe publication lease stealing or
+automatic reservation/tombstone eviction is implemented. Exhaustion holds until
+an explicit reviewed retention/reset design exists.
+
+## Evidence and remaining release gates
+
+Canonical Python tests use temporary homes and a network guard. Native SDK HTTP,
+Telegram Bot and server login boundaries are synthetic; no live inference or send
+occurs. A connected offline bridge sends an actual Python application frame to
+the mounted TypeScript composer/status renderer, then dispatches that renderer's
+ACK to the still-live owner and checks its durable acknowledged receipt. This is
+not a static JSON fixture or an Electron installer/native-window acceptance test.
+
+The desktop production renderer/Electron bundles build on Linux. Normal Python
+wheel/sdist creation is deliberately unsupported by the project's existing
+installer/Docker/Nix distribution guard; it was not bypassed by pretending to be
+a Nix build. NEKO LICENSE, NOTICE and provenance declarations remain packaged in
+the source archive and license-file metadata.
+
+Still required before release: independent merged specification/security review
+and fresh adversarial review; full repository/platform acceptance beyond the
+recorded selected regression set; Windows/macOS and actual native desktop runtime
+acceptance; streaming-final reply ACK, MoA/Codex and provider compatibility gates;
+explicit multiplex-profile acceptance; reviewed bounded retention/reset UX;
+canonical SessionDB mutation versus transport crash/race acceptance; emotional
+accuracy/user evaluation; actual Nix/Docker/native-package NOTICE audits and
+product migration/rollback tests. No Linux result implies those gates passed.
+
+The source-pinned handoff and raw receipts are authoritative for the exact tested
+SHA and counts. Nothing was pushed, deployed, restarted or enabled in a live
+profile. Installed skills, prompts and user memories were not changed.

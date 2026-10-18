@@ -9,8 +9,10 @@ import { triggerHaptic } from '@/lib/haptics'
 import { billingCtaLabel, clearBillingBlock, runBillingRecovery, setBillingBlock } from '@/store/billing-block'
 import { clearClarifyRequest } from '@/store/clarify'
 import { setSessionCompacting } from '@/store/compaction'
+import { $gateway } from '@/store/gateway'
 import { notify } from '@/store/notifications'
 import { flashPetActivity, markPetUnread, setPetActivity } from '@/store/pet'
+import { clearPresence, registerPresenceReturn } from '@/store/presence'
 import { clearAllPrompts } from '@/store/prompts'
 import { providerWaitText, setSessionProviderWait } from '@/store/provider-wait'
 import { setCurrentUsage, setTurnStartedAt } from '@/store/session'
@@ -76,6 +78,8 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
   } = deps
 
   if (event.type === 'message.start') {
+    if (sessionId && ctx.fromActiveSource()) {clearPresence(deps.activeGatewayProfile, sessionId)}
+
     if (!sessionId) {
       return true
     }
@@ -344,6 +348,18 @@ export function handleMessageStreamEvent(ctx: GatewayEventContext): boolean {
         : undefined
 
     completeAssistantMessage(sessionId, finalText, payload?.response_previewed, failure, occurredAt)
+    const afterToken = (payload as Record<string, unknown> | undefined)?.presence_after_reply_token
+    const presenceGateway = $gateway.get()
+
+    if (!failure && ctx.fromActiveSource() && typeof afterToken === 'string' && presenceGateway) {
+      // ACK only after this actual requested reply entered renderer state.
+      const enabledReturn = (payload as Record<string, unknown> | undefined)?.presence_project_return_enabled === true
+      registerPresenceReturn(deps.activeGatewayProfile, sessionId, enabledReturn
+        ? (method, params) => presenceGateway.request(method, params) : null)
+      void presenceGateway.request('presence.after_reply', { session_id: sessionId, token: afterToken }).catch(() => {})
+    } else if (ctx.fromActiveSource()) {
+      registerPresenceReturn(deps.activeGatewayProfile, sessionId, null)
+    }
 
     // Structured billing wall forwarded by the gateway (out of credits /
     // payment required) — cache it + raise a billing-specific toast.

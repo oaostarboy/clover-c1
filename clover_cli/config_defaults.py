@@ -2942,6 +2942,7 @@ DEFAULT_CONFIG = {
     # original runtime continuation plan.
     "presence": {
         "enabled": False,
+        "project_return_enabled": False,
         "denied_categories": [],
     },
     "proactive": {

@@ -1786,6 +1786,11 @@ class GatewaySlashCommandsMixin:
         from gateway.clover_acks import stop_ack
         from gateway.run import _AGENT_PENDING_SENTINEL, _INTERRUPT_REASON_STOP
         source = event.source
+        try:
+            from agent.presence_lifecycle import stop_existing_gateway_presence
+            stop_existing_gateway_presence(self, source)
+        except Exception:
+            logger.debug('presence Stop unavailable; ordinary Stop continues', exc_info=True)
         session_entry = await self.async_session_store.get_or_create_session(source)
         session_key = session_entry.session_key
 

@@ -20,7 +20,7 @@ from agent.presence_state import ContextKey, EvidenceRef, Thought, PresenceStore
 from agent.workstreams import Scope
 from clover_constants import get_clover_home
 
-SCHEMA_VERSION = 2
+SCHEMA_VERSION = 4
 MAX_RECORDS = 128  # Per profile, each table, including tombstones.
 MAX_STORE_BYTES = 64 * 1024
 _SOURCE_DDL = """CREATE TABLE presence_invalidations (
@@ -69,6 +69,26 @@ def _validate_records(conn: sqlite3.Connection) -> None:
         if status not in {"corrected", "deleted", "invalidated"}:
             raise PresenceStoreError("invalid correction tombstone")
 
+    version = conn.execute("PRAGMA user_version").fetchone()[0]
+    if version >= 3:
+        generation = conn.execute("SELECT generation FROM presence_epoch WHERE id=1").fetchone()[0]
+        if type(generation) is not int or generation < 0:
+            raise PresenceStoreError("invalid shared generation")
+    if version >= 4:
+        expected_members = set()
+        for link_id, raw in conn.execute("SELECT link_id,record FROM presence_links"):
+            values = json.loads(raw)
+            if not isinstance(values, list) or len(values) != 2 or {v['surface'] for v in values} != {'telegram','desktop'}:
+                raise PresenceStoreError("invalid authenticated presence link")
+            keys = [ContextKey(Scope(**v['key']['scope']), v['key']['conversation_root']) for v in values]
+            if (keys[0] == keys[1] or keys[0].scope.profile != keys[1].scope.profile
+                    or keys[0].scope.project != keys[1].scope.project
+                    or any(not k.scope.private for k in keys)):
+                raise PresenceStoreError("presence link scope mismatch")
+            expected_members.update((_context(k),link_id) for k in keys)
+        if expected_members != set(conn.execute("SELECT context,link_id FROM presence_link_members")):
+            raise PresenceStoreError("presence link ownership mismatch")
+
 
 def _check_capacity(conn: sqlite3.Connection) -> None:
     count, size = conn.execute("SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST(record AS BLOB))),0) FROM presence_thoughts").fetchone()
@@ -82,6 +102,15 @@ def _check_capacity(conn: sqlite3.Connection) -> None:
         owner_size = conn.execute("SELECT COALESCE(SUM(LENGTH(CAST(record AS BLOB))),0) FROM presence_publications").fetchone()[0]
         if size + guard_size + owner_size > MAX_STORE_BYTES:
             raise PresenceStoreError("presence payload capacity exceeded")
+        if conn.execute("PRAGMA user_version").fetchone()[0] >= 4:
+            link_size = 0
+            for table, payload in [('presence_links','record'), ('presence_link_members','context'), ('presence_link_challenges','context')]:
+                count, length = conn.execute(f"SELECT COUNT(*), COALESCE(SUM(LENGTH(CAST({payload} AS BLOB))),0) FROM {table}").fetchone()
+                if count > 32:
+                    raise PresenceStoreError("presence identity capacity exceeded")
+                link_size += length
+            if size + guard_size + owner_size + link_size > MAX_STORE_BYTES:
+                raise PresenceStoreError("presence identity payload capacity exceeded")
         epoch = conn.execute("SELECT epoch,stopped FROM presence_epoch WHERE id=1").fetchone()
         if epoch is None or type(epoch[0]) is not int or epoch[0] < 0 or epoch[1] not in (0, 1):
             raise PresenceStoreError("invalid initiative epoch")
@@ -125,9 +154,11 @@ class ThoughtStore:
             tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
             original_tables = {"presence_thoughts", "presence_invalidations"}
             owner_tables = {"presence_epoch", "presence_budget", "presence_publications"}
-            if version not in (0, 1, SCHEMA_VERSION) or (version == 0 and tables):
+            if version not in (0, 1, 2, 3, SCHEMA_VERSION) or (version == 0 and tables):
                 raise PresenceStoreError("unsupported presence schema")
-            if version and tables != original_tables | (owner_tables if version == 2 else set()):
+            link_tables = {"presence_links", "presence_link_members", "presence_link_challenges"}
+            expected_tables = original_tables | (owner_tables if version >= 2 else set()) | (link_tables if version >= 4 else set())
+            if version and tables != expected_tables:
                 raise PresenceStoreError("incomplete presence schema")
             if conn.execute("PRAGMA quick_check").fetchone()[0] != "ok":
                 raise PresenceStoreError("corrupt presence store")
@@ -142,7 +173,13 @@ class ThoughtStore:
                     conn.execute("INSERT INTO presence_epoch VALUES (1,0,0)")
                     conn.execute("CREATE TABLE presence_budget (event_id TEXT PRIMARY KEY, thought_id TEXT NOT NULL, revision INTEGER NOT NULL, day TEXT NOT NULL, tokens INTEGER NOT NULL, UNIQUE(thought_id,revision))")
                     conn.execute("CREATE TABLE presence_publications (thought_id TEXT NOT NULL, revision INTEGER NOT NULL, event_id TEXT UNIQUE NOT NULL, epoch INTEGER NOT NULL, state TEXT NOT NULL, owner TEXT NOT NULL, record TEXT NOT NULL, PRIMARY KEY(thought_id,revision))")
-                    conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
+                if version < 3:
+                    conn.execute("ALTER TABLE presence_epoch ADD COLUMN generation INTEGER NOT NULL DEFAULT 0")
+                if version < 4:
+                    conn.execute("CREATE TABLE presence_links (link_id TEXT PRIMARY KEY, record TEXT NOT NULL)")
+                    conn.execute("CREATE TABLE presence_link_members (context TEXT PRIMARY KEY, link_id TEXT NOT NULL)")
+                    conn.execute("CREATE TABLE presence_link_challenges (token_hash TEXT PRIMARY KEY, context TEXT NOT NULL, surface TEXT NOT NULL, expires REAL NOT NULL, epoch INTEGER NOT NULL)")
+                conn.execute(f"PRAGMA user_version={SCHEMA_VERSION}")
             if version:
                 _check_capacity(conn)
                 _validate_records(conn)
@@ -240,6 +277,96 @@ class ThoughtStore:
                                 (_context(key), source.owner, source.source_id, source.revision))
             return all((old := _decode(row[0])).source == source and old.status == "pending" for row in rows)
 
+    def linked_members(self, key):
+        """Exact proof-linked contexts only; no numeric principal inference."""
+        with self._transaction() as conn:
+            if conn is None or conn.execute("PRAGMA user_version").fetchone()[0] < 4:
+                return ()
+            row = conn.execute("SELECT l.record FROM presence_links l JOIN presence_link_members m ON l.link_id=m.link_id WHERE m.context=?", (_context(key),)).fetchone()
+            if row is None and key.scope.audience.startswith('private:presence:'):
+                link_id = key.scope.audience.removeprefix('private:presence:')
+                row = conn.execute("SELECT record FROM presence_links WHERE link_id=?", (link_id,)).fetchone()
+            if row is None:
+                return ()
+            values = json.loads(row[0])
+            return tuple((ContextKey(Scope(**v['key']['scope']), v['key']['conversation_root']), v['surface']) for v in values)
+
+    def linked_key(self, key):
+        with self._transaction() as conn:
+            if conn is None or conn.execute("PRAGMA user_version").fetchone()[0] < 4:
+                return key
+            row = conn.execute("SELECT link_id FROM presence_link_members WHERE context=?", (_context(key),)).fetchone()
+            if row is None:
+                return key
+            link_id = row[0]
+            return ContextKey(Scope(key.scope.profile, key.scope.project, 'private:presence:'+link_id, link_id), 'presence:'+link_id)
+
+    def issue_link(self, key, surface, now):
+        if not key.scope.private or surface not in {'telegram','desktop'}:
+            return None
+        import hashlib
+        import secrets
+        token = secrets.token_urlsafe(18)
+        with self._transaction(write=True) as conn:
+            conn.execute("DELETE FROM presence_link_challenges WHERE expires<=?", (now.timestamp(),))
+            if conn.execute("SELECT 1 FROM presence_link_members WHERE context=?", (_context(key),)).fetchone():
+                return None
+            conn.execute("INSERT INTO presence_link_challenges VALUES (?,?,?,?,?)", (
+                hashlib.sha256(token.encode()).hexdigest(), _context(key), surface, now.timestamp()+300,
+                conn.execute("SELECT epoch FROM presence_epoch WHERE id=1").fetchone()[0]))
+        return token
+
+    def accept_link(self, token, key, surface, now, *, is_current=lambda: True):
+        import hashlib
+        import re
+        from uuid import uuid4
+        if (not isinstance(token, str) or not re.fullmatch(r'[A-Za-z0-9_-]{24}', token)
+                or not key.scope.private or surface not in {'telegram','desktop'}):
+            return False
+        with self._transaction(write=True) as conn:
+            if not is_current():
+                return False
+            row = conn.execute("SELECT context,surface,expires,epoch FROM presence_link_challenges WHERE token_hash=?", (hashlib.sha256(token.encode()).hexdigest(),)).fetchone()
+            if row is None or row[1] == surface or row[2] <= now.timestamp() or row[3] != conn.execute("SELECT epoch FROM presence_epoch WHERE id=1").fetchone()[0]:
+                return False
+            raw = json.loads(row[0])
+            other = ContextKey(Scope(**raw['scope']), raw['conversation_root'])
+            if (other.scope.profile != key.scope.profile or other.scope.project != key.scope.project
+                    or other == key or conn.execute("SELECT 1 FROM presence_link_members WHERE context IN (?,?)", (row[0],_context(key))).fetchone()):
+                return False
+            link_id = uuid4().hex
+            record = json.dumps([{'key':asdict(other), 'surface':row[1]}, {'key':asdict(key), 'surface':surface}], sort_keys=True, separators=(',',':'))
+            conn.execute("INSERT INTO presence_links VALUES (?,?)", (link_id,record))
+            conn.executemany("INSERT INTO presence_link_members VALUES (?,?)", [(row[0],link_id), (_context(key),link_id)])
+            if not is_current():
+                raise PresenceStoreError('presence link ownership changed')
+            conn.execute("DELETE FROM presence_link_challenges WHERE token_hash=?", (hashlib.sha256(token.encode()).hexdigest(),))
+            conn.execute("UPDATE presence_epoch SET epoch=epoch+1 WHERE id=1")
+            conn.execute("UPDATE presence_publications SET state='held' WHERE state IN ('proposed','claimed')")
+            return True
+
+    def unlink(self, key):
+        with self._transaction(write=True) as conn:
+            row = conn.execute("SELECT link_id FROM presence_link_members WHERE context=?", (_context(key),)).fetchone()
+            if row is None:
+                return False
+            conn.execute("DELETE FROM presence_link_members WHERE link_id=?", row)
+            conn.execute("DELETE FROM presence_links WHERE link_id=?", row)
+            conn.execute("UPDATE presence_epoch SET epoch=epoch+1 WHERE id=1")
+            conn.execute("UPDATE presence_publications SET state='held' WHERE state IN ('proposed','claimed')")
+            return True
+
+    def generation(self) -> int:
+        with self._transaction() as conn:
+            if conn is None or conn.execute("PRAGMA user_version").fetchone()[0] < 3:
+                return 0
+            return conn.execute("SELECT generation FROM presence_epoch WHERE id=1").fetchone()[0]
+
+    def advance_generation(self) -> int:
+        with self._transaction(write=True) as conn:
+            conn.execute("UPDATE presence_epoch SET generation=generation+1 WHERE id=1")
+            return conn.execute("SELECT generation FROM presence_epoch WHERE id=1").fetchone()[0]
+
     def initiative_status(self) -> tuple[int, bool]:
         with self._transaction() as conn:
             if conn is None or conn.execute("PRAGMA user_version").fetchone()[0] < 2:
@@ -269,12 +396,14 @@ class ThoughtStore:
             return conn.execute("SELECT epoch FROM presence_epoch WHERE id=1").fetchone()[0]
 
     def reserve_assessment(self, *, event_id: str, thought_id: str, revision: int,
-                           day: str, max_calls: int, tokens: int) -> bool:
+                           day: str, max_calls: int, tokens: int, generation: int | None = None) -> bool:
         if (type(max_calls) is not int or not 1 <= max_calls <= 3
                 or type(tokens) is not int or not 1 <= tokens <= 512):
             return False
         with self._transaction(write=True) as conn:
             if conn.execute("SELECT stopped FROM presence_epoch WHERE id=1").fetchone()[0]:
+                return False
+            if generation is not None and conn.execute("SELECT generation FROM presence_epoch WHERE id=1").fetchone()[0] != generation:
                 return False
             if conn.execute("SELECT COUNT(*) FROM presence_budget").fetchone()[0] >= MAX_RECORDS:
                 return False
@@ -285,7 +414,7 @@ class ThoughtStore:
             return result.rowcount == 1
 
     def propose(self, thought_id: str, revision: int, event_id: str, epoch: int, record: dict,
-                *, thought: Thought | None = None) -> bool:
+                *, thought: Thought | None = None, generation: int | None = None) -> bool:
         encoded = json.dumps(record, sort_keys=True, allow_nan=False)
         if len(encoded.encode()) > 4096:
             return False
@@ -297,27 +426,31 @@ class ThoughtStore:
                     return False
             if conn.execute("SELECT epoch,stopped FROM presence_epoch WHERE id=1").fetchone() != (epoch, 0):
                 return False
+            if generation is not None and conn.execute("SELECT generation FROM presence_epoch WHERE id=1").fetchone()[0] != generation:
+                return False
             result = conn.execute("INSERT OR IGNORE INTO presence_publications VALUES (?,?,?,?,?,?,?)",
                                   (thought_id, revision, event_id, epoch, 'proposed', '', encoded))
             return result.rowcount == 1
 
     def _transition(self, thought_id: str, revision: int, owner: str, epoch: int,
-                    before: str, after: str) -> bool:
+                    before: str, after: str, generation: int | None = None) -> bool:
         with self._transaction(write=True) as conn:
             if conn.execute("SELECT epoch,stopped FROM presence_epoch WHERE id=1").fetchone() != (epoch, 0):
+                return False
+            if generation is not None and conn.execute("SELECT generation FROM presence_epoch WHERE id=1").fetchone()[0] != generation:
                 return False
             result = conn.execute("UPDATE presence_publications SET state=?,owner=? WHERE thought_id=? AND revision=? AND epoch=? AND state=? AND (owner='' OR owner=?)",
                                   (after, owner, thought_id, revision, epoch, before, owner))
             return result.rowcount == 1
 
-    def claim(self, thought_id: str, revision: int, owner: str, epoch: int) -> bool:
-        return self._transition(thought_id, revision, owner, epoch, 'proposed', 'claimed')
+    def claim(self, thought_id: str, revision: int, owner: str, epoch: int, generation: int | None = None) -> bool:
+        return self._transition(thought_id, revision, owner, epoch, 'proposed', 'claimed', generation)
 
-    def attempt(self, thought_id: str, revision: int, owner: str, epoch: int) -> bool:
-        return self._transition(thought_id, revision, owner, epoch, 'claimed', 'attempting')
+    def attempt(self, thought_id: str, revision: int, owner: str, epoch: int, generation: int | None = None) -> bool:
+        return self._transition(thought_id, revision, owner, epoch, 'claimed', 'attempting', generation)
 
-    def acknowledge(self, thought_id: str, revision: int, owner: str, epoch: int) -> bool:
-        return self._transition(thought_id, revision, owner, epoch, 'attempting', 'acknowledged')
+    def acknowledge(self, thought_id: str, revision: int, owner: str, epoch: int, generation: int | None = None) -> bool:
+        return self._transition(thought_id, revision, owner, epoch, 'attempting', 'acknowledged', generation)
 
     def unknown(self, thought_id: str, revision: int, owner: str) -> None:
         with self._transaction(write=True) as conn:

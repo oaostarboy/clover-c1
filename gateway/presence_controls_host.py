@@ -30,7 +30,16 @@ async def command(runner, event, args, *, can_change):
     db = runner.session_store._db
     scope = ws.scope_for_surface(platform='telegram', chat_type=event.source.chat_type,
                                 chat_id=event.source.chat_id, user_id=event.source.user_id)
-    key = ContextKey(scope, db.get_conversation_root(entry.session_id))
+    original_key = ContextKey(scope, db.get_conversation_root(entry.session_id))
+    if action == 'link' and len(words) == 1:
+        code = store.issue_link(original_key, 'telegram', clock())
+        return (f'Link code: {code}\nValid for five minutes. In your authenticated desktop conversation in this same project, '
+                f'use /proactive presence link {code} confirm. This shares only future explicitly carried thoughts; no identity guessing or history migration.'
+                if code else 'This conversation is already linked or linking is unavailable. No changes made.')
+    if action == 'unlink' and len(words) == 1:
+        changed = store.unlink(original_key)
+        return 'Presence surface link revoked; old offers cannot replay.' if changed else 'No surface link in this conversation.'
+    key = store.linked_key(original_key)
     state = ThoughtState(key, SessionEvidence(db, key), store, clock=clock)
     if action == 'status' and len(words) <= 1:
         epoch, stopped = store.initiative_status()

@@ -76,6 +76,54 @@ def test_quiet_hours_and_managed_invalidity_make_zero_auxiliary_requests(monkeyp
         h.close()
 
 
+def test_generic_stop_revokes_presence_without_a_later_replay(monkeypatch, tmp_path):
+    h, requests, bot = setup_host(monkeypatch, tmp_path)
+    try:
+        h.inbound_human('Carry thought: deployment packaging\nEvidence: manifest checksum before publishing.', message_id=100)
+        native_command(h, '/stop', 101)
+        assert ThoughtStore().initiative_status()[1] is True, 'generic Stop missed durable presence epoch'
+        h.inbound_human('Help verify deployment packaging', message_id=102)
+        assert not requests and bot.send_message.await_count == 0
+        assert h.results[-1]['final_response'] == 'ack'
+    finally:
+        h.close()
+
+
+def test_config_off_then_on_invalidates_old_thoughts_without_replaying(monkeypatch, tmp_path):
+    from clover_cli.config import save_config
+    h, requests, bot = setup_host(monkeypatch, tmp_path)
+    try:
+        h.inbound_human('Carry thought: deployment packaging\nEvidence: manifest checksum before publishing.', message_id=100)
+        config = yaml.safe_load((h.home/'config.yaml').read_text())
+        config['presence']['enabled'] = False
+        save_config(config, strip_defaults=False)
+        assert ThoughtStore().initiative_status()[1] is True, 'config write missed revocation'
+        config['presence']['enabled'] = True
+        save_config(config, strip_defaults=False)
+        h.inbound_human('Help verify deployment packaging', message_id=101)
+        assert not requests and bot.send_message.await_count == 0
+    finally:
+        h.close()
+
+
+def test_config_can_disable_corrupt_presence_store_without_repairing_it(monkeypatch, tmp_path):
+    from clover_cli.config import save_config
+    h, requests, bot = setup_host(monkeypatch, tmp_path)
+    try:
+        h.inbound_human('Carry thought: deployment packaging', message_id=100)
+        store = ThoughtStore()
+        corrupt = b'synthetic corrupt presence DB; preserve for diagnosis'
+        store.path.write_bytes(corrupt)
+        config = yaml.safe_load((h.home/'config.yaml').read_text())
+        config['presence']['enabled'] = False
+        save_config(config, strip_defaults=False)
+        assert yaml.safe_load((h.home/'config.yaml').read_text())['presence']['enabled'] is False
+        assert store.path.read_bytes() == corrupt
+        assert not requests and bot.send_message.await_count == 0
+    finally:
+        h.close()
+
+
 def test_native_inspect_forget_resume_controls_are_scoped(monkeypatch, tmp_path):
     h, requests, bot = setup_host(monkeypatch, tmp_path)
     try:
@@ -114,9 +162,10 @@ def test_native_stop_control_revokes_profile_but_keeps_requested_replies(monkeyp
         h.close()
 
 
-@pytest.mark.parametrize('race', ['stop', 'delete', 'revoke', 'input', 'credential'])
+@pytest.mark.parametrize('race', ['stop', 'delete', 'revoke', 'input', 'credential', 'desktop_input'])
 def test_revocation_after_http_prevents_commit_and_publication(monkeypatch, tmp_path, race):
     h, requests, bot = setup_host(monkeypatch, tmp_path)
+    observations = []
     real = aux.presence_completion
     async def racing(**kwargs):
         raw = await real(**kwargs)
@@ -127,6 +176,17 @@ def test_revocation_after_http_prevents_commit_and_publication(monkeypatch, tmp_
             h.db._execute_write(lambda conn: conn.execute('DELETE FROM messages WHERE id=?', (row_id,)))
         elif race == 'credential':
             h.adapter._bot = SimpleNamespace(send_message=AsyncMock(return_value=SimpleNamespace(message_id=88)))
+        elif race == 'desktop_input':
+            from tui_gateway import server
+            from tests.tui_gateway.test_presence_integration import DesktopTransport
+            transport = DesktopTransport()
+            session = {'session_key':'desktop-new-input', 'clover_home':str(h.home),
+                'cwd':str(tmp_path), 'transport':transport}
+            monkeypatch.setattr(server, '_sessions', {'desktop-race':session})
+            generation = ThoughtStore().generation()
+            submission = server._capture_ws_human_submission({'method':'prompt.submit',
+                'params':{'session_id':'desktop-race','text':'New human input'}}, transport)
+            observations.append((submission is not None, generation, ThoughtStore().generation()))
         elif race == 'revoke':
             (h.home/'config.yaml').write_text(yaml.safe_dump({'presence':{'enabled':False}, 'proactive':ACTIVE}))
         else:
@@ -136,6 +196,9 @@ def test_revocation_after_http_prevents_commit_and_publication(monkeypatch, tmp_
     try:
         h.inbound_human('Carry thought: deployment packaging\nEvidence: manifest checksum before publishing.', message_id=100)
         h.inbound_human('Help verify deployment packaging', message_id=101)
+        if race == 'desktop_input':
+            assert len(observations) == 1 and observations[0][0]
+            assert observations[0][2] == observations[0][1]+1, 'authenticated input missed shared durable fence'
         assert len(requests) == 1
         assert not ThoughtStore().publications()
         assert bot.send_message.await_count == 0
@@ -162,6 +225,23 @@ def test_revocation_inside_attempt_fence_prevents_native_publication(monkeypatch
         assert len(requests) == 1
         assert bot.send_message.await_count == 0, 'deleted evidence reached native publication'
         assert ThoughtStore().publications()[0]['state'] != 'acknowledged'
+    finally:
+        h.close()
+
+
+def test_new_input_inside_proposal_owner_fence_rejects_durable_commit(monkeypatch, tmp_path):
+    h, requests, bot = setup_host(monkeypatch, tmp_path)
+    real = ThoughtStore.propose
+    def propose(store, *args, **kwargs):
+        store.advance_generation()
+        return real(store, *args, **kwargs)
+    monkeypatch.setattr(ThoughtStore, 'propose', propose)
+    try:
+        h.inbound_human('Carry thought: deployment packaging\nEvidence: manifest checksum before publishing.', message_id=100)
+        h.inbound_human('Help verify deployment packaging', message_id=101)
+        assert len(requests) == 1
+        assert not ThoughtStore().publications(), 'new input committed an obsolete proposal'
+        assert bot.send_message.await_count == 0
     finally:
         h.close()
 

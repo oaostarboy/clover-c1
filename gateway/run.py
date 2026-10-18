@@ -30411,6 +30411,12 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         """Interrupt the current run and clear queued session state consistently."""
         if not session_key:
             return
+        if interrupt_reason == _INTERRUPT_REASON_STOP:
+            try:
+                from agent.presence_lifecycle import stop_existing_gateway_presence
+                stop_existing_gateway_presence(self, source)
+            except Exception:
+                logger.debug('presence Stop unavailable; run interruption continues', exc_info=True)
         _iac_state = self._peek_session_state(session_key)
         running_agent = _iac_state.turn.agent if _iac_state else None
         _process_task_id = ""

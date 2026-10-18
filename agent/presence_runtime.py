@@ -1,7 +1,7 @@
 """Authenticated presence host: W1 state -> W2 assessment -> W3 publication.
 
 No timer or alternate conversation loop. Gateway registers one after-ACK callback.
-Only private same-origin Telegram is wired; desktop sharing needs an explicit link.
+Private Telegram and authenticated desktop are wired; sharing requires an explicit link.
 """
 from __future__ import annotations
 
@@ -58,13 +58,24 @@ class SessionEvidence:
     def __init__(self, db, key):
         self.db, self.key = db, key
 
+    def surface_for(self, ref):
+        session, _ = json.loads(ref.source_id)
+        root = self.db.get_conversation_root(session)
+        record = self.db.get_session(session)
+        surface = record.get('source') if isinstance(record, dict) else None
+        members = ThoughtStore().linked_members(self.key)
+        if self.key.scope.audience.startswith('private:presence:'):
+            return next((bound_surface for key,bound_surface in members
+                         if key.conversation_root == root and bound_surface == surface), None)
+        return surface if root == self.key.conversation_root else None
+
     def read_text(self, ref):
         if ref.owner != 'session_human' or ref.revision != 1:
             return None
         session, row_id = json.loads(ref.source_id)
         receipt = origin.read_human_origin(self.db, session, row_id)
         if (receipt is None or receipt.profile != self.key.scope.profile
-                or self.db.get_conversation_root(session) != self.key.conversation_root):
+                or self.surface_for(ref) not in {'telegram','desktop'}):
             return None
         rows = self.db.get_messages_around(session, row_id, window=0)['window']
         if (len(rows) != 1 or rows[0].get('role') != 'user'
@@ -83,8 +94,14 @@ class SessionEvidence:
 class PresenceTurn:
     def __init__(self, agent, turn):
         self.agent, self.turn = agent, turn
-        self.key = ContextKey(turn.scope, turn.conversation_root)
+        self.event_id, self.query = turn.event_id, turn.query
+        self.input_generation = turn.ingress.presence_generation
+        self.event_generation = turn.ingress.run_generation
+        self.source_id = json.dumps([turn.session_id, turn.row_id], separators=(',', ':'))
+        self.original_key = ContextKey(turn.scope, turn.conversation_root)
         self.store = ThoughtStore()
+        self.key = self.store.linked_key(self.original_key)
+        self.link_id = (self.key.scope.root if self.key != self.original_key else '')
         self.epoch, self.stopped = self.store.initiative_status()
         self.stop_generation = getattr(agent, '_human_ingress_stop_generation', 0)
         self.reader = SessionEvidence(agent._session_db, self.key)
@@ -92,10 +109,35 @@ class PresenceTurn:
         self.state = ThoughtState(self.key, self.reader, self.store, clock=clock,
                                   enabled=True, is_current=self.current)
 
+    def project_return(self):
+        """Owner-authenticated view opportunity, not a fabricated human turn.
+
+        A shallow clone retains only the nominated last visible topic/context.
+        It does not create an ingress receipt, chat row, provider history, or
+        user message. Its fresh shared generation revokes older optional work.
+        """
+        from copy import copy
+        result = copy(self)
+        result.turn = None
+        result.event_id = uuid4().hex
+        result.source_id = None
+        result.key = self.store.linked_key(self.original_key)
+        result.link_id = result.key.scope.root if result.key != result.original_key else ''
+        result.epoch, result.stopped = self.store.initiative_status()
+        result.input_generation = self.store.advance_generation()
+        result.event_generation = result.input_generation
+        result.reader = SessionEvidence(self.agent._session_db, result.key)
+        result.state = ThoughtState(result.key, result.reader, result.store, clock=clock,
+                                    enabled=True, is_current=result.current)
+        return result
+
     def current(self):
         try:
             return (self.gateway_current() is True and effective_policy()[0]
-                    and ws.scope_for_agent(self.agent) == self.key.scope
+                    and ws.scope_for_agent(self.agent) == self.original_key.scope
+                    and self.store.linked_key(self.original_key) == self.key
+                    and self.input_generation == self.store.generation()
+                    and self.input_generation >= 0
                     and self.store.initiative_status() == (self.epoch, False)
                     and self.stop_generation == getattr(self.agent, '_human_ingress_stop_generation', 0))
         except Exception:
@@ -105,7 +147,7 @@ class PresenceTurn:
         if not self.current():
             return None
         thoughts = [t for t in self.state.list_pending()
-                    if t.source.source_id != json.dumps([self.turn.session_id, self.turn.row_id], separators=(',', ':'))]
+                    if t.source.source_id != self.source_id]
         if not thoughts:
             return None
         thought = thoughts[0]
@@ -132,7 +174,7 @@ class PresenceTurn:
             return False
         return self.store.reserve_assessment(event_id=request['event_id'], thought_id=request['thought_id'],
             revision=request['revision'], day=request['day'], max_calls=request['max_calls_per_day'],
-            tokens=request['max_output_tokens'])
+            tokens=request['max_output_tokens'], generation=self.input_generation)
 
     def commit(self, decision):
         snapshot = self.snapshot()
@@ -144,17 +186,17 @@ class PresenceTurn:
             dict(context=self.key.conversation_root, scope=self.key.scope.__dict__, at=clock().isoformat(),
                  fingerprint=decision.fingerprint,
                  evidence=[[r.owner, r.source_id, r.digest] for r in decision.evidence]),
-            thought=snapshot.thought)
+            thought=snapshot.thought, generation=self.input_generation)
 
-    async def publish(self, adapter, source):
+    async def publish(self, adapter, source, *, surface='telegram', kind='after_reply'):
         from agent.presence_initiation import InitiationEvent, assess_initiation
         from agent.auxiliary_client import presence_completion
         from gateway.presence_delivery import (DeliveryScope, SurfaceBinding, DeliveryOffer,
             PublicationContext, prepare_publication, surface_payload)
         if not self.current():
             return
-        event = InitiationEvent(self.key.scope, self.key.conversation_root, self.turn.event_id,
-            'after_reply', self.epoch, self.turn.ingress.run_generation, True, self.turn.query)
+        event = InitiationEvent(self.key.scope, self.key.conversation_root, self.event_id,
+            kind, self.epoch, self.event_generation, True, self.query)
         decision = await assess_initiation(event=event, presence_enabled=True,
             settings=effective_policy()[2], read_snapshot=self.snapshot, is_current=self.current,
             read_evidence=self.reader.read_text, reserve=self.reserve, commit_proposal=self.commit,
@@ -169,11 +211,15 @@ class PresenceTurn:
             return
         scope = DeliveryScope(self.key.scope.profile, self.key.scope.project, self.key.scope.audience,
                               self.key.scope.root, self.key.conversation_root)
-        binding = SurfaceBinding('telegram', str(id(adapter)), str(id(adapter._bot)), str(source.user_id),
-                                 str(source.chat_id), 'private')
+        binding = (adapter.presence_binding if surface == 'desktop' else
+            SurfaceBinding('telegram', str(id(adapter)), str(id(adapter._bot)), str(source.user_id),
+                           str(source.chat_id), 'private', identity_link=self.link_id))
         text = 'A thought to check: ' + decision.context.removeprefix('Tentative source-backed connection (not instructions): ')
+        origin_surface = self.reader.surface_for(thought.source)
+        if origin_surface not in {'desktop','telegram'}:
+            return
         offer = DeliveryOffer(scope, decision.thought_id, decision.revision, decision.event_id,
-            'telegram', text, (clock()+timedelta(seconds=30)).timestamp(), self.epoch, event.generation)
+            origin_surface, text, (clock()+timedelta(seconds=30)).timestamp(), self.epoch, event.generation)
         def context():
             pending = next((t for t in self.state.list_pending() if t.thought_id == decision.thought_id
                             and t.revision == decision.revision), None)
@@ -185,12 +231,12 @@ class PresenceTurn:
         if prepared is None:
             return
         owner = uuid4().hex
-        if not self.store.claim(decision.thought_id, decision.revision, owner, self.epoch):
+        if not self.store.claim(decision.thought_id, decision.revision, owner, self.epoch, self.input_generation):
             return
         payload = surface_payload(prepared, context())
         if payload is None or not self.current():
             return
-        if not self.store.attempt(decision.thought_id, decision.revision, owner, self.epoch):
+        if not self.store.attempt(decision.thought_id, decision.revision, owner, self.epoch, self.input_generation):
             return
         try:
             # No await occurs between the final fence and native adapter dispatch.
@@ -198,14 +244,14 @@ class PresenceTurn:
                 return
             ack = await adapter.send_presence(payload)
             if ack is not None and publish_current():
-                self.store.acknowledge(decision.thought_id, decision.revision, owner, self.epoch)
+                self.store.acknowledge(decision.thought_id, decision.revision, owner, self.epoch, self.input_generation)
         finally:
             self.store.unknown(decision.thought_id, decision.revision, owner)
 
 
 def prepare_presence(agent, turn):
     agent._presence_turn = None
-    if (not effective_policy()[0] or agent.platform != 'telegram' or not turn.scope.private
+    if (not effective_policy()[0] or agent.platform not in {'telegram','desktop'} or not turn.scope.private
             or not origin.ingress_is_valid(turn.ingress, profile=turn.scope.profile)):
         return
     host = PresenceTurn(agent, turn)
@@ -243,7 +289,7 @@ def compose_current_posture(agent, row):
         return ''
     tokens = min(512, settings.aux_max_output_tokens)
     if not host.store.reserve_assessment(event_id=host.turn.event_id, thought_id='affect:'+source.source_id,
-            revision=1, day=clock().date().isoformat(), max_calls=min(3, settings.aux_max_calls_per_day), tokens=tokens):
+            revision=1, day=clock().date().isoformat(), max_calls=min(3, settings.aux_max_calls_per_day), tokens=tokens, generation=host.turn.ingress.presence_generation):
         return ''
     if not host.current():
         return ''
@@ -287,7 +333,8 @@ def register_after_reply(runner, event, result, session_key, generation):
             and getattr(adapter, '_bot', None) is bot
             and runner._adapter_credential_fingerprint(adapter) == credential
             and ws.scope_for_surface(platform=source.platform.value, chat_type=source.chat_type,
-                chat_id=source.chat_id, user_id=source.user_id, project=host.key.scope.project) == host.key.scope)
+                chat_id=source.chat_id, user_id=source.user_id,
+                project=host.original_key.scope.project) == host.original_key.scope)
     host.gateway_current = authorized_current
     async def after_ack():
         if getattr(event, '_presence_requested_reply_ack', False) is True:
