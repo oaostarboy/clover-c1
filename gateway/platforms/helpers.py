@@ -579,14 +579,21 @@ def fenced_code_regions(text: str):
     """Yield (start, body_start, body_end, end, language, closed).
 
     Inline openings remain compatible with the existing Telegram renderer.
-    Only a line or terminal closing delimiter ends a block; inline triple-
-    backtick literals inside it remain data. Offsets refer to source text.
+    Only a line (with 0–3 leading spaces) or terminal closing delimiter ends
+    a block; inline triple-backtick literals inside it remain data. Closing
+    indentation is syntax, not body whitespace. Offsets refer to source text.
     """
     opening = re.compile(r'(?<![\\`])```([^`\r\n]*)\r?\n')
-    closing = re.compile(r'(?m)^```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\r?$)|```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\Z)')
+    closing = re.compile(r'(?m)^ {0,3}```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\r?$)|(?<![\\`])```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\Z)')
     pos = 0
     while match := opening.search(text, pos):
         close = closing.search(text, match.end())
+        if close:
+            # Keep legacy inline terminal closings, but do not let that
+            # alternative accept a deeply indented or tab-indented code line.
+            line_prefix = text[text.rfind('\n', 0, close.start()) + 1:close.start()]
+            if line_prefix and not line_prefix.strip(' \t'):
+                close = None
         end = close.end() if close else len(text)
         tag = match.group(1).strip()
         yield (match.start(), match.end(), close.start() if close else end,

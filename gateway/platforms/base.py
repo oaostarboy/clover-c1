@@ -8162,6 +8162,12 @@ class BasePlatformAdapter(ABC):
                 elif closed and body_end < absolute < end:
                     split_at = end - offset
 
+            # Do not leave a source CR at the end of a numbered chunk while
+            # its LF moves to the next one. On a closing-fence line that would
+            # put the synthetic indicator after CR and hide the delimiter.
+            if split_at > 1 and remaining[split_at - 1:split_at + 1] == "\r\n":
+                split_at -= 1
+
             chunk_body = remaining[:split_at]
             tail = remaining[split_at:]
 
