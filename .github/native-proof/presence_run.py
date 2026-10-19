@@ -6,8 +6,8 @@ DEST=ROOT/'evidence'
 DEST.mkdir(exist_ok=True)
 def git(*args):return subprocess.check_output(['git','-C',str(SRC),*args],text=True).strip()
 sha=git('rev-parse','HEAD');tree=git('rev-parse','HEAD^{tree}')
-assert sha=='8125059709cd65cfa6e921ec8d9cb5f940feaf28'
-assert tree=='3b2164c702c2821d77043808272074f0001d2724'
+assert sha=='c720b1ad5f68c213c589fd8a7bf26cd40140323e'
+assert tree=='e7bfd2964a6b45ee7d166c7f096490e15113fe97'
 manifest=json.loads((Path(__file__).parent/'presence-manifest.json').read_text())
 python=SRC/'.venv'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
 env=os.environ.copy()
@@ -19,10 +19,10 @@ scope=env['SCOPE']
 bash=str(Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Git/bin/bash.exe') if os.name=='nt' else 'bash'
 if os.name=='nt': assert Path(bash).is_file(), 'Git for Windows Bash is required'
 cmd=[bash,'scripts/run_tests.sh']
-if scope=='diagnose':cmd+=['tests/test_presence_selected_owner_concurrent_probe.py','tests/test_presence_selected_owner_desktop.py','tests/tui_gateway/test_presence_renderer_bridge.py','tests/test_presence_surface_wire.py','tests/gateway/test_emotions_command.py','tests/agent/test_presence_native_providers.py','tests/agent/test_provider_transport_dispatch.py']
+if scope=='diagnose':cmd+=['tests/test_presence_selected_owner_concurrent_probe.py','tests/test_presence_selected_owner_desktop.py','tests/tui_gateway/test_presence_renderer_bridge.py','tests/test_presence_surface_wire.py','tests/gateway/test_emotions_command.py','tests/agent/test_presence_native_providers.py','tests/agent/test_provider_transport_dispatch.py','tests/test_collection_prefetch_isolation.py','tests/test_presence_native_network_boundaries.py','tests/test_native_boundaries.py','tests/gateway/test_presence_integration.py','tests/test_indented_fence_boundaries.py']
 elif scope=='joined':cmd+=manifest['joined_file_selection']
 else:cmd+=['--slice',scope]
-cmd+=['-j','2','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra','-o','faulthandler_timeout=35']
+cmd+=['-j','6','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra','-o','faulthandler_timeout=35']
 receipt={'sha':sha,'tree':tree,'os':platform.platform(),'scope':scope,'command':cmd,'python':str(python),'status_before':git('status','--porcelain','--untracked-files=no'),'started':time.time()}
 (DEST/'receipt.json').write_text(json.dumps(receipt,indent=2))
 with (DEST/'canonical.log').open('w',encoding='utf-8') as f:

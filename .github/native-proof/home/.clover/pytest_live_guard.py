@@ -82,6 +82,7 @@ def pytest_unconfigure(config):
 # Diagnostic-only observer; never changes an application result or deadline.
 import faulthandler, threading, time, traceback, sys
 _DIAG = None
+_STACK = None
 _T0 = time.monotonic()
 def _note(kind, **values):
     if _DIAG is not None:
@@ -96,45 +97,35 @@ def _observed_start(thread, *args, **kwargs):
 threading.Thread.start = _observed_start
 @pytest.hookimpl(tryfirst=True)
 def pytest_sessionstart(session):
-    global _DIAG
+    global _DIAG, _STACK
     _DIAG=(DEST/('diagnostic-'+str(os.getpid())+'.jsonl')).open('w', encoding='utf-8')
-    faulthandler.dump_traceback_later(40,repeat=True)
+    _STACK=(DEST/('stacks-'+str(os.getpid())+'.log')).open('w', encoding='utf-8')
+    faulthandler.dump_traceback_later(5,repeat=True,file=_STACK)
     _note('sessionstart')
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_logstart(nodeid, location):
     _note('test_start',nodeid=nodeid)
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
-    # Observe existing imported boundaries only, to preserve cold import paths.
-    import functools
-    module=sys.modules.get('agent.presence_runtime')
-    patches=[]
-    if module is not None:
-        cls=module.PresenceTurn
-        for name in ('current','snapshot','_publish'):
-            original=getattr(cls,name)
-            if name=='_publish':
-                @functools.wraps(original)
-                async def wrapped(self,*a,__original=original,__name=name,**kw):
-                    start=time.monotonic(); _note('begin',method=__name)
-                    try: return await __original(self,*a,**kw)
-                    finally: _note('end',method=__name,elapsed=time.monotonic()-start)
-            else:
-                @functools.wraps(original)
-                def wrapped(self,*a,__original=original,__name=name,**kw):
-                    start=time.monotonic()
-                    result=__original(self,*a,**kw)
-                    _note('return',method=__name,elapsed=time.monotonic()-start,valid=bool(result))
-                    return result
-            patches.append((cls,name,original)); setattr(cls,name,wrapped)
-        from cron.presence import ThoughtStore
-        for name in ('claim','attempt','acknowledge','unknown'):
-            original=getattr(ThoughtStore,name)
-            @functools.wraps(original)
-            def wrapped(self,*a,__original=original,__name=name,**kw):
-                start=time.monotonic();result=__original(self,*a,**kw)
-                _note('store',method=__name,elapsed=time.monotonic()-start,valid=bool(result))
-                return result
-            patches.append((ThoughtStore,name,original));setattr(ThoughtStore,name,wrapped)
-    yield
-    for cls,name,original in reversed(patches):setattr(cls,name,original)
+    # Code-name observer also sees lazy imports during the test body.
+    watched = {
+        'agent/presence_runtime.py': {'current','snapshot','_publish','publish_current','publish'},
+        'agent/presence_authority.py': {'validate_active','runtime','scoped'},
+        'agent/bounded_completion.py': {'remaining_budget'},
+        'cron/presence.py': {'claim','attempt','acknowledge','unknown'},
+    }
+    previous=sys.getprofile()
+    def observe(frame,event,arg):
+        filename=frame.f_code.co_filename.replace('\\','/')
+        for suffix,names in watched.items():
+            if filename.endswith(suffix) and frame.f_code.co_name in names and event in {'call','return'}:
+                data={'method':frame.f_code.co_name,'event':event}
+                if event=='return':
+                    data['result']=arg if type(arg) in (bool,int,float,type(None)) else type(arg).__name__
+                _note('seam',**data)
+                break
+    sys.setprofile(observe)
+    try:
+        yield
+    finally:
+        sys.setprofile(previous)
