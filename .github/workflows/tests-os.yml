@@ -1,14 +1,22 @@
-name: Approved platform join exact-source offline acceptance
+name: Frozen join boundary observation (not acceptance)
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  preflight:
-    name: windows-latest / guard quota readonly and ACK preflight
-    runs-on: windows-latest
-    timeout-minutes: 90
-    steps: &proof-steps
+  observe:
+    name: ${{ matrix.os }} / unchanged whole-file boundaries
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      MODE: preflight
+      SLICE_INDEX: "0"
+      SLICES: "1"
+    steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           path: helpers
@@ -23,7 +31,7 @@ jobs:
           version: "0.9.28"
           enable-cache: true
           cache-dependency-glob: source/uv.lock
-      - name: Install locked isolated test dependencies (no retry)
+      - name: Install locked isolated test dependencies
         working-directory: source
         shell: bash
         run: |
@@ -32,81 +40,16 @@ jobs:
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 26
-      - name: Install locked renderer dependencies (no retry)
+      - name: Install locked renderer dependencies
         working-directory: source
         shell: bash
         run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
-      - name: Canonical exact-source checks (no retries)
+      - name: Observe two unchanged whole files with original assertions clocks and guards
         shell: bash
         run: python helpers/.github/native-proof/joined_run.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: presence-${{ runner.os }}-${{ env.MODE }}-${{ env.SLICE_INDEX }}-${{ github.run_id }}
-          path: evidence
-          if-no-files-found: error
-    env:
-      MODE: preflight
-      SLICE_INDEX: "0"
-      SLICES: "1"
-  acceptance:
-    needs: preflight
-    name: ${{ matrix.os }} / exact source slice ${{ matrix.slice }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {os: ubuntu-latest, slice: "0", slices: "2"}
-          - {os: ubuntu-latest, slice: "1", slices: "2"}
-          - {os: macos-latest, slice: "0", slices: "2"}
-          - {os: macos-latest, slice: "1", slices: "2"}
-          - {os: windows-latest, slice: "0", slices: "8"}
-          - {os: windows-latest, slice: "1", slices: "8"}
-          - {os: windows-latest, slice: "2", slices: "8"}
-          - {os: windows-latest, slice: "3", slices: "8"}
-          - {os: windows-latest, slice: "4", slices: "8"}
-          - {os: windows-latest, slice: "5", slices: "8"}
-          - {os: windows-latest, slice: "6", slices: "8"}
-          - {os: windows-latest, slice: "7", slices: "8"}
-    env:
-      MODE: acceptance
-      SLICE_INDEX: ${{ matrix.slice }}
-      SLICES: ${{ matrix.slices }}
-    steps: *proof-steps
-  renderer:
-    needs: preflight
-    name: ${{ matrix.os }} / mounted renderer ACK and state
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-    steps:
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-        with:
-          path: helpers
-          persist-credentials: false
-      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
-        with:
-          ref: 6a7fb60426d990c783bfc1cb2791af67f3a8c751
-          path: source
-          persist-credentials: false
-      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
-        with:
-          node-version: 26
-      - name: Install locked renderer dependencies (no retry)
-        working-directory: source
-        shell: bash
-        run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
-      - name: Exact-source mounted renderer checks (no retry)
-        shell: bash
-        run: python helpers/.github/native-proof/renderer_run.py
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
-        if: always()
-        with:
-          name: renderer-${{ runner.os }}-${{ github.run_id }}
+          name: boundary-observation-${{ runner.os }}-${{ github.run_id }}
           path: evidence
           if-no-files-found: error

@@ -49,6 +49,7 @@ def invoke(file, label, extra):
     directory.mkdir()
     before = set(DEST.iterdir())
     cmd = [bash, 'scripts/run_tests.sh', file, '-j', '1', '--file-timeout', '240', '--file-retries', '0', '--', '-q', '-p', 'no:randomly', '--tb=short', '-ra', '-p', 'settlement_partition']
+    cmd += ['-p', 'settlement_boundary_observer']
     cmd += extra
     start = time.monotonic()
     with (directory / 'canonical.log').open('w', encoding='utf-8') as log:
