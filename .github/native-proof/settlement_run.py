@@ -32,8 +32,8 @@ file = FILES[int(os.environ['FILE_INDEX'])]
 def git(*args):
  return subprocess.check_output(['git','-C',str(SRC),*args],text=True).strip()
 sha, tree = git('rev-parse','HEAD'), git('rev-parse','HEAD^{tree}')
-assert sha == '44ed73336bea1120eba1ae09a3f9cc8051e4208e'
-assert tree == 'ac3afa3692a7d1e152c79663dd3b34c57beb53b6'
+assert sha == '6c072d6c54484f995ee2bbc3195ff52aa821b47b'
+assert tree == '6447f69b951128ceee21c5fe4cde64f46561e29d'
 python = SRC/'.venv'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
 env = os.environ.copy()
 for key in ['VIRTUAL_ENV','PYTHONPATH']:

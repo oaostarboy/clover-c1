@@ -13,17 +13,7 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            scope: "1"
-          - os: windows-latest
             scope: "2"
-          - os: windows-latest
-            scope: "4"
-          - os: windows-latest
-            scope: "5"
-          - os: windows-latest
-            scope: "6"
-          - os: windows-latest
-            scope: "8"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -31,7 +21,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 44ed73336bea1120eba1ae09a3f9cc8051e4208e
+          ref: 6c072d6c54484f995ee2bbc3195ff52aa821b47b
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
