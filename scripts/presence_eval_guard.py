@@ -35,10 +35,11 @@ class ReadOnlyEvaluationGuard:
         self.source = Path(source).resolve()
         self.write_dirs = tuple(Path(p).absolute() for p in write_dirs)
         self._write_roots = {}
+        uid = os.geteuid() if hasattr(os, 'geteuid') else None
         for root in self.write_dirs:
             info = root.lstat()
-            if (root != root.resolve(strict=True) or '..' in root.parts
-                    or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+            if (uid is None or root != root.resolve(strict=True) or '..' in root.parts
+                    or not stat.S_ISDIR(info.st_mode) or info.st_uid != uid
                     or info.st_mode & 0o077):
                 raise PermissionError('insecure_evaluation_directory')
             self._write_roots[root] = (info.st_dev, info.st_ino)
@@ -99,14 +100,15 @@ class ReadOnlyEvaluationGuard:
         Only NOFOLLOW directory-relative opens carry a usable anchor. Descriptor
         wrapping/truncation must refer to that same single-link private object.
         """
-        if path is None or path.parent not in self._write_roots:
+        uid = os.geteuid() if hasattr(os, 'geteuid') else None
+        if uid is None or path is None or path.parent not in self._write_roots:
             return False
         try:
             root = path.parent
             root_info = root.lstat()
             if ((root_info.st_dev, root_info.st_ino) != self._write_roots[root]
                     or not stat.S_ISDIR(root_info.st_mode)
-                    or root_info.st_uid != os.geteuid() or root_info.st_mode & 0o077):
+                    or root_info.st_uid != uid or root_info.st_mode & 0o077):
                 return False
             if isinstance(value, int):
                 info = os.fstat(value)
@@ -127,7 +129,7 @@ class ReadOnlyEvaluationGuard:
                     # A non-creating open can only fail, never create a leaf.
                     return not flags & os.O_CREAT or bool(flags & os.O_EXCL)
             return (stat.S_ISREG(info.st_mode) and info.st_nlink == 1
-                    and info.st_uid == os.geteuid() and not info.st_mode & 0o077)
+                    and info.st_uid == uid and not info.st_mode & 0o077)
         except (OSError, ValueError):
             return False
 

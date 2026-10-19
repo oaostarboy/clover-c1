@@ -365,7 +365,8 @@ def _reserve_isolated_call(quota_dir, binding, limit):
     from clover_cli.readonly_files import ReadOnlyStateError
     from scripts.presence_eval_guard import evaluation_open
 
-    if (os.name != 'posix' or not all(hasattr(os, flag) for flag in
+    if (os.name != 'posix' or not hasattr(os, 'geteuid')
+            or not all(hasattr(os, flag) for flag in
             ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK'))
             or os.open not in os.supports_dir_fd or os.stat not in os.supports_dir_fd):
         raise ReadOnlyStateError('secure_evaluation_quota_unsupported')
@@ -375,14 +376,15 @@ def _reserve_isolated_call(quota_dir, binding, limit):
             or directory == Path('/') or type(limit) is not int or limit < 0
             or not isinstance(binding, str) or not binding):
         raise ReadOnlyStateError('invalid_evaluation_quota')
+    uid = os.geteuid() if hasattr(os, 'geteuid') else None
     handles, fd = [], -1
     name = 'presence-eval-quota.json'
 
     def directory_info(handle, *, direct):
         info = os.fstat(handle)
-        if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid())
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, uid)
                 or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)
-                or (direct and (info.st_uid != os.geteuid() or info.st_mode & 0o077))):
+                or (direct and (info.st_uid != uid or info.st_mode & 0o077))):
             raise ReadOnlyStateError('insecure_evaluation_directory')
         return info
 
@@ -398,7 +400,7 @@ def _reserve_isolated_call(quota_dir, binding, limit):
         info = os.fstat(fd)
         named = os.stat(name, dir_fd=handles[-1], follow_symlinks=False)
         if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
-                or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                or info.st_uid != uid or info.st_mode & 0o077
                 or info.st_size > 4096
                 or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)):
             raise ReadOnlyStateError('insecure_evaluation_ledger')
