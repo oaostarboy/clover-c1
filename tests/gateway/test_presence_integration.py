@@ -17,8 +17,8 @@ from cron.presence import ThoughtStore
 def setup_host(monkeypatch, tmp_path):
     monkeypatch.setenv('CLOVER_SAFE_MODE', '1')
     h = OfferHarness(monkeypatch, tmp_path, proactive=ACTIVE)
-    (h.home / 'config.yaml').write_text(yaml.safe_dump({
-        'agent': {'disabled_toolsets': ['terminal', 'browser']},
+    cfg = {
+        'agent': {'disabled_toolsets': ['terminal', 'browser'], 'enabled_toolsets': []},
         'display': {'tool_progress': 'off', 'thinking_progress': False},
         'compression': {'enabled': False},
         'proactive': ACTIVE,
@@ -28,9 +28,16 @@ def setup_host(monkeypatch, tmp_path):
             'free_only': True,
             'presence': {'provider': 'openai', 'model': 'synthetic-model'},
         },
-    }))
+    }
+    (h.home / 'config.yaml').write_text(yaml.safe_dump(cfg))
+    from gateway import run as gateway_run
+    monkeypatch.setattr(gateway_run, '_load_gateway_config', lambda: cfg)
+    from tools.registry import ToolRegistry
+    monkeypatch.setattr(ToolRegistry, 'get_definitions', lambda *a, **kw: [])
     monkeypatch.setattr('agent.image_routing._lookup_supports_vision', lambda *a, **kw: False)
     monkeypatch.setattr('tools.vision_tools.check_vision_requirements', lambda: False)
+    monkeypatch.setattr(aux, 'resolve_vision_provider_client', lambda *a, **kw: ('none', None, None))
+    monkeypatch.setattr('tools.env_probe.get_environment_probe_line', lambda *a, **kw: '')
     requests = []
     async def transport(request):
         requests.append(json.loads(request.content))

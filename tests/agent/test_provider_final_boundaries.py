@@ -15,6 +15,8 @@ from tests.agent.test_provider_security_corrected import route_fixture, response
 def test_http_timeout_uses_remaining_public_budget(monkeypatch, provider):
     requests = []
     config = route_fixture(monkeypatch, provider, lambda req: requests.append(req) or response_for(provider))
+    if provider == 'anthropic':
+        __import__('anthropic')
     def load():
         time.sleep(.08)
         return config
