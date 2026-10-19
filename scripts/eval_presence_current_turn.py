@@ -494,7 +494,13 @@ def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consen
                 return await complete(config=evaluation, messages=messages(case['text']),
                                       max_output_tokens=tokens, timeout=5)
             from clover_cli.readonly_files import non_mutating_config_reads
-            with non_mutating_config_reads(), scoped_runtime_main(runtime):
+            from agent.presence_authority import scoped
+            # Reuse the bounded lane's final dispatch/publication predicate.
+            # This is a policy guard, not a fabricated SelectedOwner: the nested
+            # runtime still carries the real resolver-selected pool credential.
+            def current():
+                return read() == (config, managed_policy)
+            with non_mutating_config_reads(), scoped(None, current), scoped_runtime_main(runtime):
                 invoked = True
                 invocations += 1
                 completion = asyncio.run(invoke())
@@ -509,6 +515,10 @@ def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consen
         except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
             result = not_measured(case, getattr(exc, 'reason', 'provider_or_gate_error'))
             result['error'] = type(exc).__name__
+            if isinstance(exc, CompletionHeld) and exc.diagnostic is not None:
+                # Native bounded adapter exports only finite protocol vocabulary,
+                # never the provider's free-text body, headers or exception text.
+                result['provider_diagnostic'] = exc.diagnostic
         result.update(reserved=reserved, provider_entry_invoked=invoked,
                       physical_requests=None if invoked else 0,
                       latency_ms=round((time.monotonic() - started) * 1000, 3))

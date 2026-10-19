@@ -42,6 +42,11 @@ borrowed, expired/unverifiable, exhausted/dead, overridden or unsupported state
 fails closed. There is no pool hydration, global-account fallback, dotenv/env
 mutation, refresh, command credential, quota/model discovery, or settings repair.
 Readback revalidates secure source permissions/material before bounded dispatch.
+The isolated run also binds its current config/managed policy, STOP and live-store
+predicate to the existing bounded authority's final physical-dispatch fence and
+result validation. Revocation during client construction holds before HTTP;
+a consumed reservation is not refunded. This predicate grants no credential
+ownership: the nested runtime still uses the real normal-selected pool row.
 Do not use mutation/rotation methods on this read-only pool.
 
 `load_config_snapshot()` supplies fresh strict effective settings, preserving
@@ -93,5 +98,16 @@ Connection results separate structural schema, the existing lexical admission/no
 ## Receipts and limits
 
 Reports contain per-case accepted/raw prediction, error class or hold reason, latency, reservation, known/unknown output usage and physical-request uncertainty. The text-only public entry discards usage/authority/adapter detail, so execution honestly reports those as unknown; an entry invocation/reservation is not asserted to be a physical request. A hashed requested-route identity is not a resolved provider/account identity. No exception message, credentials, endpoint or auth object is printed.
+
+Native bounded HTTP failures optionally retain `provider_diagnostic`: status,
+bounded-body parse/truncation/read-timeout state, and recognized finite-vocabulary
+error type/code/parameter. These are untrusted provider claims, not proof that a
+parameter caused the failure. Unknown strings are omitted. No free-text message,
+body, headers, request IDs, credentials, prompt or personal data is retained.
+Buffering the already-returned error retains at most 16384 decoded bytes and uses
+a small part of the original deadline (no more than 0.2 seconds); it never retries or
+extends inference authority. Usage/cost remain unknown, even if an error body
+claims zero. A historical failure whose body was discarded cannot be recovered
+by this change; do not repeat a request to obtain diagnostics without new consent.
 
 Candidate commit/tree, evaluator bytes, fixture bytes, exact prompt UTF-8 and parser source hashes are recorded. Whole prompt/schema source files are also pinned. Local edits require the evaluator hash as well as the committed tree. SCRIPTED receipts prove evaluator machinery and existing safety controls only. They do not measure emotional interpretation, capture quality, confidence calibration, multilingual competence or human usefulness.
