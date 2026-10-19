@@ -80,6 +80,22 @@ def pytest_sessionfinish(session,exitstatus):
 def pytest_unconfigure(config):
     if REC is not None: (DEST/(REC['key']+'.json')).write_text(json.dumps(REC),encoding='utf-8')
 
+# Record real fixture ancestry before reads. Diagnosis only: no ACL mutation,
+# no guard changes, no arbitrary file contents or credential fields.
+@pytest.fixture(autouse=True)
+def reader_native_acl_metadata(tmp_path, request):
+    if os.name != 'nt':
+        return
+    import win32security as security
+    fields = security.OWNER_SECURITY_INFORMATION | security.DACL_SECURITY_INFORMATION
+    rows = []
+    for path in (tmp_path, *tmp_path.parents):
+        descriptor = security.GetNamedSecurityInfo(str(path), security.SE_FILE_OBJECT, fields)
+        rows.append(dict(path=str(path), security=security.ConvertSecurityDescriptorToStringSecurityDescriptor(
+            descriptor, 1, fields)))
+    key = hashlib.sha256(request.node.nodeid.encode()).hexdigest()[:20]
+    (DEST / ('acl-' + key + '.json')).write_text(json.dumps(rows), encoding='utf-8')
+
 # Isolated probe records with no per-call disk logging.
 import time, sys
 _T0=time.monotonic()
