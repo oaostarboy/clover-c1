@@ -132,6 +132,11 @@ def _read_windows(path, *, private, limit):
                 if kind != security.ACCESS_ALLOWED_ACE_TYPE:
                     raise ReadOnlyStateError('unsupported_state_acl')
                 mask, sid = ace[1], security.ConvertSidToStringSid(ace[-1])
+                # OWNER RIGHTS is an object-relative principal, not Everyone or
+                # CREATOR OWNER. Bind it only to this handle's validated owner.
+                # CPython's native mkdir(0700) uses this ACL on Windows.
+                if sid == 'S-1-3-4':
+                    sid = owner
                 if sid in (privileged if restricted else owners):
                     continue
                 # Ancestors may allow creation (ADD_FILE/ADD_SUBDIRECTORY), as

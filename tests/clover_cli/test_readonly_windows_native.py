@@ -89,6 +89,28 @@ def test_null_dacl_rejected(state):
         read_existing_file(path)
 
 
+def test_owner_rights_is_bound_to_actual_validated_owner(state):
+    import win32security as security
+    home, path = state
+    # Construct the native OWNER RIGHTS ACL explicitly so this test does not
+    # depend on which CPython versions also emit it from mkdir(mode=0700).
+    native = home / 'native-private'
+    native.mkdir()
+    acl = security.ACL()
+    for sid in ('S-1-3-4', 'S-1-5-18', 'S-1-5-32-544'):
+        acl.AddAccessAllowedAceEx(security.ACL_REVISION, 3, 0x1F01FF,
+                                 security.ConvertStringSidToSid(sid))
+    security.SetNamedSecurityInfo(str(native), security.SE_FILE_OBJECT,
+        security.DACL_SECURITY_INFORMATION | security.PROTECTED_DACL_SECURITY_INFORMATION,
+        None, None, acl, None)
+    selected = native / path.name
+    selected.write_bytes(path.read_bytes())
+    assert read_existing_file(selected) == 'model: exact\n'
+    secure_acl(selected, owner=security.ConvertStringSidToSid('S-1-5-32-544'))
+    with pytest.raises(ReadOnlyStateError):
+        read_existing_file(selected)
+
+
 def test_wrong_private_owner_rejected(state):
     import win32security as security
     _, path = state
