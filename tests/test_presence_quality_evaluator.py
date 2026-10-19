@@ -112,6 +112,7 @@ def test_connection_empty_output_is_permitted_abstention(language):
 
 
 def test_dry_cli_imports_no_runtime_auth_db_or_network(tmp_path):
+    import os
     import subprocess
     import sys
     guard = """
@@ -131,6 +132,9 @@ runpy.run_path(sys.argv[0], run_name='__main__')
 """
     env = {'HOME': str(tmp_path), 'CLOVER_HOME': str(tmp_path / 'profile'), 'PATH': '/usr/bin:/bin',
            'CLOVER_TEST_ISOLATION': str(tmp_path)}
+    if os.name == 'nt':
+        # Restore only native locations; the import/socket audit remains armed.
+        env.update(USERPROFILE=str(tmp_path), SYSTEMROOT=os.environ['SYSTEMROOT'])
     completed = subprocess.run([sys.executable, '-c', guard, str(ROOT / 'scripts/eval_presence_current_turn.py')],
                                capture_output=True, text=True, env=env, timeout=15)
     assert completed.returncode == 0, completed.stderr

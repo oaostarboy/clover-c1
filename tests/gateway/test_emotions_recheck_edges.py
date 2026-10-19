@@ -109,10 +109,16 @@ text=render()
 armed=False
 print(json.dumps(dict(before=before,after=inventory(),text=text,blocked=blocked,modules=sorted(sys.modules))))
 '''
-    result = subprocess.run([sys.executable,'-B','-c',code],cwd=source,env={
+    env = {
         'PATH':os.environ['PATH'],'HOME':str(home),'CLOVER_HOME':str(profile),
         'CLOVER_MANAGED_DIR':str(policy),'PYTHONPATH':str(source),
-        'SYNTHETIC_API_KEY':'not-to-be-read'},capture_output=True,text=True,timeout=30)
+        'CLOVER_TEST_ISOLATION':str(home),'SYNTHETIC_API_KEY':'not-to-be-read'}
+    if os.name == 'nt':
+        # Native Path.home ignores HOME; never inherit the operator's profile.
+        # SYSTEMROOT is required by Windows stdlib imports, not a socket grant.
+        env.update(USERPROFILE=str(home), SYSTEMROOT=os.environ['SYSTEMROOT'])
+    result = subprocess.run([sys.executable,'-B','-c',code],cwd=source,env=env,
+                            capture_output=True,text=True,timeout=30)
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
     print('INDEPENDENT_COLD_INVENTORY',json.dumps(data))
