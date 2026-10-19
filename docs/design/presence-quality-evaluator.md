@@ -7,11 +7,62 @@ From the candidate source and its interpreter:
 - `python scripts/eval_presence_current_turn.py`: default dry run. Reads only source/fixture bytes and local Git identity; imports no application, provider, auth or database modules, creates no database, and makes zero network/provider calls. Every case is `not_measured`.
 - `--suite legacy|normative|all` and repeated `--case ID` select cases. Default is `all`.
 - `--replay-scripted PATH`: offline evaluator-machinery check. File shape is `{"case_id":{"raw":"JSON response string","output_tokens":7}}`; the optional usage number is explicitly **scripted**, not observed provider usage. Missing IDs stay `not_measured`. Replay is capped at 262144 bytes and each response at the existing 4096-byte limit. This mode never calls a provider or creates a database.
-- `--execute` (alias `--execute-provider-calls`) is the only inference mode. Default maximum is one call; `--max-calls` accepts only 1–3. This is **not** permission to enable the feature or change routes/accounts. This implementation task ran no live inference.
+- `--execute` (alias `--execute-provider-calls`) is the ordinary live-policy/quota inference mode. Default maximum is one call; `--max-calls` accepts only 1–3. This is **not** permission to enable the feature or change routes/accounts. The separate consented isolated mode is documented below.
 
 Execution requires an already-current configuration, existing effective managed feature policy, non-quiet time, nonzero existing limits and a non-stopped profile. The evaluator reads policy with `load_config(migrate=False)` and refuses legacy configurations rather than migrating them. It uses the actual `presence_completion` one-shot entry and durable shared reservation, respecting lower existing daily/output limits and generation/Stop/policy rechecks. Errors/cancellation/rejected output do not refund reservations. There is no quota override, retry, fallback, refresh, fake account/ingress, thought persistence or delivery. An external concurrent config writer is not controlled by this script; do not run an experiment while changing profile configuration.
 
 Standalone execution never fabricates a later authenticated human event. Connection cases remain `not_measured: requires_authenticated_later_context_host`; their offline replay is explicitly only a parser/lexical scaffold. A joined application-host experiment is a separate integration requirement. Inherited selected-account execution still depends on C1 integration; an explicit configured route is not that proof.
+
+## Explicit isolated selected-main experiment
+
+`--execute-isolated --isolated-quota-dir EXISTING_PRIVATE_DIRECTORY
+--acknowledge-request-budget --max-calls 1..3` is a separate, explicitly consented
+synthetic experiment. It never enables background presence or writes the live
+profile's daily budget. The acknowledgement accepts a **request-count** contract,
+not a server token, hidden-reasoning, or cost cap. Consent must cover this run;
+choosing another directory is not permission to reset an existing allowance.
+Keep `presence-eval-quota.json` for the same authorization: reservations are
+fsynced before entry, capped at three total, bound to settings/selected account,
+and never refunded after errors or uncertain completion. Lower configured daily,
+per-event-zero, and output limits remain restrictive. A `STOP` marker in that
+directory, changed settings, or managed disabled policy holds execution. Any
+existing live presence database requires an authenticated host instead; this
+standalone path never reads its private thought records or evades live Stop.
+
+The normal `resolve_runtime_provider(read_only=True)` performs supported fresh,
+non-mutating configured-main selection. Its intentionally narrow initial
+contract is one locally persisted owned Codex OAuth pool credential, exact
+configured provider/model, and the native Codex endpoint. It returns the real
+`CredentialPool` with `select()`/`current()` ownership; it does not manufacture a
+callback owner or borrow a token. Missing, malformed, insecure, ambiguous,
+borrowed, expired/unverifiable, exhausted/dead, overridden or unsupported state
+fails closed. There is no pool hydration, global-account fallback, dotenv/env
+mutation, refresh, command credential, quota/model discovery, or settings repair.
+Readback revalidates secure source permissions/material before bounded dispatch.
+Do not use mutation/rotation methods on this read-only pool.
+
+`load_config_snapshot()` supplies fresh strict effective settings, preserving
+managed overlay precedence. POSIX descriptor-relative/no-follow reads validate
+owner/mode, regular-file size and in-read changes; unsupported ACL platforms
+hold rather than pretend POSIX bits validate ACLs. Existing state must already
+be secure. YAML duplicate/invalid policy mappings hold, without backup, migration
+or defaults/last-known-good substitution. `load_config_readonly()` remains the
+old **shared-cache optimization**, not a filesystem-read-only API. Normal
+startup initialization/migration defaults are unchanged. Incidental plugin
+allow-list reads no longer back up a corrupt file during import; explicit normal
+config reads retain that behavior. Model metadata defers HTTP-library loading so
+catalog imports cannot perform an unrelated socket probe.
+
+`scripts/presence_eval_guard.py` is the shared offline/real-smoke Python audit
+boundary. Install it before application imports: it denies live writes (including
+chmod/mkdir), private-state reads and network before charged provider admission.
+Only explicitly owned artifact/quota directories and the OS null sink may accept
+writes. It is instrumentation, not a claim of kernel process sandboxing. The
+real experiment must keep the same guard installed; do not warm caches or remove
+checks to get past a denial. A separate canonical authorization ledger must
+conservatively count failed/uncertain attempts across workers; the isolated
+quota does not replace that global consent ledger. Production transport,
+serializer, prompt, parser and authority checks remain the bounded entry's own.
 
 ## Data and scoring contract
 

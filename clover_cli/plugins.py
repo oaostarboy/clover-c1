@@ -642,7 +642,7 @@ def _get_disabled_plugins() -> set:
     """
     try:
         from clover_cli.config import read_raw_config
-        config = read_raw_config()
+        config = read_raw_config(preserve_corrupt=False)
         disabled = cfg_get(config, "plugins", "disabled", default=[])
         return set(disabled) if isinstance(disabled, list) else set()
     except Exception:
@@ -676,7 +676,7 @@ def _get_enabled_plugins() -> Optional[set]:
     """
     try:
         from clover_cli.config import read_raw_config
-        config = read_raw_config()
+        config = read_raw_config(preserve_corrupt=False)
         plugins_cfg = config.get("plugins")
         if not isinstance(plugins_cfg, dict):
             return None

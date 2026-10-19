@@ -521,9 +521,9 @@ def _get_custom_provider_config(pool_key: str) -> Optional[Dict[str, Any]]:
     return None
 
 
-def get_pool_strategy(provider: str) -> str:
+def get_pool_strategy(provider: str, *, config: Optional[dict] = None) -> str:
     """Return the configured selection strategy for a provider."""
-    config = _load_config_safe()
+    config = _load_config_safe() if config is None else config
     if config is None:
         return STRATEGY_FILL_FIRST
 
@@ -700,13 +700,16 @@ def _write_through_provider_state_to_global_root(
 
 
 class CredentialPool:
-    def __init__(self, provider: str, entries: List[PooledCredential]):
+    def __init__(self, provider: str, entries: List[PooledCredential], *,
+                 read_only: bool = False, config: Optional[dict] = None):
         self.provider = provider
+        self._read_only = read_only
+        self._read_only_source: Optional[Tuple[Path, bytes]] = None
         self._entries = sorted(entries, key=lambda entry: entry.priority)
         self._current_id: Optional[str] = None
         # Source identity only, never a second credential/cache authority.
         self._credential_source = None
-        self._strategy = get_pool_strategy(provider)
+        self._strategy = get_pool_strategy(provider, config=config) if config is not None else get_pool_strategy(provider)
         # RLock: the mutation primitives below (_replace_entry/_persist)
         # self-acquire this lock so the DEFERRED single-use-token refresh
         # path (which runs network I/O outside the lock by design) still
@@ -789,7 +792,19 @@ class CredentialPool:
             return None
         return next((entry for entry in self._entries if entry.id == self._current_id), None)
 
+    def _validate_read_only_source(self):
+        if self._read_only:
+            import hashlib
+            from clover_cli.readonly_files import ReadOnlyStateError, read_existing_file
+            if self._read_only_source is None:
+                raise ReadOnlyStateError('existing_credential_source_required')
+            path, fingerprint = self._read_only_source
+            current = hashlib.sha256(read_existing_file(path).encode()).digest()
+            if current != fingerprint:
+                raise ReadOnlyStateError('existing_credential_source_changed')
+
     def current(self) -> Optional[PooledCredential]:
+        self._validate_read_only_source()
         with self._lock:
             return self._current_unlocked()
 
@@ -829,6 +844,9 @@ class CredentialPool:
                     return
 
     def _persist(self, *, removed_ids: Optional[List[str]] = None) -> None:
+        if self._read_only:
+            from clover_cli.readonly_files import ReadOnlyStateError
+            raise ReadOnlyStateError('read_only_pool')
         # Self-locking (RLock): snapshotting self._entries must not race a
         # concurrent rotation when called from the deferred refresh path.
         with self._lock:
@@ -1949,6 +1967,28 @@ class CredentialPool:
         return False
 
     def select(self) -> Optional[PooledCredential]:
+        if self._read_only:
+            # Deliberately narrower than rotation: a sole existing owner, never
+            # a policy-selected replacement, cooldown repair or refresh.
+            from clover_cli.readonly_files import ReadOnlyStateError
+            self._validate_read_only_source()
+            with self._lock:
+                if len(self._entries) != 1:
+                    raise ReadOnlyStateError('unambiguous_existing_account_required')
+                entry = self._entries[0]
+                import math
+                claims = _decode_jwt_claims(entry.access_token)
+                expiry = claims.get('exp')
+                if type(expiry) not in (int, float) or not math.isfinite(expiry):
+                    raise ReadOnlyStateError('existing_credential_expiry_unverifiable')
+                expires = _parse_absolute_timestamp(entry.expires_at)
+                if (not entry.runtime_api_key or entry.last_status not in (None, '', STATUS_OK)
+                        or self._entry_needs_refresh(entry)
+                        or (entry.expires_at is not None and (expires is None or expires <= time.time()))
+                        or (entry.expires_at_ms is not None and entry.expires_at_ms <= time.time() * 1000)):
+                    raise ReadOnlyStateError('existing_credential_unavailable')
+                self._current_id = entry.id
+                return entry
         entry, pending_refresh = self._select_under_lock()
         if pending_refresh:
             self._refresh_pending_entries(pending_refresh)
@@ -3245,7 +3285,50 @@ def _seed_custom_pool(pool_key: str, entries: List[PooledCredential]) -> Tuple[b
     return changed, active_sources
 
 
-def load_pool(provider: str) -> CredentialPool:
+def load_pool(provider: str, *, read_only: bool = False, config: Optional[dict] = None) -> CredentialPool:
+    if read_only:
+        # No singleton/env hydration or auth-loader cache/repair on this path.
+        # The only admitted owner is an existing local, owned Codex pool row.
+        import json
+        from clover_cli.readonly_files import ReadOnlyStateError, read_existing_file
+        from clover_cli.config import load_config_snapshot
+        if provider != 'openai-codex':
+            raise ReadOnlyStateError('read_only_provider_unsupported')
+        config = load_config_snapshot() if config is None else config
+        try:
+            path = auth_mod._auth_file_path()
+            text = read_existing_file(path)
+            def unique(pairs):
+                value = {}
+                for key, item in pairs:
+                    if key in value:
+                        raise ValueError('duplicate_auth_key')
+                    value[key] = item
+                return value
+            def invalid_constant(value):
+                raise ValueError('invalid_auth_number')
+            store = json.loads(text, object_pairs_hook=unique, parse_constant=invalid_constant)
+            if not isinstance(store, dict) or type(store.get('version')) is not int or store['version'] != 1:
+                raise ValueError('invalid_auth_store')
+            rows = store.get('credential_pool', {}).get(provider)
+            if not isinstance(rows, list) or len(rows) != 1 or not isinstance(rows[0], dict):
+                raise ValueError('unambiguous_existing_account_required')
+            row = rows[0]
+            if any(not isinstance(row.get(k), str) or not row[k] for k in
+                   ('id', 'source', 'auth_type', 'access_token')):
+                raise ValueError('invalid_existing_credential')
+            if is_borrowed_credential_source(row['source'], provider):
+                raise ValueError('borrowed_credential_unsupported')
+            credential = PooledCredential.from_dict(provider, row)
+            if credential.auth_type != AUTH_TYPE_OAUTH:
+                raise ValueError('owned_oauth_credential_required')
+            pool = CredentialPool(provider, [credential], read_only=True, config=config)
+            import hashlib
+            pool._read_only_source = (path, hashlib.sha256(text.encode()).digest())
+            pool._credential_source = (str(path), store.get('version'), store.get('authority_version'))
+            return pool
+        except (ValueError, TypeError, AttributeError, KeyError) as exc:
+            raise ReadOnlyStateError('existing_credential_unavailable') from exc
     provider = (provider or "").strip().lower()
     raw_entries = read_credential_pool(provider)
     disk_ids = {

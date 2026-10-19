@@ -49,7 +49,14 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from utils import atomic_json_write
 
-import requests
+def __getattr__(name):
+    # Catalog-only reads must not import the HTTP stack: urllib3 performs a
+    # socket capability probe at import time. Keep the historical requests
+    # attribute available to callers, but load it only for actual HTTP use.
+    if name == 'requests':
+        import requests
+        return requests
+    raise AttributeError(name)
 
 logger = logging.getLogger(__name__)
 
@@ -429,6 +436,7 @@ def _fetch_models_dev_from_network(
     # fails fast on unreachable hosts; 10 s read still tolerates a slow
     # registry response (matches the OpenRouter fetch convention in
     # agent/model_metadata.py).
+    import requests
     response = requests.get(url, headers=headers, timeout=(5, 10))
 
     if response.status_code == 304:
