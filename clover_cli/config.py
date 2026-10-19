@@ -3340,7 +3340,7 @@ def resolve_ephemeral_system_prompt_from_config(cfg: Optional[Dict[str, Any]]) -
     return resolve_ephemeral_system_prompt(cfg)
 
 
-def read_raw_config() -> Dict[str, Any]:
+def read_raw_config(*, preserve_corrupt: bool = True) -> Dict[str, Any]:
     """Read ~/.clover/config.yaml as-is, without merging defaults or migrating.
 
     Returns the raw YAML dict, or ``{}`` if the file doesn't exist or can't
@@ -3352,6 +3352,9 @@ def read_raw_config() -> Dict[str, Any]:
     ``load_config()``. Returns a deepcopy on every call since some callers
     mutate the result before passing to ``save_config()``.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return load_config_snapshot(raw=True)
     with _CONFIG_LOCK:
         try:
             config_path = get_config_path()
@@ -3369,7 +3372,8 @@ def read_raw_config() -> Dict[str, Any]:
             with open(config_path, encoding="utf-8-sig") as f:
                 data = fast_safe_load(f) or {}
         except Exception as e:
-            _warn_config_parse_failure(config_path, e)
+            if preserve_corrupt:
+                _warn_config_parse_failure(config_path, e)
             return {}
 
         if not isinstance(data, dict):
@@ -3442,6 +3446,9 @@ def read_raw_config_readonly() -> Dict[str, Any]:
     Same (mtime_ns, size) freshness key as ``read_raw_config()`` — an edited
     config.yaml is picked up on the next call.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return load_config_snapshot(raw=True)
     with _CONFIG_LOCK:
         try:
             config_path = get_config_path()
@@ -3601,7 +3608,67 @@ def load_config(*, migrate: bool = True) -> Dict[str, Any]:
     startup migration write. Use it for deterministic status/control menus
     that must not mutate a legacy config merely by displaying its state.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return load_config_snapshot()
     return _load_config_impl(want_deepcopy=True, migrate=migrate)
+
+
+def load_config_snapshot(*, raw: bool = False) -> Dict[str, Any]:
+    """Fresh non-mutating effective settings for explicitly read-only evaluation.
+
+    Unlike load_config_readonly (a shared-cache optimization), this never
+    initializes the home, migrates, repairs permissions, loads dotenv, or serves
+    defaults/last-known-good in place of missing/malformed/insecure state. Normal
+    startup callers retain their existing initialization and migration behavior.
+    """
+    from clover_cli.readonly_files import ReadOnlyStateError, read_existing_file
+    from clover_cli import managed_scope
+
+    def parse_existing(path, *, private=True):
+        class UniqueLoader(yaml.SafeLoader):
+            pass
+        def unique_mapping(loader, node):
+            loader.flatten_mapping(node)
+            result = {}
+            for key, value in loader.construct_pairs(node, deep=True):
+                if not isinstance(key, str) or key in result:
+                    raise ValueError('duplicate_or_invalid_settings_key')
+                result[key] = value
+            return result
+        UniqueLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, unique_mapping)
+        try:
+            value = yaml.load(read_existing_file(path, private=private), Loader=UniqueLoader)
+            if not isinstance(value, dict) or not all(isinstance(k, str) for k in value):
+                raise ValueError('settings_mapping_required')
+            for key in ('security', 'approvals', 'proactive', 'presence', 'auxiliary', 'providers'):
+                if key in value and not isinstance(value[key], dict):
+                    raise ValueError('policy_mapping_required')
+            if 'presence' in value.get('auxiliary', {}) and not isinstance(value['auxiliary']['presence'], dict):
+                raise ValueError('task_mapping_required')
+            return value
+        except (ValueError, TypeError, RecursionError, yaml.YAMLError) as exc:
+            raise ReadOnlyStateError('invalid_existing_config') from exc
+
+    raw_config = parse_existing(get_config_path())
+    if raw:
+        return raw_config
+    config = _deep_merge(copy.deepcopy(DEFAULT_CONFIG), raw_config)
+    expanded = _expand_env_vars(_normalize_root_model_keys(_normalize_max_turns_config(config)))
+    managed_dir = managed_scope.get_managed_dir()
+    override = os.environ.get('CLOVER_MANAGED_DIR', '').strip()
+    if override and managed_dir is None:
+        # Explicitly configured missing admin scope must not become unrestricted.
+        raise ReadOnlyStateError('managed_scope_unavailable')
+    if managed_dir is not None:
+        managed_path = managed_dir / 'config.yaml'
+        # No policy file is a supported unconfigured scope; dangling links are not.
+        if managed_path.exists() or managed_path.is_symlink():
+            managed = _normalize_root_model_keys(parse_existing(managed_path, private=False))
+            if isinstance(managed.get('model'), str):
+                managed['model'] = {'default': managed['model']}
+            expanded = _deep_merge(expanded, _expand_env_vars(managed))
+    return expanded
 
 
 def load_config_readonly() -> Dict[str, Any]:
@@ -3624,6 +3691,9 @@ def load_config_readonly() -> Dict[str, Any]:
     existing ``isinstance(x, dict)`` guards downstream keep working. The
     safety guarantee is purely documented, not enforced — be careful.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return load_config_snapshot()
     return _load_config_impl(want_deepcopy=False)
 
 

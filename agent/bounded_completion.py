@@ -62,9 +62,81 @@ class CompletionResult:
 
 
 class CompletionHeld(ValueError):
-    def __init__(self, reason):
+    def __init__(self, reason, *, diagnostic=None):
         self.reason = reason
+        # Optional finite-vocabulary metadata, never response text or headers.
+        self.diagnostic = diagnostic
         super().__init__('unsupported bounded presence route: '+reason)
+
+
+async def _http_failure_diagnostic(response, deadline):
+    """Inspect this already-returned error, without another request or raw logs.
+
+    Server messages/headers/IDs and arbitrary strings can echo secrets or input.
+    Keep only recognized protocol vocabulary. Unknown values are deliberately
+    absent, not regex-sanitized free text. Usage/cost on a failed call stays
+    unknown; HTTP rejection is not proof of zero billing.
+    """
+    diagnostic = {'http_status': response.status_code, 'body_status': 'empty',
+        'error_type': None, 'error_code': None, 'error_param': None,
+        'usage': 'unknown', 'cost': None}
+    # HTTPX decodes before yielding aiter_bytes chunks, so a later size check
+    # cannot bound compressed output. Omit encoded/ambiguous bodies entirely;
+    # truncated also denotes this intentional omission, never a parsed body.
+    if response.headers.get('content-encoding', 'identity').strip().lower() != 'identity':
+        diagnostic['body_status'] = 'truncated'
+        return diagnostic
+    data = bytearray()
+    try:
+        # Diagnostics use only a small fraction of the EXISTING deadline.
+        # A stalled error body must not turn a known HTTP rejection into a retry.
+        remaining = max(0, deadline - asyncio.get_running_loop().time())
+        if remaining <= 0:
+            diagnostic['body_status'] = 'timed_out'
+            return diagnostic
+        async with asyncio.timeout(min(0.2, remaining / 2)):
+            async for chunk in response.aiter_bytes():
+                if len(data) + len(chunk) > 16384:
+                    diagnostic['body_status'] = 'truncated'
+                    return diagnostic
+                data.extend(chunk)
+    except TimeoutError:
+        diagnostic['body_status'] = 'timed_out'
+        return diagnostic
+    except Exception:
+        # Do not preserve exception strings; HTTP libraries may include URLs.
+        # CancelledError/BaseException still propagate to the original owner.
+        diagnostic['body_status'] = 'read_error'
+        return diagnostic
+    if not data:
+        return diagnostic
+    try:
+        body = json.loads(data)
+    except (ValueError, UnicodeError, RecursionError):
+        diagnostic['body_status'] = 'invalid_json'
+        return diagnostic
+    diagnostic['body_status'] = 'json'
+    error = body.get('error') if isinstance(body, dict) else None
+    if not isinstance(error, dict):
+        return diagnostic
+    vocabularies = {
+        'type': {'invalid_request_error', 'authentication_error', 'permission_error',
+                 'rate_limit_error', 'server_error', 'not_found_error'},
+        'code': {'unsupported_parameter', 'invalid_value', 'invalid_type',
+                 'missing_required_parameter', 'unknown_parameter', 'model_not_found',
+                 'context_length_exceeded', 'invalid_prompt', 'insufficient_quota',
+                 'invalid_api_key', 'permission_denied', 'rate_limit_exceeded'},
+        'param': {'model', 'instructions', 'input', 'store', 'stream', 'temperature',
+                  'max_output_tokens', 'max_tokens', 'max_completion_tokens',
+                  'reasoning', 'reasoning.effort', 'include', 'tools', 'tool_choice',
+                  'parallel_tool_calls', 'prompt_cache_key', 'prompt_cache_retention',
+                  'service_tier', 'context_management', 'extra_headers'},
+    }
+    for key, allowed in vocabularies.items():
+        value = error.get(key)
+        if type(value) is str and value in allowed:
+            diagnostic['error_' + key] = value
+    return diagnostic
 
 
 def select_route(config: dict) -> Route:
@@ -472,7 +544,9 @@ async def _native_complete(client, model, route, cap, messages, tokens, timeout,
                 async with http.stream('POST',url,json=payload,headers=headers,timeout=remaining) as response:
                     # No redirects, retry, credential refresh or recovery here.
                     if response.status_code != 200:
-                        raise CompletionHeld('provider_http_'+str(response.status_code)+'_usage_unknown')
+                        diagnostic = await _http_failure_diagnostic(response, deadline)
+                        raise CompletionHeld('provider_http_'+str(response.status_code)+'_usage_unknown',
+                                             diagnostic=diagnostic)
                     async for chunk in response.aiter_bytes():
                         if len(data)+len(chunk)>16384:
                             raise CompletionHeld('response_byte_envelope_exceeded_usage_unknown')

@@ -354,16 +354,199 @@ def execute_cases(cases, max_calls):
     return results, attempts, invocations
 
 
+def _reserve_isolated_call(quota_dir, binding, limit):
+    """Durably charge before entry. Errors/uncertain completion never refund.
+
+    This is an explicitly consented experiment ledger, NOT the live profile's
+    feature policy or daily store. Keep it when resuming the same authorization.
+    """
+    import fcntl
+    import os
+    import stat
+    from clover_cli.readonly_files import ReadOnlyStateError
+    directory = Path(quota_dir)
+    info = directory.lstat()
+    if (directory.is_symlink() or not stat.S_ISDIR(info.st_mode)
+            or info.st_uid != os.geteuid() or info.st_mode & 0o077):
+        raise ReadOnlyStateError('insecure_evaluation_directory')
+    path = directory / 'presence-eval-quota.json'
+    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, 'r+', encoding='utf-8') as stream:
+        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
+        info = os.fstat(stream.fileno())
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+                or info.st_mode & 0o077 or info.st_size > 4096):
+            raise ReadOnlyStateError('insecure_evaluation_ledger')
+        text = stream.read(4097)
+        ledger = json.loads(text) if text else {'version': 1, 'binding': binding, 'used': 0}
+        if (set(ledger) != {'version', 'binding', 'used'} or ledger['version'] != 1
+                or ledger['binding'] != binding or type(ledger['used']) is not int
+                or not 0 <= ledger['used'] <= 3):
+            raise ReadOnlyStateError('invalid_evaluation_ledger')
+        if ledger['used'] >= min(3, limit):
+            return False
+        ledger['used'] += 1
+        stream.seek(0)
+        json.dump(ledger, stream, sort_keys=True)
+        stream.truncate()
+        stream.flush()
+        os.fsync(stream.fileno())
+        return True
+
+
+def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consent=False):
+    """Explicit synthetic experiment, not background presence enablement.
+
+    Select through the supported normal resolver's non-mutating mode. Reuse the
+    actual bounded entry/production serializer and prompt with its authority,
+    cancellation, one-request/no-fallback contract intact. Request-count consent
+    applies ONLY to this isolated run, never edits settings or live budgets.
+    Existing live stores require an authenticated host for Stop; do not open or
+    inspect their private records here. Every other unsupported state holds.
+    """
+    import hashlib
+    import time
+    from copy import deepcopy
+    from clover_constants import get_clover_home
+    from clover_cli.config import load_config_snapshot, check_config_version
+    from clover_cli.managed_scope import load_managed_config
+    from clover_cli.runtime_provider import resolve_runtime_provider
+    from agent.auxiliary_client import scoped_runtime_main
+    from agent.bounded_completion import complete, select_route, CompletionHeld
+    from agent.presence_assessment import messages
+    from agent.presence_initiation import _safe_text
+
+    results = [not_measured(c, 'max_calls') for c in cases]
+    attempts = invocations = 0
+    def hold(reason):
+        for result in results:
+            if result['status'] == 'not_measured' and result['reason'] == 'max_calls':
+                result['reason'] = reason
+        return results, attempts, invocations
+    if request_budget_consent is not True or type(max_calls) is not int or not 1 <= max_calls <= 3:
+        return hold('isolated_request_budget_consent_required')
+    try:
+        def read():
+            config = load_config_snapshot()
+            current, latest = check_config_version()
+            if current < latest:
+                raise CompletionHeld('requires_existing_migrated_config')
+            managed = load_managed_config(strict=True)
+            # Explicit experiment consent is not authority to bypass IT policy.
+            if (managed.get('presence', {}).get('enabled') is False
+                    or managed.get('proactive', {}).get('enabled') is False):
+                raise CompletionHeld('managed_policy_disabled')
+            live_store = get_clover_home() / 'cron' / 'presence.db'
+            if live_store.exists() or live_store.is_symlink():
+                raise CompletionHeld('existing_live_store_requires_authenticated_host')
+            if (Path(quota_dir) / 'STOP').exists():
+                raise CompletionHeld('stopped')
+            return config, managed
+        config, managed_policy = read()
+        task = config.get('auxiliary', {}).get('presence', {})
+        if any(task.get(key) not in (None, '') for key in ('api_key','key_env','api_key_env','key_cmd')):
+            return hold('isolated_task_credential_override_forbidden')
+        # This explicit grant owns a separate experiment quota. Live background
+        # aux zeros are NOT enabled/raised/consumed. IT-pinned caps still win.
+        managed_aux = managed_policy.get('proactive', {}).get('aux', {})
+        if not isinstance(managed_aux, dict):
+            return hold('invalid_managed_budget')
+        def cap(name, maximum):
+            value = managed_aux.get(name, maximum)
+            if type(value) is not int or value < 0:
+                raise CompletionHeld('invalid_managed_budget')
+            return min(maximum, value)
+        limit, tokens = cap('max_calls_per_day', 3), cap('max_output_tokens', 512)
+        if min(limit, tokens, cap('max_calls_per_event', 1)) <= 0:
+            return hold('zero_budget')
+        runtime = resolve_runtime_provider(read_only=True)
+        route = select_route(config)
+        if (route.provider != runtime['provider'] or route.model != runtime['model']
+                or route.base_url and route.base_url.rstrip('/') != runtime['base_url'].rstrip('/')):
+            return hold('isolated_requires_exact_configured_main')
+        pool = runtime['credential_pool']
+        identity = hashlib.sha256(json.dumps([runtime['provider'], runtime['model'], pool.current().id]).encode()).hexdigest()
+        binding = hashlib.sha256(json.dumps([config, identity], sort_keys=True).encode()).hexdigest()
+        evaluation = deepcopy(config)
+        # Deliberately scoped request-count contract, no claim of token/cost cap.
+        evaluation.setdefault('presence', {})['budget_mode'] = 'requests'
+    except Exception as exc:
+        return hold(getattr(exc, 'reason', 'readonly_selection_unavailable'))
+    for index, case in enumerate(cases):
+        if attempts >= max_calls:
+            break
+        if case.get('kind') == 'connection':
+            results[index] = not_measured(case, 'requires_authenticated_later_context_host')
+            continue
+        if (not _safe_text(case['text'], 3072) or case['text'].lstrip().startswith(('/', 'Carry thought:', 'Presence:'))):
+            results[index] = not_measured(case, 'unsafe_or_oversized_input')
+            continue
+        started = time.monotonic()
+        reserved = invoked = False
+        try:
+            if read() != (config, managed_policy):
+                raise CompletionHeld('configured_route_changed')
+            if not _reserve_isolated_call(quota_dir, binding, limit):
+                return hold('budget_denied')
+            reserved = True
+            attempts += 1
+            async def invoke():
+                return await complete(config=evaluation, messages=messages(case['text']),
+                                      max_output_tokens=tokens, timeout=5)
+            from clover_cli.readonly_files import non_mutating_config_reads
+            from agent.presence_authority import scoped
+            # Reuse the bounded lane's final dispatch/publication predicate.
+            # This is a policy guard, not a fabricated SelectedOwner: the nested
+            # runtime still carries the real resolver-selected pool credential.
+            def current():
+                return read() == (config, managed_policy)
+            with non_mutating_config_reads(), scoped(None, current), scoped_runtime_main(runtime):
+                invoked = True
+                invocations += 1
+                completion = asyncio.run(invoke())
+                completion.authority.validate()
+            if read() != (config, managed_policy):
+                raise CompletionHeld('configured_route_changed')
+            result = score_case(case, completion.text)
+            result.update(raw_output=completion.text, output_usage={
+                'status': completion.usage, 'output_tokens': completion.output_tokens,
+                'reasoning_tokens': completion.reasoning_tokens}, selected_identity_opaque=identity,
+                configured_model=runtime['model'], budget_contract='isolated_requests_not_server_token_or_cost_cap')
+        except (Exception, KeyboardInterrupt, asyncio.CancelledError) as exc:
+            result = not_measured(case, getattr(exc, 'reason', 'provider_or_gate_error'))
+            result['error'] = type(exc).__name__
+            if isinstance(exc, CompletionHeld) and exc.diagnostic is not None:
+                # Native bounded adapter exports only finite protocol vocabulary,
+                # never the provider's free-text body, headers or exception text.
+                result['provider_diagnostic'] = exc.diagnostic
+        result.update(reserved=reserved, provider_entry_invoked=invoked,
+                      physical_requests=None if invoked else 0,
+                      latency_ms=round((time.monotonic() - started) * 1000, 3))
+        results[index] = result
+        if result['status'] == 'not_measured':
+            return hold('stopped_after_error_no_retry')
+    return results, attempts, invocations
+
+
 def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     modes = parser.add_mutually_exclusive_group()
     modes.add_argument('--execute', '--execute-provider-calls', dest='execute', action='store_true')
+    modes.add_argument('--execute-isolated', action='store_true',
+                       help='Explicit synthetic experiment; never enables live presence or uses live quota.')
+    parser.add_argument('--isolated-quota-dir', type=Path)
+    parser.add_argument('--acknowledge-request-budget', action='store_true',
+                       help='Accept request-count limits, NOT a server token/reasoning/cost cap.')
     modes.add_argument('--replay-scripted', type=Path,
                        help='Offline QA replay JSON: id -> {raw, optional output_tokens}. NOT model results.')
     parser.add_argument('--max-calls', type=int, choices=range(1, 4), default=1)
     parser.add_argument('--case', action='append', default=[])
     parser.add_argument('--suite', choices=('all', 'legacy', 'normative'), default='all')
     args = parser.parse_args(argv)
+    if args.execute_isolated and (not args.acknowledge_request_budget or args.isolated_quota_dir is None):
+        parser.error('--execute-isolated requires --isolated-quota-dir and --acknowledge-request-budget')
+    if not args.execute_isolated and (args.acknowledge_request_budget or args.isolated_quota_dir is not None):
+        parser.error('isolated request-budget options require --execute-isolated')
     all_cases, paths = load_cases(args.suite)
     cases = [c for c in all_cases if not args.case or c['id'] in args.case]
     if not cases or set(args.case) - {c['id'] for c in cases}:
@@ -396,6 +579,10 @@ def main(argv=None):
                 results.append(result)
         except (OSError, ValueError, TypeError, UnicodeError, RecursionError):
             parser.error('invalid bounded scripted replay file')
+    elif args.execute_isolated:
+        mode = 'explicit_isolated_request_budget_experiment'
+        results, attempts, invocations = execute_isolated_cases(cases, max_calls=args.max_calls,
+            quota_dir=args.isolated_quota_dir, request_budget_consent=args.acknowledge_request_budget)
     elif args.execute:
         mode = 'opt_in_experiment'
         results, attempts, invocations = execute_cases(cases, args.max_calls)
@@ -412,7 +599,7 @@ def main(argv=None):
         'notice': 'Author normative comparison only. SCRIPTED runs prove machinery, not model accuracy. '
                   'Missing predictions are NOT measured. Connection semantics need human ratings. '
                   'No calibration, release or full capture/connection certification.'}
-    if not args.execute:
+    if not args.execute and not args.execute_isolated:
         report['provider_calls'] = 0
     print(json.dumps(report, ensure_ascii=False))
     return 0

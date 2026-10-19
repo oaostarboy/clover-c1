@@ -7,11 +7,79 @@ From the candidate source and its interpreter:
 - `python scripts/eval_presence_current_turn.py`: default dry run. Reads only source/fixture bytes and local Git identity; imports no application, provider, auth or database modules, creates no database, and makes zero network/provider calls. Every case is `not_measured`.
 - `--suite legacy|normative|all` and repeated `--case ID` select cases. Default is `all`.
 - `--replay-scripted PATH`: offline evaluator-machinery check. File shape is `{"case_id":{"raw":"JSON response string","output_tokens":7}}`; the optional usage number is explicitly **scripted**, not observed provider usage. Missing IDs stay `not_measured`. Replay is capped at 262144 bytes and each response at the existing 4096-byte limit. This mode never calls a provider or creates a database.
-- `--execute` (alias `--execute-provider-calls`) is the only inference mode. Default maximum is one call; `--max-calls` accepts only 1–3. This is **not** permission to enable the feature or change routes/accounts. This implementation task ran no live inference.
+- `--execute` (alias `--execute-provider-calls`) is the ordinary live-policy/quota inference mode. Default maximum is one call; `--max-calls` accepts only 1–3. This is **not** permission to enable the feature or change routes/accounts. The separate consented isolated mode is documented below.
 
 Execution requires an already-current configuration, existing effective managed feature policy, non-quiet time, nonzero existing limits and a non-stopped profile. The evaluator reads policy with `load_config(migrate=False)` and refuses legacy configurations rather than migrating them. It uses the actual `presence_completion` one-shot entry and durable shared reservation, respecting lower existing daily/output limits and generation/Stop/policy rechecks. Errors/cancellation/rejected output do not refund reservations. There is no quota override, retry, fallback, refresh, fake account/ingress, thought persistence or delivery. An external concurrent config writer is not controlled by this script; do not run an experiment while changing profile configuration.
 
 Standalone execution never fabricates a later authenticated human event. Connection cases remain `not_measured: requires_authenticated_later_context_host`; their offline replay is explicitly only a parser/lexical scaffold. A joined application-host experiment is a separate integration requirement. Inherited selected-account execution still depends on C1 integration; an explicit configured route is not that proof.
+
+## Explicit isolated selected-main experiment
+
+`--execute-isolated --isolated-quota-dir EXISTING_PRIVATE_DIRECTORY
+--acknowledge-request-budget --max-calls 1..3` is a separate, explicitly consented
+synthetic experiment. It never enables background presence or writes the live
+profile's daily budget. The acknowledgement accepts a **request-count** contract,
+not a server token, hidden-reasoning, or cost cap. Consent must cover this run;
+choosing another directory is not permission to reset an existing allowance.
+Keep `presence-eval-quota.json` for the same authorization: reservations are
+fsynced before entry, capped at three total, bound to settings/selected account,
+and never refunded after errors or uncertain completion. This explicit grant
+owns an independent <=3-request experiment budget; live background aux limits
+(including zeros) remain byte-unchanged, are not raised, and are not consumed.
+The ordinary `--execute` path still honors those live limits. Administrator-pinned
+lower/zero caps constrain the experiment. A `STOP` marker in that
+directory, changed settings, or managed disabled policy holds execution. Any
+existing live presence database requires an authenticated host instead; this
+standalone path never reads its private thought records or evades live Stop.
+
+The normal `resolve_runtime_provider(read_only=True)` performs supported fresh,
+non-mutating configured-main selection. Its intentionally narrow initial
+contract is one locally persisted owned Codex OAuth pool credential, exact
+configured provider/model, and the native Codex endpoint. It returns the real
+`CredentialPool` with `select()`/`current()` ownership; it does not manufacture a
+callback owner or borrow a token. Missing, malformed, insecure, ambiguous,
+borrowed, expired/unverifiable, exhausted/dead, overridden or unsupported state
+fails closed. There is no pool hydration, global-account fallback, dotenv/env
+mutation, refresh, command credential, quota/model discovery, or settings repair.
+Readback revalidates secure source permissions/material before bounded dispatch.
+The isolated run also binds its current config/managed policy, STOP and live-store
+predicate to the existing bounded authority's final physical-dispatch fence and
+result validation. Revocation during client construction holds before HTTP;
+a consumed reservation is not refunded. This predicate grants no credential
+ownership: the nested runtime still uses the real normal-selected pool row.
+Do not use mutation/rotation methods on this read-only pool.
+
+`load_config_snapshot()` supplies fresh strict effective settings, preserving
+managed overlay precedence. Its `raw=True` variant validates but does not merge
+or expand raw user settings. The task-local `non_mutating_config_reads()` scope
+makes all four public effective/raw loaders use these fresh strict reads. The
+isolated evaluator retains that scope through real SDK/TLS client construction
+and transport; it does not replace the HTTP-client factory to hide nested home
+initialization. Normal initialization resumes after the scope, including errors.
+Unrelated model-catalog lookups report metadata unavailable in this scope,
+without reading/quarantining a catalog cache or refreshing it; a concrete
+configured model remains mandatory and never changes to a catalog default.
+POSIX descriptor-relative/no-follow reads validate
+owner/mode, regular-file size and in-read changes; unsupported ACL platforms
+hold rather than pretend POSIX bits validate ACLs. Existing state must already
+be secure. YAML duplicate/invalid policy mappings hold, without backup, migration
+or defaults/last-known-good substitution. `load_config_readonly()` remains the
+old **shared-cache optimization**, not a filesystem-read-only API. Normal
+startup initialization/migration defaults are unchanged. Incidental plugin
+allow-list reads no longer back up a corrupt file during import; explicit normal
+config reads retain that behavior. Model metadata defers HTTP-library loading so
+catalog imports cannot perform an unrelated socket probe.
+
+`scripts/presence_eval_guard.py` is the shared offline/real-smoke Python audit
+boundary. Install it before application imports: it denies live writes (including
+chmod/mkdir), private-state reads and network before charged provider admission.
+Only explicitly owned artifact/quota directories and the OS null sink may accept
+writes. It is instrumentation, not a claim of kernel process sandboxing. The
+real experiment must keep the same guard installed; do not warm caches or remove
+checks to get past a denial. A separate canonical authorization ledger must
+conservatively count failed/uncertain attempts across workers; the isolated
+quota does not replace that global consent ledger. Production transport,
+serializer, prompt, parser and authority checks remain the bounded entry's own.
 
 ## Data and scoring contract
 
@@ -30,5 +98,16 @@ Connection results separate structural schema, the existing lexical admission/no
 ## Receipts and limits
 
 Reports contain per-case accepted/raw prediction, error class or hold reason, latency, reservation, known/unknown output usage and physical-request uncertainty. The text-only public entry discards usage/authority/adapter detail, so execution honestly reports those as unknown; an entry invocation/reservation is not asserted to be a physical request. A hashed requested-route identity is not a resolved provider/account identity. No exception message, credentials, endpoint or auth object is printed.
+
+Native bounded HTTP failures optionally retain `provider_diagnostic`: status,
+bounded-body parse/truncation/read-timeout state, and recognized finite-vocabulary
+error type/code/parameter. These are untrusted provider claims, not proof that a
+parameter caused the failure. Unknown strings are omitted. No free-text message,
+body, headers, request IDs, credentials, prompt or personal data is retained.
+Buffering the already-returned error retains at most 16384 decoded bytes and uses
+a small part of the original deadline (no more than 0.2 seconds); it never retries or
+extends inference authority. Usage/cost remain unknown, even if an error body
+claims zero. A historical failure whose body was discarded cannot be recovered
+by this change; do not repeat a request to obtain diagnostics without new consent.
 
 Candidate commit/tree, evaluator bytes, fixture bytes, exact prompt UTF-8 and parser source hashes are recorded. Whole prompt/schema source files are also pinned. Local edits require the evaluator hash as well as the committed tree. SCRIPTED receipts prove evaluator machinery and existing safety controls only. They do not measure emotional interpretation, capture quality, confidence calibration, multilingual competence or human usefulness.
