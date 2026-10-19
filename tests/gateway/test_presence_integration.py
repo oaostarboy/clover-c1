@@ -15,6 +15,7 @@ from cron.presence import ThoughtStore
 
 
 def setup_host(monkeypatch, tmp_path):
+    monkeypatch.setenv('CLOVER_SAFE_MODE', '1')
     h = OfferHarness(monkeypatch, tmp_path, proactive=ACTIVE)
     (h.home / 'config.yaml').write_text(yaml.safe_dump({
         'agent': {'disabled_toolsets': ['terminal', 'browser']},
@@ -29,6 +30,7 @@ def setup_host(monkeypatch, tmp_path):
         },
     }))
     monkeypatch.setattr('agent.image_routing._lookup_supports_vision', lambda *a, **kw: False)
+    monkeypatch.setattr('tools.vision_tools.check_vision_requirements', lambda: False)
     requests = []
     async def transport(request):
         requests.append(json.loads(request.content))
@@ -194,7 +196,7 @@ def test_revocation_after_http_prevents_commit_and_publication(monkeypatch, tmp_
             from tui_gateway import server
             from tests.tui_gateway.test_presence_integration import DesktopTransport
             transport = DesktopTransport()
-            session = {'session_key':'desktop-new-input', 'clover_home':str(h.home),
+            session = {'session_key':'desktop-new-input', 'profile_home':str(h.home), 'clover_home':str(h.home),
                 'cwd':str(tmp_path), 'transport':transport}
             monkeypatch.setattr(server, '_sessions', {'desktop-race':session})
             generation = ThoughtStore().generation()
