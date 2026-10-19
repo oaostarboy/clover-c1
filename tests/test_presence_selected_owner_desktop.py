@@ -64,8 +64,10 @@ def test_desktop_selected_owner_not_identity_link_owns_callback(monkeypatch, tmp
     agent, transport, sid, session, send = desktop.desktop_host(h, monkeypatch)
     try:
         send('Carry thought: deployment packaging\nEvidence: manifest checksum before publishing.')
+        # Project return must nominate a later real human context too; it is
+        # never itself newly invented human evidence.
+        complete = send('Help verify deployment packaging')
         if opportunity == 'after_reply':
-            complete = send('Help verify deployment packaging')
             params = {'session_id':sid, 'token':complete['presence_after_reply_token']}
         else:
             params = {'session_id':sid}

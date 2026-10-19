@@ -48,7 +48,7 @@ def test_two_real_after_reply_callbacks_preserve_selected_profile_accounts(monke
             await asyncio.wait_for(barrier.wait(), 2)
             assert get_clover_home() == home
             assert aux._RUNTIME_MAIN_CONTEXT.get()['credential_pool'] is pool
-        body = ({'valence':-.8,'arousal':.8,'confidence':.9} if affect else {
+        body = ({'affect': {'valence':-.8,'arousal':.8,'confidence':.9,'posture':'careful_brief'}, 'thought':None} if affect else {
             'connection':'Deployment packaging can verify manifest checksum before publishing.',
             'evidence_indices':[0], 'confidence':.9})
         return httpx.Response(200, json={'choices':[{'message':{'content':json.dumps(body)}}]})

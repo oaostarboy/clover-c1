@@ -62,7 +62,7 @@ def test_selected_current_profile_owner_rechecks_after_http(monkeypatch,tmp_path
             elif race=='delete-evidence':
                 row=h.user_rows()[1]['id']
                 h.db._execute_write(lambda conn:conn.execute('DELETE FROM messages WHERE id=?',(row,)))
-        body=({'valence':-.8,'arousal':.8,'confidence':.9} if affect else {
+        body=({'affect': {'valence':-.8,'arousal':.8,'confidence':.9,'posture':'careful_brief'}, 'thought':None} if affect else {
             'connection':'Deployment packaging can verify manifest checksum before publishing.',
             'evidence_indices':[0],'confidence':.9})
         return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(body)}}],'usage':{'completion_tokens':3}})

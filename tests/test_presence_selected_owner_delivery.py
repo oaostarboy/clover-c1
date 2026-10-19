@@ -62,7 +62,7 @@ def test_real_requested_transport_failure_never_authorizes_optional_http(monkeyp
             elif race=='delete-evidence':
                 row=h.user_rows()[1]['id']
                 h.db._execute_write(lambda conn:conn.execute('DELETE FROM messages WHERE id=?',(row,)))
-        body=({'valence':-.8,'arousal':.8,'confidence':.9} if affect else {
+        body=({'affect': {'valence':-.8,'arousal':.8,'confidence':.9,'posture':'careful_brief'}, 'thought':None} if affect else {
             'connection':'Deployment packaging can verify manifest checksum before publishing.',
             'evidence_indices':[0],'confidence':.9})
         return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(body)}}],'usage':{'completion_tokens':3}})
@@ -153,7 +153,7 @@ def test_cancelled_actual_callback_cannot_leak_or_poison_new_turn(monkeypatch,tm
         # The canceled assessment consumes its reservation even without HTTP.
         assert reserved==len(observed)+1+len(stale)
         observed.append(dict(url=str(request.url),selected=pool.current().id,reserved=reserved,affect=affect))
-        body=({'valence':-.8,'arousal':.8,'confidence':.9} if affect else {
+        body=({'affect': {'valence':-.8,'arousal':.8,'confidence':.9,'posture':'careful_brief'}, 'thought':None} if affect else {
             'connection':'Deployment packaging can verify manifest checksum before publishing.',
             'evidence_indices':[0],'confidence':.9})
         return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(body)}}],'usage':{'completion_tokens':3}})
@@ -200,7 +200,14 @@ def test_cancelled_actual_callback_cannot_leak_or_poison_new_turn(monkeypatch,tm
         h.inbound_human('Help verify deployment packaging',message_id=103)
         assert len(observed)==1 and not ThoughtStore().publications()
         cancel_next=False
-        h.inbound_human('I am frustrated. Help verify deployment packaging again',message_id=104)
+        # A held related thought owns its event, so it cannot trigger another
+        # classifier. Use an existing unrelated source fixture and advance the
+        # injected clock beyond the real current-assessment minimum interval.
+        from datetime import timedelta
+        from agent import presence_runtime as runtime
+        next_time = runtime.clock() + timedelta(seconds=7)
+        monkeypatch.setattr(runtime, 'clock', lambda: next_time)
+        h.inbound_human('Depuis son départ, tout me semble vide. Peux-tu rester simple ?',message_id=104)
         assert len(stale)==1
         asyncio.run(stale[0]())
         record_property('completion_outcomes',json.dumps(outcomes))

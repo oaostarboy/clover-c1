@@ -56,7 +56,7 @@ def test_selected_owner_revoked_in_request_hook_never_enters_transport(monkeypat
             reserved=conn.execute('SELECT COUNT(*) FROM presence_budget').fetchone()[0]
         assert reserved==len(observed)+1
         observed.append(dict(url=str(request.url),selected=pool.current().id,reserved=reserved,affect=affect))
-        body=({'valence':-.8,'arousal':.8,'confidence':.9} if affect else {
+        body=({'affect': {'valence':-.8,'arousal':.8,'confidence':.9,'posture':'careful_brief'}, 'thought':None} if affect else {
             'connection':'Deployment packaging can verify manifest checksum before publishing.',
             'evidence_indices':[0],'confidence':.9})
         return httpx.Response(200,json={'choices':[{'message':{'content':json.dumps(body)}}],'usage':{'completion_tokens':3}})
