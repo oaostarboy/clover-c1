@@ -53,6 +53,8 @@ clover → 60 days written notice, either side, no penalty. page 4, section 9.2.
 selected-model handoff, tentative response styles, automatic open questions and
 the read-only `/emotions` command. Presence stays **off by default**. Publishing
 or restarting does not enable it, and scripted tests do not measure model accuracy.
+The draft joins reviewed Windows reader, macOS quota and timing-fixture repairs;
+reader support does not enable unsupported Windows isolated quota writing.
 
 [Verification status and platform evidence](docs/user/presence-release-status.md)
 separate passed checks from failures, skips and unfinished work. This candidate
