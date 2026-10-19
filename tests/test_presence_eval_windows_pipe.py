@@ -44,6 +44,28 @@ print(json.dumps({'readonly_pipe':True,'refusals':guard.denied_private_reads}))
     assert result == {'readonly_pipe': True, 'refusals': []}
 
 
+def test_admitted_read_endpoint_still_denies_actual_kernel_data_write(tmp_path):
+    result = child(tmp_path, '''
+import _winapi, msvcrt
+from scripts.presence_eval_guard import _windows_readonly_pipe
+r,w=os.pipe()
+try:
+    _winapi.WriteFile(msvcrt.get_osfhandle(r),b'forbidden',False)
+except OSError as exc:
+    assert exc.winerror==5,exc.winerror
+else:
+    raise AssertionError('native data write to read endpoint succeeded')
+assert _windows_readonly_pipe(r)
+os.write(w,b'ok');os.close(w)
+guard.install()
+with os.fdopen(r,'rb') as stream:
+    assert stream.read()==b'ok'
+assert guard.denied_private_reads==[]
+print(json.dumps({'native_write_denied':True,'readonly_pipe':True}))
+''')
+    assert result == {'native_write_denied': True, 'readonly_pipe': True}
+
+
 def test_actual_writable_pipe_cannot_be_wrapped_as_readonly(tmp_path):
     result = child(tmp_path, '''
 r,w=os.pipe()

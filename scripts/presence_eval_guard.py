@@ -63,9 +63,11 @@ def _windows_readonly_pipe(value):
         query.restype = wintypes.LONG
         info, returned = ObjectBasicInformation(), wintypes.ULONG()
         status = query(handle, 0, ctypes.byref(info), ctypes.sizeof(info), ctypes.byref(returned))
-        # Only concrete FILE_READ_DATA/READ_EA/READ_ATTRIBUTES/READ_CONTROL/
-        # SYNCHRONIZE rights. Unknown or any write/delete/ownership rights deny.
-        allowed = 0x00120089
+        # Concrete data-read-only rights. Windows CreatePipe's read endpoint
+        # also carries FILE_WRITE_ATTRIBUTES for non-persistent pipe state;
+        # that is not FILE_WRITE_DATA/APPEND_DATA or any filesystem grant.
+        # Unknown rights, data writes, delete, DACL and owner changes still deny.
+        allowed = 0x00120189
         return (status == 0 and returned.value == ctypes.sizeof(info)
                 and bool(info.GrantedAccess & 0x1) and not info.GrantedAccess & ~allowed
                 and msvcrt.get_osfhandle(value) == handle
