@@ -28,6 +28,9 @@ python = os.environ.get('PROOF_PYTHON') or str(SRC / '.venv' / ('Scripts/python.
 env = {k: v for k, v in os.environ.items() if k not in ('VIRTUAL_ENV', 'PYTHONPATH', 'PYTHONHOME')}
 env['HOME'] = str(HELPERS / 'home')
 env['CLOVER_PYTHON'] = python
+# Match nested bare-Python proof to the explicitly selected disposable venv.
+if os.name == 'nt':
+    env['PATH'] = str(Path(python).parent) + os.pathsep + env.get('PATH', '')
 bash = str(Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'Git/bin/bash.exe') if os.name == 'nt' else 'bash'
 mode = env.get('MODE', 'acceptance')
 slice_index, slices = int(env.get('SLICE_INDEX', '0')), int(env.get('SLICES', '1'))

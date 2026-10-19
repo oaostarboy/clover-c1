@@ -4,7 +4,12 @@
   "files": [
     "tests/clover_cli/test_readonly_windows_native.py",
     "tests/clover_cli/test_config_snapshot.py",
-    "tests/agent/test_presence_diagnostic_encoding.py"
+    "tests/agent/test_presence_diagnostic_encoding.py",
+    "tests/agent/test_windows_audit_native.py",
+    "tests/agent/test_windows_audit_paths.py",
+    "tests/clover_cli/test_runtime_provider_readonly.py",
+    "tests/test_presence_isolated_evaluator.py",
+    "tests/scripts/test_windows_footguns_full_repo_scan.py"
   ],
   "tracked_test_paths": [
     "tests/agent/test_credential_pool.py",
@@ -33,6 +38,8 @@
     "tests/agent/test_provider_sdk_dispatch_deadline.py",
     "tests/agent/test_provider_security_corrected.py",
     "tests/agent/test_provider_transport_dispatch.py",
+    "tests/agent/test_windows_audit_native.py",
+    "tests/agent/test_windows_audit_paths.py",
     "tests/agent/test_workstream_human_hooks.py",
     "tests/agent/test_workstream_suggestion_policy.py",
     "tests/clover_cli/test_config_snapshot.py",
@@ -79,6 +86,7 @@
     "tests/providers/test_plugin_discovery.py",
     "tests/providers/test_provider_registry.py",
     "tests/scripts/test_presence_evidence_footgun.py",
+    "tests/scripts/test_windows_footguns_full_repo_scan.py",
     "tests/test_collection_prefetch_isolation.py",
     "tests/test_indented_fence_boundaries.py",
     "tests/test_independent_native_exact_review.py",
