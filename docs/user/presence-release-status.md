@@ -6,8 +6,8 @@ release has been cut. Publishing or restarting does not enable the feature.
 
 ## Source identity
 
-The combined product is `a16e9234eb494e0abcb85226f7df2f7ddd4cc6f1`, tree
-`1c35d1628ebd8e7b7a85d6a44e5d85fa4848a319` (the draft PR records the final
+The combined product is `83ed3540296ef6ad9f3d5b6782a3bb1ee5b59572`, tree
+`50af19c7ce004333d9de425e1f9912a21c606b96` (the draft PR records the final
 documentation-bearing commit separately). Above the original joined candidate
 `79e5df1357c0a7bd14788e512d30e2293731374f`, this joins independently approved
 Windows reader `120708c9b04dfba6d31efacfef92c83cee749189`, macOS descriptor plus
@@ -23,9 +23,11 @@ unchanged. The timing repair changes test preparation, not request/ACK budgets.
 
 Combined execution exposed two narrow join corrections: missing POSIX UID
 capability now refuses quota/write roots explicitly, and Windows read-only pipe
-admission requires actual kernel pipe type and read-only granted-access rights.
-Unresolved regular files, writable/unknown handles and character descriptors stay
-denied. Native pipe construction does not permit subprocess entry or networking.
+admission requires actual kernel pipe type and data-read-only granted access.
+The read endpoint's non-persistent pipe-state attributes do not grant data writes
+or access to filesystem objects. Unresolved regular files, writable/unknown
+handles and character descriptors stay denied. Native pipe construction does not
+permit subprocess entry or networking.
 These new corrections require independent delta review; the original component
 approvals do not silently cover them.
 
@@ -74,6 +76,17 @@ approvals do not silently cover them.
   correction has a preserved three-failure/one-pass original capability control.
   Original failed logs and earlier transport-only incomplete/cancelled diagnostic
   runs remain preserved, not counted as behavioral passes or hidden retries.
+- A stricter first pipe-rights candidate `e6a5f1d7` still failed preflight in
+  [run39289815891](https://github.com/oaostarboy/clover-c1/actions/runs/39289815891):
+  65 passes, 77 explicit platform skips and three failures; full acceptance and
+  renderer jobs did not run. Native kernel-query facts identify the read end's
+  non-persistent pipe-state attribute bit, not data-write access.
+- Focused [Windows correction proof39292002927](https://github.com/oaostarboy/clover-c1/actions/runs/39292002927)
+  on exact implementation `83ed3540` passes **50/50**, no skips/retries: all38
+  original native reader controls, seven actual pipe controls, four UID controls
+  and the full scanner wrapper. The kernel still denies a raw data write to the
+  admitted read endpoint. This remains component proof, not full acceptance or
+  independent approval of the new capability delta.
 - The fresh combined-source Linux/Windows/macOS matrix is **pending** at this frozen
   documentation snapshot. Consult the draft PR's exact-head receipts for later
   results; this page does not turn a workflow badge into platform clearance.
