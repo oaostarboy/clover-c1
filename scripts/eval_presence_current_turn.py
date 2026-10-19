@@ -360,21 +360,26 @@ def _reserve_isolated_call(quota_dir, binding, limit):
     This is an explicitly consented experiment ledger, NOT the live profile's
     feature policy or daily store. Keep it when resuming the same authorization.
     """
-    import fcntl
     import os
     import stat
     from clover_cli.readonly_files import ReadOnlyStateError
+    # The durable experiment writer remains a separate POSIX capability. Native
+    # Windows secure reads do not authorize a weaker quota/locking substitute.
+    if os.name != 'posix' or not hasattr(os, 'geteuid') or not hasattr(os, 'O_NOFOLLOW'):
+        raise ReadOnlyStateError('evaluation_quota_unsupported')
+    import fcntl
+    uid = os.geteuid() if hasattr(os, 'geteuid') else None
     directory = Path(quota_dir)
     info = directory.lstat()
     if (directory.is_symlink() or not stat.S_ISDIR(info.st_mode)
-            or info.st_uid != os.geteuid() or info.st_mode & 0o077):
+            or info.st_uid != uid or info.st_mode & 0o077):
         raise ReadOnlyStateError('insecure_evaluation_directory')
     path = directory / 'presence-eval-quota.json'
     fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
     with os.fdopen(fd, 'r+', encoding='utf-8') as stream:
         fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
         info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
+        if (not stat.S_ISREG(info.st_mode) or info.st_uid != uid
                 or info.st_mode & 0o077 or info.st_size > 4096):
             raise ReadOnlyStateError('insecure_evaluation_ledger')
         text = stream.read(4097)
