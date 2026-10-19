@@ -215,6 +215,7 @@
     "tests/test_presence_eval_quota_boundary.py",
     "tests/test_presence_eval_quota_state.py",
     "tests/test_presence_eval_quota_unsupported.py",
+    "tests/test_presence_eval_windows_pipe.py",
     "tests/test_presence_isolated_evaluator.py",
     "tests/test_presence_joined_automatic.py",
     "tests/test_presence_native_network_boundaries.py",
