@@ -1,11 +1,11 @@
-name: Joined presence exact-source offline acceptance
+name: Approved platform join exact-source offline acceptance
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   preflight:
-    name: windows-latest / two known deadline cases
+    name: windows-latest / guard quota readonly and ACK preflight
     runs-on: windows-latest
     timeout-minutes: 90
     steps: &proof-steps
@@ -15,7 +15,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 79e5df1357c0a7bd14788e512d30e2293731374f
+          ref: c17158f48bfabe469ad0ac3c53162671a51a4cb6
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
@@ -75,3 +75,38 @@ jobs:
       SLICE_INDEX: ${{ matrix.slice }}
       SLICES: ${{ matrix.slices }}
     steps: *proof-steps
+  renderer:
+    needs: preflight
+    name: ${{ matrix.os }} / mounted renderer ACK and state
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: c17158f48bfabe469ad0ac3c53162671a51a4cb6
+          path: source
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 26
+      - name: Install locked renderer dependencies (no retry)
+        working-directory: source
+        shell: bash
+        run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
+      - name: Exact-source mounted renderer checks (no retry)
+        shell: bash
+        run: python helpers/.github/native-proof/renderer_run.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: renderer-${{ runner.os }}-${{ github.run_id }}
+          path: evidence
+          if-no-files-found: error

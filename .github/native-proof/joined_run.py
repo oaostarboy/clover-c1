@@ -28,12 +28,15 @@ python = os.environ.get('PROOF_PYTHON') or str(SRC / '.venv' / ('Scripts/python.
 env = {k: v for k, v in os.environ.items() if k not in ('VIRTUAL_ENV', 'PYTHONPATH', 'PYTHONHOME')}
 env['HOME'] = str(HELPERS / 'home')
 env['CLOVER_PYTHON'] = python
+# Match nested bare-Python proof to the explicitly selected disposable venv.
+if os.name == 'nt':
+    env['PATH'] = str(Path(python).parent) + os.pathsep + env.get('PATH', '')
 bash = str(Path(os.environ.get('ProgramFiles', 'C:/Program Files')) / 'Git/bin/bash.exe') if os.name == 'nt' else 'bash'
 mode = env.get('MODE', 'acceptance')
 slice_index, slices = int(env.get('SLICE_INDEX', '0')), int(env.get('SLICES', '1'))
 files = manifest['files'][slice_index::slices]
 if mode == 'preflight':
-    files = ['tests/gateway/test_emotions_command.py', 'tests/gateway/test_emotions_revision_reads.py']
+    files = manifest['preflight_files']
 selected_files = files
 receipt = dict(sha=sha, tree=tree, os=platform.platform(), mode=mode,
                slice_index=slice_index, slices=slices, python=python,
@@ -46,8 +49,6 @@ def invoke(file, label, extra):
     directory.mkdir()
     before = set(DEST.iterdir())
     cmd = [bash, 'scripts/run_tests.sh', file, '-j', '1', '--file-timeout', '240', '--file-retries', '0', '--', '-q', '-p', 'no:randomly', '--tb=short', '-ra', '-p', 'settlement_partition']
-    if mode == 'preflight':
-        cmd += ['-p', 'settlement_diagnostic']
     cmd += extra
     start = time.monotonic()
     with (directory / 'canonical.log').open('w', encoding='utf-8') as log:
@@ -84,14 +85,8 @@ for index, file in enumerate(selected_files):
         continue
     ids = discovery['collection'][0]['all_ids']
     assert ids and len(ids) == len(set(ids))
-    if mode == 'preflight':
-        wanted = 'test_status_owner_purges_expired_and_separates_exact_scope' if file.endswith('test_emotions_command.py') else 'test_mutation_in_final_revision_read_holds[host-_lineage-desktop_slash]'
-        selected = [i for i, node in enumerate(ids) if node.split('::', 1)[1] == wanted]
-        assert len(selected) == 1
-        ranges = [(selected[0], selected[0]+1)]
-    else:
-        size = 8 if os.name == 'nt' and file in manifest['partition_files'] else len(ids)
-        ranges = [(start, min(start+size, len(ids))) for start in range(0, len(ids), size)]
+    size = 8 if os.name == 'nt' and file in manifest['partition_files'] else len(ids)
+    ranges = [(start, min(start+size, len(ids))) for start in range(0, len(ids), size)]
     observed, failed, skipped = [], [], []
     expected = [node for a, b in ranges for node in ids[a:b]]
     for start, stop in ranges:
