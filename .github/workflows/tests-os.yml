@@ -9,7 +9,7 @@ jobs:
     timeout-minutes: 20
     env:
       MODE: preflight
-      JOIN_FD_DIAGNOSTIC: "true"
+      JOIN_FD_DIAGNOSTIC: "false"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -17,7 +17,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: c17158f48bfabe469ad0ac3c53162671a51a4cb6
+          ref: af05a6af32da38bf2e89eb722a81d1383b09f04c
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39

@@ -1,6 +1,6 @@
 {
-  "source_sha": "c17158f48bfabe469ad0ac3c53162671a51a4cb6",
-  "tree": "eaa514da85536840976692129c2aa4b8d08d73e3",
+  "source_sha": "af05a6af32da38bf2e89eb722a81d1383b09f04c",
+  "tree": "c59e73245fbea58334d68503106de5248098c60a",
   "files": [
     "tests/agent/test_credential_pool.py",
     "tests/agent/test_models_dev.py",
@@ -266,6 +266,6 @@
   "original_files": 113,
   "new_union_files": 9,
   "preflight_files": [
-    "tests/clover_cli/test_readonly_windows_native.py"
+    "tests/test_presence_eval_windows_pipe.py"
   ]
 }
