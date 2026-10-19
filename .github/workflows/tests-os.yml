@@ -15,7 +15,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: c17158f48bfabe469ad0ac3c53162671a51a4cb6
+          ref: e6a5f1d7472b4c43491bef0eb67782c6c153bca6
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
@@ -91,7 +91,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: c17158f48bfabe469ad0ac3c53162671a51a4cb6
+          ref: e6a5f1d7472b4c43491bef0eb67782c6c153bca6
           path: source
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020

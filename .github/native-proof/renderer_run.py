@@ -12,8 +12,8 @@ DEST=ROOT/'evidence'
 DEST.mkdir(exist_ok=True)
 def git(*args):
     return subprocess.check_output(['git','-C',str(SRC),*args],text=True).strip()
-assert git('rev-parse','HEAD')=='c17158f48bfabe469ad0ac3c53162671a51a4cb6'
-assert git('rev-parse','HEAD^{tree}')=='eaa514da85536840976692129c2aa4b8d08d73e3'
+assert git('rev-parse','HEAD')=='e6a5f1d7472b4c43491bef0eb67782c6c153bca6'
+assert git('rev-parse','HEAD^{tree}')=='d7d3f4e9bafa4033dfc9d4c96bac648fae2ebeb4'
 receipt: dict[str, Any] = dict(sha=git('rev-parse','HEAD'),tree=git('rev-parse','HEAD^{tree}'),status_before=git('status','--porcelain','--untracked-files=no'),started=time.time())
 (DEST/'receipt.json').write_text(json.dumps(receipt,indent=2))
 home=DEST/'private-home';home.mkdir()
