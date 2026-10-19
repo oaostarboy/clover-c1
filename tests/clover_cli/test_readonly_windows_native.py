@@ -123,6 +123,10 @@ def test_wrong_private_owner_rejected(state):
 @pytest.mark.parametrize('where', ['ancestor', 'parent', 'leaf'])
 def test_native_junction_refused(state, tmp_path, where):
     home, path = state
+    if where == 'ancestor':
+        (home / 'nested').mkdir()
+        (home / 'nested' / path.name).write_bytes(path.read_bytes())
+        assert read_existing_file(home / 'nested' / path.name) == 'model: exact\n'
     link = tmp_path / 'junction'
     subprocess.run(['cmd.exe', '/d', '/c', 'mklink', '/J', str(link), str(home)],
                    check=True, capture_output=True)
@@ -207,7 +211,7 @@ def test_live_quota_unsupported_before_mutation(state):
     assert sorted(p.name for p in home.iterdir()) == before
 
 
-def test_native_cold_selection_under_real_evaluation_guard(tmp_path, monkeypatch):
+def test_native_cold_selection_under_real_evaluation_guard(tmp_path, monkeypatch, record_property):
     import json
     import sys
     from tests.clover_cli.test_runtime_provider_readonly import profile, inventory
@@ -243,13 +247,19 @@ print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt(),
     env = {k: os.environ[k] for k in ('PATH', 'SYSTEMROOT') if k in os.environ}
     env.update(HOME=str(tmp_path), USERPROFILE=str(tmp_path), CLOVER_HOME=str(home),
                CLOVER_MANAGED_DIR=str(tmp_path/'managed'), PYTHONPATH=str(root),
-               PYTHONDONTWRITEBYTECODE='1')
+               # Preserve the canonical runner's UTF-8 child contract. Without
+               # it, the ordinary CLI stdout repair (not a config read) seeds
+               # its documented UTF-8 env defaults after the audit baseline.
+               PYTHONDONTWRITEBYTECODE='1', PYTHONUTF8='1', PYTHONIOENCODING='utf-8')
     child = subprocess.run([sys.executable, '-c', code], cwd=root, env=env,
                            capture_output=True, text=True, timeout=20)
     assert child.returncode == 0, child.stderr
     result = json.loads(child.stdout)
     assert result['selected'] and result['blocked'] == 2
-    assert result['guard']['baseline_unchanged'], result
+    record_property('cold_file_baseline_unchanged', result['file_baseline_unchanged'])
+    record_property('cold_environment_change_keys', json.dumps(result['environment_change_keys']))
+    assert result['guard']['baseline_unchanged'], json.dumps({
+        'files_unchanged':result['file_baseline_unchanged'], 'changed_keys':result['environment_change_keys']})
     assert len(result['guard']['denied_writes']) == 1
     assert result['guard']['network_events'][0]['admitted'] is False
     assert result['guard']['denied_private_reads'] == []
