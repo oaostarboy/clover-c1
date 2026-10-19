@@ -13,8 +13,8 @@ OUT = ROOT / 'evidence'
 OUT.mkdir(exist_ok=True)
 PYTHON = SRC / '.venv/Scripts/python.exe'
 BASH = Path('C:/Program Files/Git/bin/bash.exe')
-SHA = '44ed73336bea1120eba1ae09a3f9cc8051e4208e'
-TREE = 'ac3afa3692a7d1e152c79663dd3b34c57beb53b6'
+SHA = '765e75144daa039a042d8173a769e0de53aed0ad'
+TREE = '7b103907931552d4817983da3dab9d8afe037313'
 def git(*args):
     return subprocess.check_output(['git', '-C', str(SRC), *args], text=True).strip()
 assert git('rev-parse', 'HEAD') == SHA
@@ -60,15 +60,21 @@ for key in ['VIRTUAL_ENV', 'PYTHONPATH', 'PYTHONHOME']:
     env.pop(key, None)
 env['HOME'] = str(Path(__file__).parent / 'home')
 env['CLOVER_PYTHON'] = str(PYTHON)
+from safety_probe import run as safety_run
+receipt['safety_probe_exit'] = safety_run(PYTHON, SRC, OUT)
 selection = [
-    ('tests/gateway/test_emotions_recheck_edges.py', 'test_new_cold_managed_inventory_before_import'),
-    ('tests/gateway/test_trusted_human_origin_ingress.py', 'test_receipt_reads_back_in_a_fresh_process'),
-    ('tests/test_presence_quality_evaluator.py', 'test_dry_cli_imports_no_runtime_auth_db_or_network'),
+    ('tests/gateway/test_emotions_recheck_edges.py', ''),
+    ('tests/gateway/test_trusted_human_origin_ingress.py', ''),
+    ('tests/test_presence_quality_evaluator.py', ''),
+    ('tests/test_presence_native_network_boundaries.py', ''),
+    ('tests/clover_state/test_isolation_marker_env.py', ''),
 ]
 for index, (file, keyword) in enumerate(selection):
     cmd = [str(BASH), 'scripts/run_tests.sh', file, '-j', '1', '--file-timeout', '240',
            '--file-retries', '0', '--', '-q', '-p', 'no:randomly', '--tb=short', '-ra',
-           '-k', keyword, '--junitxml=' + str(OUT / f'file-{index}.xml')]
+           '--junitxml=' + str(OUT / f'file-{index}.xml')]
+    if keyword:
+        cmd += ['-k', keyword]
     row = dict(file=file, command=cmd, started=time.time())
     with (OUT / f'file-{index}.log').open('w', encoding='utf-8') as log:
         row['exit_code'] = subprocess.run(cmd, cwd=SRC, env=env, stdout=log,
@@ -79,5 +85,5 @@ for index, (file, keyword) in enumerate(selection):
 receipt['status_after'] = git('status', '--porcelain', '--untracked-files=no')
 (OUT / 'receipt.json').write_text(json.dumps(receipt, indent=2))
 print(json.dumps(receipt, indent=2))
-# Expected reproduction fails the workflow rather than repainting RED as success.
-sys.exit(1 if any(row['exit_code'] for row in receipt['rows']) or receipt['status_after'] else 0)
+# Every selected file and the unchanged negative controls must execute and pass.
+sys.exit(1 if any(row['exit_code'] for row in receipt['rows']) or receipt['status_after'] or receipt['safety_probe_exit'] else 0)
