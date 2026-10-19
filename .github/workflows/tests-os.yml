@@ -1,14 +1,18 @@
-name: Joined presence exact-source offline acceptance
+name: Joined presence renderer ACK exact-source proof
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  preflight:
-    name: windows-latest / two known deadline cases
-    runs-on: windows-latest
+  renderer:
+    name: ${{ matrix.os }} / renderer ACK and state
+    runs-on: ${{ matrix.os }}
     timeout-minutes: 90
-    steps: &proof-steps
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           path: helpers
@@ -18,17 +22,6 @@ jobs:
           ref: 79e5df1357c0a7bd14788e512d30e2293731374f
           path: source
           persist-credentials: false
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
-        with:
-          version: "0.9.28"
-          enable-cache: true
-          cache-dependency-glob: source/uv.lock
-      - name: Install locked isolated test dependencies (no retry)
-        working-directory: source
-        shell: bash
-        run: |
-          uv python install 3.11
-          uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web --extra messaging
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
           node-version: 26
@@ -36,42 +29,12 @@ jobs:
         working-directory: source
         shell: bash
         run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
-      - name: Canonical exact-source checks (no retries)
+      - name: Exact-source offline renderer ACK tests (no retry)
         shell: bash
-        run: python helpers/.github/native-proof/joined_run.py
+        run: python helpers/.github/native-proof/renderer_run.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: presence-${{ runner.os }}-${{ env.MODE }}-${{ env.SLICE_INDEX }}-${{ github.run_id }}
+          name: renderer-${{ runner.os }}-${{ github.run_id }}
           path: evidence
           if-no-files-found: error
-    env:
-      MODE: preflight
-      SLICE_INDEX: "0"
-      SLICES: "1"
-  acceptance:
-    needs: preflight
-    name: ${{ matrix.os }} / exact source slice ${{ matrix.slice }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {os: ubuntu-latest, slice: "0", slices: "2"}
-          - {os: ubuntu-latest, slice: "1", slices: "2"}
-          - {os: macos-latest, slice: "0", slices: "2"}
-          - {os: macos-latest, slice: "1", slices: "2"}
-          - {os: windows-latest, slice: "0", slices: "8"}
-          - {os: windows-latest, slice: "1", slices: "8"}
-          - {os: windows-latest, slice: "2", slices: "8"}
-          - {os: windows-latest, slice: "3", slices: "8"}
-          - {os: windows-latest, slice: "4", slices: "8"}
-          - {os: windows-latest, slice: "5", slices: "8"}
-          - {os: windows-latest, slice: "6", slices: "8"}
-          - {os: windows-latest, slice: "7", slices: "8"}
-    env:
-      MODE: acceptance
-      SLICE_INDEX: ${{ matrix.slice }}
-      SLICES: ${{ matrix.slices }}
-    steps: *proof-steps
