@@ -19,16 +19,17 @@ scope=env['SCOPE']
 bash=str(Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Git/bin/bash.exe') if os.name=='nt' else 'bash'
 if os.name=='nt': assert Path(bash).is_file(), 'Git for Windows Bash is required'
 cmd=[bash,'scripts/run_tests.sh']
-if scope=='joined':cmd+=manifest['joined_file_selection']
+if scope=='diagnose':cmd+=['tests/test_presence_selected_owner_concurrent_probe.py','tests/test_presence_selected_owner_desktop.py','tests/tui_gateway/test_presence_renderer_bridge.py','tests/test_presence_surface_wire.py','tests/gateway/test_emotions_command.py','tests/agent/test_presence_native_providers.py','tests/agent/test_provider_transport_dispatch.py']
+elif scope=='joined':cmd+=manifest['joined_file_selection']
 else:cmd+=['--slice',scope]
-cmd+=['-j','6','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra']
+cmd+=['-j','2','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra','-o','faulthandler_timeout=35']
 receipt={'sha':sha,'tree':tree,'os':platform.platform(),'scope':scope,'command':cmd,'python':str(python),'status_before':git('status','--porcelain','--untracked-files=no'),'started':time.time()}
 (DEST/'receipt.json').write_text(json.dumps(receipt,indent=2))
 with (DEST/'canonical.log').open('w',encoding='utf-8') as f:
     proc=subprocess.Popen(cmd,cwd=SRC,env=env,stdout=f,stderr=subprocess.STDOUT)
     rc=proc.wait()
 receipt.update(exit_code=rc,ended=time.time(),status_after=git('status','--porcelain','--untracked-files=no'))
-records=[json.loads(p.read_text()) for p in DEST.glob('*.json') if p.name!='receipt.json']
+records=[json.loads(p.read_text()) for p in DEST.glob('*.json') if p.name!='receipt.json' and 'reports' in json.loads(p.read_text())]
 reports=[x for r in records for x in r.get('reports',[])]
 receipt['files_with_reports']=len(records)
 receipt['call_passed']=sum(r['when']=='call' and r['outcome']=='passed' for r in reports)

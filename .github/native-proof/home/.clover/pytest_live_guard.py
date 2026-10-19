@@ -78,3 +78,63 @@ def pytest_sessionfinish(session,exitstatus):
         REC.update(exitstatus=int(exitstatus),collected=session.testscollected)
 def pytest_unconfigure(config):
     if REC is not None: (DEST/(REC['key']+'.json')).write_text(json.dumps(REC),encoding='utf-8')
+
+# Diagnostic-only observer; never changes an application result or deadline.
+import faulthandler, threading, time, traceback, sys
+_DIAG = None
+_T0 = time.monotonic()
+def _note(kind, **values):
+    if _DIAG is not None:
+        _DIAG.write(json.dumps(dict(t=round(time.monotonic()-_T0,6),kind=kind,**values))+"\n")
+        _DIAG.flush()
+_original_thread_start = threading.Thread.start
+def _observed_start(thread, *args, **kwargs):
+    target = getattr(thread, '_target', None)
+    if getattr(target, '__module__', '') == 'clover_cli.banner':
+        _note('banner_thread_start', frames=traceback.format_stack(limit=12))
+    return _original_thread_start(thread, *args, **kwargs)
+threading.Thread.start = _observed_start
+@pytest.hookimpl(tryfirst=True)
+def pytest_sessionstart(session):
+    global _DIAG
+    _DIAG=(DEST/('diagnostic-'+str(os.getpid())+'.jsonl')).open('w', encoding='utf-8')
+    faulthandler.dump_traceback_later(40,repeat=True)
+    _note('sessionstart')
+@pytest.hookimpl(tryfirst=True)
+def pytest_runtest_logstart(nodeid, location):
+    _note('test_start',nodeid=nodeid)
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_call(item):
+    # Observe existing imported boundaries only, to preserve cold import paths.
+    import functools
+    module=sys.modules.get('agent.presence_runtime')
+    patches=[]
+    if module is not None:
+        cls=module.PresenceTurn
+        for name in ('current','snapshot','_publish'):
+            original=getattr(cls,name)
+            if name=='_publish':
+                @functools.wraps(original)
+                async def wrapped(self,*a,__original=original,__name=name,**kw):
+                    start=time.monotonic(); _note('begin',method=__name)
+                    try: return await __original(self,*a,**kw)
+                    finally: _note('end',method=__name,elapsed=time.monotonic()-start)
+            else:
+                @functools.wraps(original)
+                def wrapped(self,*a,__original=original,__name=name,**kw):
+                    start=time.monotonic()
+                    result=__original(self,*a,**kw)
+                    _note('return',method=__name,elapsed=time.monotonic()-start,valid=bool(result))
+                    return result
+            patches.append((cls,name,original)); setattr(cls,name,wrapped)
+        from cron.presence import ThoughtStore
+        for name in ('claim','attempt','acknowledge','unknown'):
+            original=getattr(ThoughtStore,name)
+            @functools.wraps(original)
+            def wrapped(self,*a,__original=original,__name=name,**kw):
+                start=time.monotonic();result=__original(self,*a,**kw)
+                _note('store',method=__name,elapsed=time.monotonic()-start,valid=bool(result))
+                return result
+            patches.append((ThoughtStore,name,original));setattr(ThoughtStore,name,wrapped)
+    yield
+    for cls,name,original in reversed(patches):setattr(cls,name,original)
