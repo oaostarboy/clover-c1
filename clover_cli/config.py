@@ -3352,6 +3352,9 @@ def read_raw_config(*, preserve_corrupt: bool = True) -> Dict[str, Any]:
     ``load_config()``. Returns a deepcopy on every call since some callers
     mutate the result before passing to ``save_config()``.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return load_config_snapshot(raw=True)
     with _CONFIG_LOCK:
         try:
             config_path = get_config_path()
@@ -3443,6 +3446,9 @@ def read_raw_config_readonly() -> Dict[str, Any]:
     Same (mtime_ns, size) freshness key as ``read_raw_config()`` — an edited
     config.yaml is picked up on the next call.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return load_config_snapshot(raw=True)
     with _CONFIG_LOCK:
         try:
             config_path = get_config_path()
@@ -3602,10 +3608,13 @@ def load_config(*, migrate: bool = True) -> Dict[str, Any]:
     startup migration write. Use it for deterministic status/control menus
     that must not mutate a legacy config merely by displaying its state.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return load_config_snapshot()
     return _load_config_impl(want_deepcopy=True, migrate=migrate)
 
 
-def load_config_snapshot() -> Dict[str, Any]:
+def load_config_snapshot(*, raw: bool = False) -> Dict[str, Any]:
     """Fresh non-mutating effective settings for explicitly read-only evaluation.
 
     Unlike load_config_readonly (a shared-cache optimization), this never
@@ -3641,8 +3650,10 @@ def load_config_snapshot() -> Dict[str, Any]:
         except (ValueError, TypeError, RecursionError, yaml.YAMLError) as exc:
             raise ReadOnlyStateError('invalid_existing_config') from exc
 
-    raw = parse_existing(get_config_path())
-    config = _deep_merge(copy.deepcopy(DEFAULT_CONFIG), raw)
+    raw_config = parse_existing(get_config_path())
+    if raw:
+        return raw_config
+    config = _deep_merge(copy.deepcopy(DEFAULT_CONFIG), raw_config)
     expanded = _expand_env_vars(_normalize_root_model_keys(_normalize_max_turns_config(config)))
     managed_dir = managed_scope.get_managed_dir()
     override = os.environ.get('CLOVER_MANAGED_DIR', '').strip()
@@ -3680,6 +3691,9 @@ def load_config_readonly() -> Dict[str, Any]:
     existing ``isinstance(x, dict)`` guards downstream keep working. The
     safety guarantee is purely documented, not enforced — be careful.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return load_config_snapshot()
     return _load_config_impl(want_deepcopy=False)
 
 

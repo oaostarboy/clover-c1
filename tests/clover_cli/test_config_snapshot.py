@@ -56,3 +56,34 @@ def test_snapshot_rejects_duplicate_policy_keys(monkeypatch, tmp_path):
     from clover_cli.readonly_files import ReadOnlyStateError
     with pytest.raises(ReadOnlyStateError):
         config.load_config_snapshot()
+
+
+@pytest.mark.parametrize('loader_name', ['read_raw_config', 'read_raw_config_readonly'])
+def test_nested_readonly_scope_validates_raw_readers(monkeypatch, tmp_path, loader_name):
+    home = tmp_path/'profile'
+    home.mkdir(mode=0o700)
+    path = home/'config.yaml'
+    path.write_text('security:\n  redact_secrets: true\n')
+    path.chmod(0o644)
+    monkeypatch.setenv('CLOVER_HOME',str(home))
+    from clover_cli.readonly_files import non_mutating_config_reads, ReadOnlyStateError
+    with non_mutating_config_reads(), pytest.raises(ReadOnlyStateError):
+        getattr(config,loader_name)()
+
+
+def test_nonmutating_scope_restores_normal_initialization(monkeypatch, tmp_path):
+    home = tmp_path/'profile'
+    home.mkdir(mode=0o700)
+    path = home/'config.yaml'
+    path.write_text('model:\n  provider: openai-codex\n  default: exact-model\n')
+    path.chmod(0o600)
+    monkeypatch.setenv('CLOVER_HOME',str(home))
+    def normal_init():
+        raise RuntimeError('normal_default_initialization_preserved')
+    monkeypatch.setattr(config,'ensure_clover_home',normal_init)
+    from clover_cli.readonly_files import non_mutating_config_reads
+    with non_mutating_config_reads():
+        assert config.load_config()['model']['default'] == 'exact-model'
+        assert config.load_config_readonly()['model']['default'] == 'exact-model'
+    with pytest.raises(RuntimeError,match='normal_default_initialization_preserved'):
+        config.load_config(migrate=False)

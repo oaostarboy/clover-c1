@@ -9,6 +9,28 @@ from __future__ import annotations
 import os
 from pathlib import Path
 import stat
+from contextlib import contextmanager
+from contextvars import ContextVar
+
+_CONFIG_READ_ONLY = ContextVar('clover_non_mutating_config_reads', default=False)
+
+
+def non_mutating_config_active():
+    return _CONFIG_READ_ONLY.get()
+
+
+@contextmanager
+def non_mutating_config_reads():
+    """Task-local contract for nested config/TLS readers, not a cache shim.
+
+    All public config loaders use fresh validated file reads in this scope.
+    Normal callers retain initialization/migration. Context resets on every exit.
+    """
+    token = _CONFIG_READ_ONLY.set(True)
+    try:
+        yield
+    finally:
+        _CONFIG_READ_ONLY.reset(token)
 
 
 class ReadOnlyStateError(ValueError):

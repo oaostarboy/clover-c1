@@ -60,8 +60,11 @@ def test_cold_selected_path_has_no_hidden_initialization(monkeypatch, tmp_path):
     assert result['guard']['baseline_unchanged'] is True
 
 
-def test_cold_full_evaluator_keeps_os_guard_through_actual_wire(monkeypatch, tmp_path):
+@pytest.mark.parametrize('catalog_cache', [False, True])
+def test_cold_full_evaluator_keeps_os_guard_through_actual_wire(monkeypatch, tmp_path, catalog_cache):
     home, _, _ = profile(monkeypatch, tmp_path)
+    if catalog_cache:
+        (home/'models_dev_cache.json').write_text('SCRIPTED-corrupt-public-catalog-do-not-repair')
     quota = tmp_path / 'quota'
     quota.mkdir(mode=0o700)
     code = r'''
@@ -80,7 +83,10 @@ def respond(request):
     wires.append(request.url.host)
     event = {'type':'response.completed','response':{'output':[{'type':'message','content':[{'type':'output_text','text':'{"affect":null,"thought":null}'}]}]}}
     return httpx.Response(200,headers={'Content-Type':'text/event-stream'},content='data: '+json.dumps(event)+'\n\n')
-aux._openai_http_client_kwargs = lambda *a,**kw: {'http_client': (httpx.AsyncClient if kw.get('async_mode') else httpx.Client)(transport=httpx.MockTransport(respond))}
+httpx.HTTPTransport.handle_request = lambda transport, request: respond(request)
+async def scripted_async(transport, request):
+    return respond(request)
+httpx.AsyncHTTPTransport.handle_async_request = scripted_async
 cases,_ = load_cases('normative')
 result,attempts,invocations = execute_isolated_cases([next(c for c in cases if c['id']=='thought_user_interest_en')],max_calls=3,quota_dir=quota,request_budget_consent=True)
 print(json.dumps({'status':result[0]['status'],'wires':wires,'attempts':attempts,'invocations':invocations,'guard':guard.receipt()}))

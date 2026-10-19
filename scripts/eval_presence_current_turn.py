@@ -486,7 +486,8 @@ def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consen
             async def invoke():
                 return await complete(config=evaluation, messages=messages(case['text']),
                                       max_output_tokens=tokens, timeout=5)
-            with scoped_runtime_main(runtime):
+            from clover_cli.readonly_files import non_mutating_config_reads
+            with non_mutating_config_reads(), scoped_runtime_main(runtime):
                 invoked = True
                 invocations += 1
                 completion = asyncio.run(invoke())

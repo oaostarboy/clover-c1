@@ -42,7 +42,16 @@ Readback revalidates secure source permissions/material before bounded dispatch.
 Do not use mutation/rotation methods on this read-only pool.
 
 `load_config_snapshot()` supplies fresh strict effective settings, preserving
-managed overlay precedence. POSIX descriptor-relative/no-follow reads validate
+managed overlay precedence. Its `raw=True` variant validates but does not merge
+or expand raw user settings. The task-local `non_mutating_config_reads()` scope
+makes all four public effective/raw loaders use these fresh strict reads. The
+isolated evaluator retains that scope through real SDK/TLS client construction
+and transport; it does not replace the HTTP-client factory to hide nested home
+initialization. Normal initialization resumes after the scope, including errors.
+Unrelated model-catalog lookups report metadata unavailable in this scope,
+without reading/quarantining a catalog cache or refreshing it; a concrete
+configured model remains mandatory and never changes to a catalog default.
+POSIX descriptor-relative/no-follow reads validate
 owner/mode, regular-file size and in-read changes; unsupported ACL platforms
 hold rather than pretend POSIX bits validate ACLs. Existing state must already
 be secure. YAML duplicate/invalid policy mappings hold, without backup, migration

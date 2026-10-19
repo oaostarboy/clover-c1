@@ -318,6 +318,9 @@ def _load_disk_cache() -> Dict[str, Any]:
     a warning so it doesn't silently masquerade as ``{}`` and break
     provider/model resolution for every caller.
     """
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        return {}  # Explicit model route needs no catalog or cache repair.
     try:
         cache_path = _get_cache_path()
         if cache_path.exists():
@@ -622,6 +625,14 @@ def fetch_models_dev(
     network.
     """
     global _models_dev_cache, _models_dev_cache_time, _models_dev_retry_after
+
+    from clover_cli.readonly_files import non_mutating_config_active
+    if non_mutating_config_active():
+        # Explicit selected-model evaluation has no catalog-discovery authority.
+        # Even allow_network=False can quarantine/rename a corrupt disk cache.
+        # Report metadata unavailable without reading/repairing it or changing
+        # the cache; the configured provider/model must already be concrete.
+        return {}
 
     if not allow_network:
         if _models_dev_cache:
