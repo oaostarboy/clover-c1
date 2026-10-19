@@ -27,17 +27,14 @@ def audit(event,args):
  if event in {'os.mkdir','os.remove','os.rename','os.rmdir','os.symlink','os.link','os.chmod'}:
   blocked.append(event);raise AssertionError('denied mutation')
 sys.addaudithook(audit)
-import clover_state as state
-assert pathlib.Path(state.__file__).resolve()==source/'clover_state.py'
-assert state.get_clover_home().resolve()==home/'profile'
-assert state._running_under_pytest()
-assert not blocked, blocked
-# Constructor must refuse BEFORE any access to the actual home database.
-try:
- state.SessionDB(db_path=state._real_platform_state_root()/'state.db')
-except RuntimeError as e:
- assert 'live-system guard' in str(e)
-else:raise AssertionError('production DB was not refused')
+# This is the COLD source/import boundary, not a new contract for importing
+# the complete DB/runtime graph. Actual DB guard behavior is exercised by
+# the six unchanged test_isolation_marker_env tests in this same native run.
+import asyncio
+import agent.emotions as emotions
+assert pathlib.Path(emotions.__file__).resolve()==source/'agent'/'emotions.py'
+assert pathlib.Path(os.environ['CLOVER_HOME']).resolve()==home/'profile'
+assert pathlib.Path(os.environ['CLOVER_TEST_ISOLATION']).resolve()==home
 assert not blocked, blocked
 for action in (socket.socket, lambda:socket.getaddrinfo('example.invalid',443),
                lambda:open(home/'auth.json'),lambda:open(home/'denied-write','w')):
@@ -47,8 +44,8 @@ for action in (socket.socket, lambda:socket.getaddrinfo('example.invalid',443),
 assert len(blocked)==4,blocked
 after={str(p.relative_to(home)):p.read_bytes().hex() if p.is_file() else '<directory>' for p in home.rglob('*')}
 assert before==after
-print(json.dumps(dict(home_is_private=True,source_origin_exact=True,test_isolation_armed=True,
-                     production_db_refused_before_access=True,import_socket_events=0,
+print(json.dumps(dict(home_is_private=True,source_origin_exact=True,test_isolation_marker_present=True,
+                     cold_import_socket_events=0,
                      denied=blocked,inventory_unchanged=True)))
 '''
     proc = subprocess.run([str(python), '-B', '-c', code, str(home), str(source)],
