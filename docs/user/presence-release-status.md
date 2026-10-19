@@ -6,8 +6,8 @@ release has been cut. Publishing or restarting does not enable the feature.
 
 ## Source identity
 
-The combined product is `7dfd4dc24956d1e8f5519ffd8496b3e32e8b72f9`, tree
-`fa0affefb8d9d7b2ca39600ce745464b97bd966c` (the draft PR records the final
+The combined product is `a16e9234eb494e0abcb85226f7df2f7ddd4cc6f1`, tree
+`1c35d1628ebd8e7b7a85d6a44e5d85fa4848a319` (the draft PR records the final
 documentation-bearing commit separately). Above the original joined candidate
 `79e5df1357c0a7bd14788e512d30e2293731374f`, this joins independently approved
 Windows reader `120708c9b04dfba6d31efacfef92c83cee749189`, macOS descriptor plus
@@ -20,6 +20,14 @@ Windows secure reader support does **not** enable Windows isolated quota writing
 that unsupported operation still holds before mutation or provider entry.
 Production deadlines, Stop, owner checks and final publication fences remain
 unchanged. The timing repair changes test preparation, not request/ACK budgets.
+
+Combined execution exposed two narrow join corrections: missing POSIX UID
+capability now refuses quota/write roots explicitly, and Windows read-only pipe
+admission requires actual kernel pipe type and read-only granted-access rights.
+Unresolved regular files, writable/unknown handles and character descriptors stay
+denied. Native pipe construction does not permit subprocess entry or networking.
+These new corrections require independent delta review; the original component
+approvals do not silently cover them.
 
 ## Component evidence is not combined-source acceptance
 
@@ -54,6 +62,18 @@ unchanged. The timing repair changes test preparation, not request/ACK budgets.
   passed the unchanged request/ACK budgets. Final quota raw receipts show Linux
   and macOS 42 cases each and one Windows unsupported-platform hold; anomalous
   queued/null workflow metadata is **not** an overall workflow green claim.
+- The first approved-delta join `c17158f4` failed Windows preflight in
+  [run39286577347](https://github.com/oaostarboy/clover-c1/actions/runs/39286577347):
+  the original native reader file passed37 cases and failed one cold-selection
+  assertion after three unresolved pipe-descriptor refusals. Full acceptance did
+  not start; this is not a completed full affected-source execution. Unchanged-audit native
+  diagnosis locates these at stdlib platform discovery's pipe construction.
+- Tests-only native pipe controls on `af05a6af` reproduce two failures/four passes
+  in [run39288618829](https://github.com/oaostarboy/clover-c1/actions/runs/39288618829).
+  A separate full scanner found six bare UID expressions. Their fail-closed
+  correction has a preserved three-failure/one-pass original capability control.
+  Original failed logs and earlier transport-only incomplete/cancelled diagnostic
+  runs remain preserved, not counted as behavioral passes or hidden retries.
 - The fresh combined-source Linux/Windows/macOS matrix is **pending** at this frozen
   documentation snapshot. Consult the draft PR's exact-head receipts for later
   results; this page does not turn a workflow badge into platform clearance.
