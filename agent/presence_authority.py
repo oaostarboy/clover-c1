@@ -57,6 +57,9 @@ class SelectedOwner:
         if _identity(runtime) != self.runtime_digest:
             _held('credential_authority_changed')
         pool = self.pool() if self.pool is not None else None
+        if self.pool is not None and pool is None:
+            # A collected pooled owner is revoked, not a poolless token route.
+            _held('selected_authority_revoked')
         if getattr(agent, '_credential_pool', None) is not pool:
             _held('credential_authority_changed')
         if pool is not None:
