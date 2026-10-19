@@ -11,13 +11,37 @@ import json
 import os
 from pathlib import Path
 import sys
+import stat
+from contextvars import ContextVar
+
+
+# Python's open audit event omits dir_fd. Preserve that addressing information
+# during the syscall, NOT a permission bit: the audit hook still validates the
+# actual directory and leaf. Never exempt this open from the installed hook.
+_OPEN_DIR_FD = ContextVar('presence_evaluation_open_dir_fd', default=None)
+
+
+def evaluation_open(path, flags, mode=0o600, *, dir_fd=None):
+    token = _OPEN_DIR_FD.set(dir_fd)
+    try:
+        return os.open(path, flags, mode, dir_fd=dir_fd)
+    finally:
+        _OPEN_DIR_FD.reset(token)
 
 
 class ReadOnlyEvaluationGuard:
     def __init__(self, *, home, source, write_dirs):
         self.home = Path(home).absolute()
         self.source = Path(source).resolve()
-        self.write_dirs = tuple(Path(p).resolve() for p in write_dirs)
+        self.write_dirs = tuple(Path(p).absolute() for p in write_dirs)
+        self._write_roots = {}
+        for root in self.write_dirs:
+            info = root.lstat()
+            if (root != root.resolve(strict=True) or '..' in root.parts
+                    or not stat.S_ISDIR(info.st_mode) or info.st_uid != os.geteuid()
+                    or info.st_mode & 0o077):
+                raise PermissionError('insecure_evaluation_directory')
+            self._write_roots[root] = (info.st_dev, info.st_ino)
         self.environment = dict(os.environ)
         self.baseline = self._baseline()
         self.denied_writes = []
@@ -54,18 +78,65 @@ class ReadOnlyEvaluationGuard:
             except (OSError, ValueError):
                 return None
         if isinstance(value, (str, bytes, os.PathLike)):
-            return Path(os.fsdecode(value)).absolute()
+            path = Path(os.fsdecode(value))
+            if '..' in path.parts:
+                return None
+            directory_fd = _OPEN_DIR_FD.get()
+            if not path.is_absolute() and directory_fd is not None:
+                directory = self._path(directory_fd)
+                return directory / path if directory is not None else None
+            return path.absolute()
         return None
 
     def _within(self, path, roots):
-        return path is not None and any(path == root or root in path.parents for root in roots)
+        return path is not None and '..' not in path.parts and any(
+            path == root or root in path.parents for root in roots)
+
+    def _write_allowed(self, value, path, flags=0):
+        """Authorize an anchored leaf/object, never lexical string containment.
+
+        Plain string opens cannot pin a parent across the audit/syscall gap.
+        Only NOFOLLOW directory-relative opens carry a usable anchor. Descriptor
+        wrapping/truncation must refer to that same single-link private object.
+        """
+        if path is None or path.parent not in self._write_roots:
+            return False
+        try:
+            root = path.parent
+            root_info = root.lstat()
+            if ((root_info.st_dev, root_info.st_ino) != self._write_roots[root]
+                    or not stat.S_ISDIR(root_info.st_mode)
+                    or root_info.st_uid != os.geteuid() or root_info.st_mode & 0o077):
+                return False
+            if isinstance(value, int):
+                info = os.fstat(value)
+                named = path.lstat()
+                if (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino):
+                    return False
+            else:
+                directory_fd = _OPEN_DIR_FD.get()
+                if (directory_fd is None or Path(os.fsdecode(value)).name != os.fsdecode(value)
+                        or not flags & os.O_NOFOLLOW or flags & (os.O_TRUNC | os.O_APPEND)):
+                    return False
+                directory = os.fstat(directory_fd)
+                if (directory.st_dev, directory.st_ino) != self._write_roots[root]:
+                    return False
+                try:
+                    info = os.stat(value, dir_fd=directory_fd, follow_symlinks=False)
+                except FileNotFoundError:
+                    # A non-creating open can only fail, never create a leaf.
+                    return not flags & os.O_CREAT or bool(flags & os.O_EXCL)
+            return (stat.S_ISREG(info.st_mode) and info.st_nlink == 1
+                    and info.st_uid == os.geteuid() and not info.st_mode & 0o077)
+        except (OSError, ValueError):
+            return False
 
     def audit(self, event, args):
         if event == 'open':
             path = self._path(args[0])
             flags = args[2] if len(args) > 2 and isinstance(args[2], int) else 0
             writing = bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
-            if writing and path != Path('/dev/null') and not self._within(path, self.write_dirs):
+            if writing and path != Path('/dev/null') and not self._write_allowed(args[0], path, flags):
                 self.denied_writes.append(event + ':' + str(path))
                 raise PermissionError('evaluation_write_forbidden')
             if not writing:
@@ -97,7 +168,11 @@ class ReadOnlyEvaluationGuard:
         if event in {'os.mkdir','os.chmod','os.chown','os.remove','os.rmdir','os.rename',
                      'os.link','os.symlink','os.truncate','os.utime','os.setxattr','os.removexattr'}:
             path = self._path(args[0]) if args else None
-            if not self._within(path, self.write_dirs):
+            # Quota charging only needs descriptor truncation. Namespace and
+            # metadata mutations have no safe role here (rename/link have two
+            # targets, and would invalidate the pinned root/object contract).
+            if not (event == 'os.truncate' and args and isinstance(args[0], int)
+                    and self._write_allowed(args[0], path)):
                 self.denied_writes.append(event + ':' + str(path))
                 raise PermissionError('evaluation_mutation_forbidden')
         if event in {'socket.connect', 'socket.getaddrinfo', 'socket.bind', 'socket.sendto'}:

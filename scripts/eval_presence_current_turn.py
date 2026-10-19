@@ -360,38 +360,119 @@ def _reserve_isolated_call(quota_dir, binding, limit):
     This is an explicitly consented experiment ledger, NOT the live profile's
     feature policy or daily store. Keep it when resuming the same authorization.
     """
-    import fcntl
     import os
     import stat
     from clover_cli.readonly_files import ReadOnlyStateError
+    from scripts.presence_eval_guard import evaluation_open
+
+    if (os.name != 'posix' or not all(hasattr(os, flag) for flag in
+            ('O_NOFOLLOW', 'O_DIRECTORY', 'O_NONBLOCK'))
+            or os.open not in os.supports_dir_fd or os.stat not in os.supports_dir_fd):
+        raise ReadOnlyStateError('secure_evaluation_quota_unsupported')
+    import fcntl
     directory = Path(quota_dir)
-    info = directory.lstat()
-    if (directory.is_symlink() or not stat.S_ISDIR(info.st_mode)
-            or info.st_uid != os.geteuid() or info.st_mode & 0o077):
-        raise ReadOnlyStateError('insecure_evaluation_directory')
-    path = directory / 'presence-eval-quota.json'
-    fd = os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600)
-    with os.fdopen(fd, 'r+', encoding='utf-8') as stream:
-        fcntl.flock(stream.fileno(), fcntl.LOCK_EX)
-        info = os.fstat(stream.fileno())
-        if (not stat.S_ISREG(info.st_mode) or info.st_uid != os.geteuid()
-                or info.st_mode & 0o077 or info.st_size > 4096):
+    if (not directory.is_absolute() or '..' in directory.parts
+            or directory == Path('/') or type(limit) is not int or limit < 0
+            or not isinstance(binding, str) or not binding):
+        raise ReadOnlyStateError('invalid_evaluation_quota')
+    handles, fd = [], -1
+    name = 'presence-eval-quota.json'
+
+    def directory_info(handle, *, direct):
+        info = os.fstat(handle)
+        if (not stat.S_ISDIR(info.st_mode) or info.st_uid not in (0, os.geteuid())
+                or (info.st_mode & 0o022 and not info.st_mode & stat.S_ISVTX)
+                or (direct and (info.st_uid != os.geteuid() or info.st_mode & 0o077))):
+            raise ReadOnlyStateError('insecure_evaluation_directory')
+        return info
+
+    def validate_object():
+        # Retain every ancestor; check the named chain still designates those
+        # handles. Never reopen a checked pathname for the subsequent read/write.
+        for index, handle in enumerate(handles):
+            info = directory_info(handle, direct=index == len(handles)-1)
+            if index:
+                named = os.stat(directory.parts[index], dir_fd=handles[index-1], follow_symlinks=False)
+                if (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino):
+                    raise ReadOnlyStateError('evaluation_directory_changed')
+        info = os.fstat(fd)
+        named = os.stat(name, dir_fd=handles[-1], follow_symlinks=False)
+        if (not stat.S_ISREG(info.st_mode) or info.st_nlink != 1
+                or info.st_uid != os.geteuid() or info.st_mode & 0o077
+                or info.st_size > 4096
+                or (info.st_dev, info.st_ino) != (named.st_dev, named.st_ino)):
             raise ReadOnlyStateError('insecure_evaluation_ledger')
-        text = stream.read(4097)
-        ledger = json.loads(text) if text else {'version': 1, 'binding': binding, 'used': 0}
-        if (set(ledger) != {'version', 'binding', 'used'} or ledger['version'] != 1
+        return info
+
+    def unique_object(pairs):
+        value = {}
+        for key, item in pairs:
+            if key in value:
+                raise ReadOnlyStateError('invalid_evaluation_ledger')
+            value[key] = item
+        return value
+
+    try:
+        handles.append(evaluation_open('/', os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW))
+        directory_info(handles[0], direct=False)
+        for part in directory.parts[1:]:
+            handles.append(evaluation_open(part, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                           dir_fd=handles[-1]))
+            directory_info(handles[-1], direct=len(handles) == len(directory.parts))
+        # Serialize creation too, not just an already-open inode. A waiter must
+        # open the leaf AFTER acquiring the stable directory's lock.
+        fcntl.flock(handles[-1], fcntl.LOCK_EX)
+        if limit == 0:
+            return False
+        created = False
+        try:
+            fd = evaluation_open(name, os.O_RDWR | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=handles[-1])
+        except FileNotFoundError:
+            fd = evaluation_open(name, os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_NONBLOCK,
+                                 dir_fd=handles[-1])
+            created = True
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        before = validate_object()
+        content = os.read(fd, 4097)
+        after = validate_object()
+        if (len(content) > 4096 or (before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
+                (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
+            raise ReadOnlyStateError('evaluation_ledger_changed')
+        ledger = ({'version': 1, 'binding': binding, 'used': 0} if created else
+                  json.loads(content.decode('utf-8'), object_pairs_hook=unique_object))
+        if (type(ledger) is not dict or set(ledger) != {'version', 'binding', 'used'}
+                or type(ledger['version']) is not int or ledger['version'] != 1
                 or ledger['binding'] != binding or type(ledger['used']) is not int
                 or not 0 <= ledger['used'] <= 3):
             raise ReadOnlyStateError('invalid_evaluation_ledger')
         if ledger['used'] >= min(3, limit):
             return False
         ledger['used'] += 1
-        stream.seek(0)
-        json.dump(ledger, stream, sort_keys=True)
-        stream.truncate()
-        stream.flush()
-        os.fsync(stream.fileno())
+        payload = json.dumps(ledger, sort_keys=True).encode('utf-8')
+        if len(payload) > 4096:
+            raise ReadOnlyStateError('invalid_evaluation_ledger')
+        validate_object()
+        os.lseek(fd, 0, os.SEEK_SET)
+        remaining = memoryview(payload)
+        while remaining:
+            written = os.write(fd, remaining)
+            if written <= 0:
+                raise ReadOnlyStateError('evaluation_ledger_write_failed')
+            remaining = remaining[written:]
+        os.ftruncate(fd, len(payload))
+        os.fsync(fd)
+        if created:
+            os.fsync(handles[-1])
         return True
+    except (OSError, UnicodeError, ValueError, TypeError) as exc:
+        if isinstance(exc, ReadOnlyStateError):
+            raise
+        raise ReadOnlyStateError('evaluation_quota_unavailable') from exc
+    finally:
+        if fd >= 0:
+            os.close(fd)
+        for handle in reversed(handles):
+            os.close(handle)
 
 
 def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consent=False):
