@@ -30,9 +30,11 @@ files=(['tests/test_presence_eval_quota_boundary.py','tests/test_presence_eval_q
 env={k:v for k,v in os.environ.items() if k in ('PATH','SYSTEMROOT','SystemRoot','USERPROFILE','HOMEDRIVE','HOMEPATH','LOCALAPPDATA','APPDATA','TEMP','TMP','PSModulePath','PSMODULEPATH')}
 env.update(HOME=str(E/'home'),CLOVER_PYTHON=str(PY),TZ='UTC',LANG='C.UTF-8',PYTHONDONTWRITEBYTECODE='1')
 rows=[]; failed=False
+bash = Path('C:/Program Files/Git/bin/bash.exe') if os.name == 'nt' else Path('/bin/bash')
+assert bash.is_file(), 'canonical Git Bash/POSIX Bash executable missing'
 for index,file in enumerate(files):
     out=E/('test-'+str(index));out.mkdir(exist_ok=True)
-    cmd=['bash','scripts/run_tests.sh',file,'-j','1','--file-timeout','180','--file-retries','0','--','-q','--tb=short','--junitxml='+str(out/'cases.xml')]
+    cmd=[str(bash),'scripts/run_tests.sh',file,'-j','1','--file-timeout','180','--file-retries','0','--','-q','--tb=short','--junitxml='+str(out/'cases.xml')]
     with (out/'canonical.log').open('w') as log:
         run=subprocess.run(cmd,cwd=S,env=env,stdout=log,stderr=subprocess.STDOUT,timeout=220)
     cases=[]

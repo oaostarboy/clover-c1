@@ -11,6 +11,9 @@ on:
       inventory_only:
         type: boolean
         default: false
+      windows_only:
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -21,7 +24,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.inventory_only && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
+        os: ${{ fromJSON(inputs.windows_only && '["windows-latest"]' || inputs.inventory_only && '["ubuntu-latest","macos-latest"]' || '["ubuntu-latest","macos-latest","windows-latest"]') }}
     env:
       INVENTORY_ONLY: ${{ inputs.inventory_only }}
       TARGET_SHA: ${{ inputs.target_sha }}
