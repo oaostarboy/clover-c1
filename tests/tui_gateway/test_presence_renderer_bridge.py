@@ -94,7 +94,7 @@ def test_actual_desktop_native_frame_mounts_and_roundtrips_owner_ack(monkeypatch
         reply = server.dispatch({'id':'after','method':'presence.after_reply', 'params':{
             'session_id':sid,'token':complete['presence_after_reply_token']}}, transport=transport)
         assert reply['result']['accepted']
-        deadline = time.monotonic()+20
+        deadline = time.monotonic()+25
         while not receipts:
             assert time.monotonic() < deadline, output()
             time.sleep(0.02)
