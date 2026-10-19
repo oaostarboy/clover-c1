@@ -353,8 +353,10 @@ def test_recursively_corrupt_json_holds(host):
     state.admit(host.ref, "Seed")
     with sqlite3.connect(ThoughtStore().path) as conn:
         conn.execute("UPDATE presence_thoughts SET record=?", ("[" * 1500 + "0" + "]" * 1500,))
+    before = ThoughtStore().path.read_bytes()
     assert state.list_pending() == ()
     assert state.last_error == "store_unavailable"
+    assert ThoughtStore().path.read_bytes() == before
 
 
 def test_duplicate_admission_after_expiry_does_not_return_or_refresh_thought(host):

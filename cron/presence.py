@@ -192,7 +192,7 @@ class ThoughtStore:
             if conn is not None:
                 conn.rollback()
             raise
-        except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, AttributeError) as exc:
+        except (sqlite3.Error, OSError, ValueError, TypeError, KeyError, AttributeError, RecursionError) as exc:
             if conn is not None:
                 conn.rollback()
             raise PresenceStoreError("presence store unavailable") from exc
