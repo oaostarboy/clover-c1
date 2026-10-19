@@ -266,6 +266,82 @@ print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt(),
     assert inventory(home) == before
 
 
+def _guarded_native_probe(home, code):
+    import json
+    import sys
+    root = Path(__file__).resolve().parents[2]
+    env = {k: os.environ[k] for k in ('PATH', 'SYSTEMROOT') if k in os.environ}
+    env.update(HOME=str(home.parent), USERPROFILE=str(home.parent), CLOVER_HOME=str(home),
+               CLOVER_MANAGED_DIR=str(home.parent/'managed'), PYTHONPATH=str(root),
+               PYTHONDONTWRITEBYTECODE='1', PYTHONUTF8='1', PYTHONIOENCODING='utf-8')
+    child = subprocess.run([sys.executable, '-c', code], cwd=root, env=env,
+                           capture_output=True, text=True, timeout=20)
+    assert child.returncode == 0, child.stderr
+    return json.loads(child.stdout)
+
+
+def test_native_logical_read_obeys_private_audit_boundary(state):
+    home, _ = state
+    (home/'private-note').write_text('SCRIPTED-other-state', encoding='utf-8')
+    result = _guarded_native_probe(home, r'''
+import json, os
+from pathlib import Path
+from scripts.presence_eval_guard import ReadOnlyEvaluationGuard
+home = Path(os.environ['CLOVER_HOME'])
+guard = ReadOnlyEvaluationGuard(home=home, source=Path.cwd(), write_dirs=[])
+guard.install()
+from clover_cli.readonly_files import read_existing_file, ReadOnlyStateError
+try:
+    read_existing_file(home/'private-note')
+    refused = False
+except (PermissionError, ReadOnlyStateError):
+    refused = True
+print(json.dumps({'refused':refused, 'guard':guard.receipt()}))
+''')
+    assert result['refused'], 'native file I/O bypassed the private read audit boundary'
+    assert len(result['guard']['denied_private_reads']) == 1
+    assert result['guard']['denied_writes'] == result['guard']['network_events'] == []
+    assert result['guard']['baseline_unchanged']
+
+
+def test_native_null_sink_is_character_device_not_file_grant(state):
+    home, _ = state
+    result = _guarded_native_probe(home, r'''
+import ctypes as c, json, os, msvcrt
+from ctypes import wintypes as w
+from pathlib import Path
+from scripts.presence_eval_guard import ReadOnlyEvaluationGuard
+home = Path(os.environ['CLOVER_HOME'])
+guard = ReadOnlyEvaluationGuard(home=home, source=Path.cwd(), write_dirs=[])
+guard.install()
+kernel = c.WinDLL('kernel32', use_last_error=True)
+kernel.GetFileType.argtypes = [w.HANDLE]
+kernel.GetFileType.restype = w.DWORD
+null_types = []
+for literal in (os.devnull, os.devnull.upper()):
+    try:
+        with open(literal, 'wb') as sink:
+            null_types.append(kernel.GetFileType(msvcrt.get_osfhandle(sink.fileno())))
+            sink.write(b'SCRIPTED-discarded')
+    except PermissionError:
+        null_types.append('refused')
+blocked = 0
+for path in (str(home/'ordinary'), '\\\\?\\'+str(home/'nul'), './nul'):
+    try:
+        with open(path, 'wb') as stream:
+            stream.write(b'never permitted')
+    except PermissionError:
+        blocked += 1
+print(json.dumps({'null_types':null_types, 'blocked':blocked, 'guard':guard.receipt()}))
+''')
+    assert result['null_types'] == [2, 2], 'only actual NUL character-device handles may be written'
+    assert result['blocked'] == 3
+    assert len(result['guard']['denied_writes']) == 3
+    assert result['guard']['network_events'] == result['guard']['denied_private_reads'] == []
+    assert result['guard']['baseline_unchanged']
+    assert not (home/'ordinary').exists()
+
+
 def test_foreign_ancestor_mutation_refused(state, tmp_path, monkeypatch):
     _, path = state
     assert read_existing_file(path) == 'model: exact\n'
