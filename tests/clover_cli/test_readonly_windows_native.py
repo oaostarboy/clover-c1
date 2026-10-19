@@ -229,6 +229,49 @@ print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt()}))
     assert inventory(home) == before
 
 
+def test_foreign_ancestor_mutation_refused(state, tmp_path, monkeypatch):
+    _, path = state
+    assert read_existing_file(path) == 'model: exact\n'
+    secure_acl(tmp_path, extra_mask=0x40)  # FILE_DELETE_CHILD on an ancestor.
+    from agent import windows_audit_reader
+    api = windows_audit_reader._api()
+    def forbidden(*args):
+        pytest.fail('data read below foreign-mutable ancestor')
+    api.read = forbidden
+    monkeypatch.setattr(windows_audit_reader, '_api', lambda: api)
+    with pytest.raises(ReadOnlyStateError):
+        read_existing_file(path)
+
+
+def test_retained_writable_mapping_refused(state, monkeypatch, record_property):
+    home, path = state
+    assert read_existing_file(path) == 'model: exact\n'
+    from tests.agent import test_windows_audit_native as existing
+    def selected(project, name, limit):
+        return read_existing_file(Path(project) / name, limit=limit)
+    monkeypatch.setattr(existing, '_audit_bytes', selected)
+    # Reuse the real Win32 mapping/mutation seam, including its reach/refusal
+    # receipts. The test creates only its own disposable file below secure home.
+    existing.test_writable_mapped_view_cannot_mutate_a_read(home, monkeypatch, record_property)
+
+
+def test_native_acl_change_during_read_refused(state, monkeypatch):
+    _, path = state
+    from agent import windows_audit_reader
+    api = windows_audit_reader._api()
+    original = api.read
+    reached = []
+    def during(handle, size):
+        secure_acl(path, extra_mask=1)
+        reached.append(True)
+        return original(handle, size)
+    api.read = during
+    monkeypatch.setattr(windows_audit_reader, '_api', lambda: api)
+    with pytest.raises(ReadOnlyStateError):
+        read_existing_file(path)
+    assert reached == [True]
+
+
 @pytest.mark.parametrize('tail', ['file:stream', 'NUL', 'file.', 'file ', '../file', './file'])
 def test_literal_aliases_refused(state, tail):
     home, _ = state

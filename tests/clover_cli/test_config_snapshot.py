@@ -65,6 +65,11 @@ def test_nested_readonly_scope_validates_raw_readers(monkeypatch, tmp_path, load
     path = home/'config.yaml'
     path.write_text('security:\n  redact_secrets: true\n')
     path.chmod(0o644)
+    if os.name == 'nt':
+        # chmod does not express Windows confidentiality. Grant an actual
+        # foreign-reader ACE; keep the original loader refusal assertion.
+        from tests.clover_cli.test_readonly_windows_native import secure_acl
+        secure_acl(path, extra_mask=1)
     monkeypatch.setenv('CLOVER_HOME',str(home))
     from clover_cli.readonly_files import non_mutating_config_reads, ReadOnlyStateError
     with non_mutating_config_reads(), pytest.raises(ReadOnlyStateError):
