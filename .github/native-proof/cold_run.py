@@ -10,8 +10,8 @@ import xml.etree.ElementTree as ET
 ROOT = Path.cwd()
 SRC, DEST = ROOT/'source', ROOT/'evidence'
 DEST.mkdir(exist_ok=True)
-EXPECTED = '26eb3677290b19ecdd7e2ab8888dda6a8c94cf72'
-TREE = '847cfd9fd12338e07b1f667c33613c53ef33cfa2'
+EXPECTED = '3283a21f1da61fc583eca9237eac87671d176c45'
+TREE = 'b12278c3bbb7eb72ce822c6c39a66bc7b87fe421'
 def git(*args):
     return subprocess.check_output(['git','-C',str(SRC),*args],text=True).strip()
 assert (git('rev-parse','HEAD'),git('rev-parse','HEAD^{tree}')) == (EXPECTED,TREE)
