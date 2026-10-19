@@ -2,7 +2,7 @@ import { existsSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 
 import { act, render, screen, waitFor } from '@testing-library/react'
 import { MemoryRouter } from 'react-router'
-import { describe, expect, it, vi } from 'vitest'
+import { beforeAll, describe, expect, it, vi } from 'vitest'
 
 import { $presenceFeed, acceptPresenceInitiative, presenceKey } from '@/store/presence'
 import { $activeGatewayProfile } from '@/store/profile'
@@ -14,25 +14,30 @@ import { ComposerStatusStack } from './composer/status-stack'
 const fixture = process.env.CLOVER_PRESENCE_NATIVE_FRAME
 
 describe.skipIf(!fixture)('native presence server -> mounted renderer -> actual owner ACK', () => {
-  it('renders the actual native frame without chat, focus or navigation and round-trips its ACK', async () => {
+  let profile: ReturnType<typeof $activeGatewayProfile.get>
+  let sid: string
+
+  const writeAtomic = (suffix: string, value: unknown) => {
+    const path = fixture! + suffix
+
+    writeFileSync(path + '.tmp', JSON.stringify(value))
+    renameSync(path + '.tmp', path)
+  }
+
+  beforeAll(() => {
     vi.stubGlobal('fetch', () => { throw new Error('External network is disabled in this bridge') })
-    const sid = process.env.CLOVER_PRESENCE_NATIVE_SESSION!
-
-    const writeAtomic = (suffix: string, value: unknown) => {
-      const path = fixture! + suffix
-
-      writeFileSync(path + '.tmp', JSON.stringify(value))
-      renameSync(path + '.tmp', path)
-    }
-
-    const profile = $activeGatewayProfile.get()
+    sid = process.env.CLOVER_PRESENCE_NATIVE_SESSION!
+    profile = $activeGatewayProfile.get()
     $presenceFeed.set({})
     render(<MemoryRouter><ComposerStatusStack queue={null} sessionId={sid} /></MemoryRouter>)
     expect(globalThis.document.activeElement).toBe(globalThis.document.body)
     writeAtomic('.ready.json', { session_id: sid, activeElement: globalThis.document.activeElement?.tagName, node: process.version })
+  })
+
+  it('renders the actual native frame without chat, focus or navigation and round-trips its ACK', async () => {
     // Only after this mounted readiness signal does Python let the real owner
     // issue its five-second ticket. Startup/import time is not delivery time.
-    await waitFor(() => expect(existsSync(fixture!)).toBe(true), { timeout: 30000 })
+    await waitFor(() => expect(existsSync(fixture!)).toBe(true), { timeout: 15000 })
     const frame = JSON.parse(readFileSync(fixture!, 'utf8'))
     expect(frame.params.session_id).toBe(sid)
     const { payload } = frame.params
@@ -57,5 +62,5 @@ describe.skipIf(!fixture)('native presence server -> mounted renderer -> actual 
       activeElement: globalThis.document.activeElement?.tagName,
       controls: screen.getAllByRole('button').map(button => button.textContent), accepted
     }))
-  }, 45_000)
+  })
 })
