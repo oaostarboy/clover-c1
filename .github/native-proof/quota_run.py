@@ -25,7 +25,8 @@ files=['tests/test_presence_eval_quota_unsupported.py'] if os.name=='nt' else [
     'tests/test_presence_eval_quota_unsupported.py','tests/test_presence_eval_guard_descriptors.py',
     'tests/test_presence_readonly_cold.py','tests/test_presence_isolated_evaluator.py',
     'tests/clover_cli/test_runtime_provider_readonly.py','tests/clover_cli/test_config_snapshot.py']
-files=(['tests/test_presence_eval_quota_boundary.py'] if os.environ.get('INVENTORY_ONLY')=='true' else files)
+files=(['tests/test_presence_eval_quota_boundary.py','tests/test_presence_eval_quota_state.py']
+       if os.environ.get('INVENTORY_ONLY')=='true' else files)
 env={k:v for k,v in os.environ.items() if k in ('PATH','SYSTEMROOT','SystemRoot','USERPROFILE','HOMEDRIVE','HOMEPATH','LOCALAPPDATA','APPDATA','TEMP','TMP','PSModulePath','PSMODULEPATH')}
 env.update(HOME=str(E/'home'),CLOVER_PYTHON=str(PY),TZ='UTC',LANG='C.UTF-8',PYTHONDONTWRITEBYTECODE='1')
 rows=[]; failed=False
