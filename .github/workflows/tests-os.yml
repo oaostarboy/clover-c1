@@ -11,9 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # macOS unchanged-source lanes remain active in run 39186545631.
-        os: [windows-latest]
-        scope: [joined, "1/4", "2/4", "3/4", "4/4"]
+        os: [windows-latest, macos-latest]
+        scope: [joined]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -21,7 +20,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 174f4dbac5b27b29e7509944fbc9ac36e06fea0a
+          ref: 218fcb564d507c7ae210d97640fc4f689e9f1392
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39

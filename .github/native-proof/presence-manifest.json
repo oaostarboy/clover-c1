@@ -107,8 +107,8 @@
     "--tb=short",
     "-ra"
   ],
-  "source_sha": "174f4dbac5b27b29e7509944fbc9ac36e06fea0a",
-  "tree": "3d9f2d5d61ca12dd48292296cf42f49b635401a6",
+  "source_sha": "218fcb564d507c7ae210d97640fc4f689e9f1392",
+  "tree": "166f66598f2ee353669394f85220d127025f632c",
   "runner_sha256": "4384c3b943137daf60a2a7948bda2941d539cd0f78f033161e52cfdd22526607",
   "test_sha256": {
     "tests/agent/test_presence_auxiliary.py": "087fa54a1afdb7d14758db1bb8d9120e7775710e2b3de91e1dfc404a9f2f97e3",
@@ -138,7 +138,7 @@
     "tests/cron/test_presence_identity.py": "a2302c86d7be49a09ceb173ebfee342a601a994effb043f6af5a193b64a6620b",
     "tests/cron/test_presence_link.py": "d62dd8f2df9273549a8a0c4bd592a3cf74bee652e0cdd77e31d15cdeab08f10f",
     "tests/cron/test_presence_ownership.py": "8e7c106769e29e26c86ff11e7bb0807c3a66723f5cba18762f6187564230de3b",
-    "tests/cron/test_presence_store.py": "e1f5a2affa3a5b723b15ac632da85e3153162b09d6de302baa07b9b49fa977ae",
+    "tests/cron/test_presence_store.py": "48d78ba942a9d5ef77862251cbf7b271cbd2f60b9c78522134fe95c02310d48b",
     "tests/gateway/test_emotions_cold_snapshot.py": "664ecc4bf6940dbf3e3569b1a78ddcecfa5080fdca210299da95faa5d9b66e4e",
     "tests/gateway/test_emotions_command.py": "10bae054691e2bf0f92a94a71e539c1f034f3fe1b0e5a17c3811b10bc6ac1cf6",
     "tests/gateway/test_emotions_command_profiles.py": "6df50a120a8a7483acb634e8d4029010d3c884d607870be09f0edd4f75317777",

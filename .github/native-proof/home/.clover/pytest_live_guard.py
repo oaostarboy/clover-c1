@@ -32,11 +32,11 @@ def presence_offline_network_guard(monkeypatch):
         check(address)
         return create(address, *args, **kwargs)
     def local_connect(sock, address):
-        if sock.family != socket.AF_UNIX:
+        if sock.family != getattr(socket, 'AF_UNIX', None):
             check(address)
         return connect(sock, address)
     def local_connect_ex(sock, address):
-        if sock.family != socket.AF_UNIX:
+        if sock.family != getattr(socket, 'AF_UNIX', None):
             check(address)
         return connect_ex(sock, address)
     monkeypatch.setattr(socket, 'getaddrinfo', local_resolve)
