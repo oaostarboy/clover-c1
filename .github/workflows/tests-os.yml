@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
-        scope: [joined, "1/4", "2/4", "3/4", "4/4"]
+        scope: [joined]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -20,7 +20,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: a5bd8d80e292747fa52435ca20e311f1ca91dcd1
+          ref: 8125059709cd65cfa6e921ec8d9cb5f940feaf28
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39

@@ -108,8 +108,8 @@
     "--tb=short",
     "-ra"
   ],
-  "source_sha": "a5bd8d80e292747fa52435ca20e311f1ca91dcd1",
-  "tree": "ec5219e6536730b823fa4366e0285ed51cc2a11b",
+  "source_sha": "8125059709cd65cfa6e921ec8d9cb5f940feaf28",
+  "tree": "3b2164c702c2821d77043808272074f0001d2724",
   "runner_sha256": "4384c3b943137daf60a2a7948bda2941d539cd0f78f033161e52cfdd22526607",
   "test_sha256": {
     "tests/agent/test_presence_auxiliary.py": "087fa54a1afdb7d14758db1bb8d9120e7775710e2b3de91e1dfc404a9f2f97e3",
@@ -140,7 +140,7 @@
     "tests/cron/test_presence_link.py": "d62dd8f2df9273549a8a0c4bd592a3cf74bee652e0cdd77e31d15cdeab08f10f",
     "tests/cron/test_presence_ownership.py": "8e7c106769e29e26c86ff11e7bb0807c3a66723f5cba18762f6187564230de3b",
     "tests/cron/test_presence_store.py": "48d78ba942a9d5ef77862251cbf7b271cbd2f60b9c78522134fe95c02310d48b",
-    "tests/gateway/test_emotions_cold_snapshot.py": "664ecc4bf6940dbf3e3569b1a78ddcecfa5080fdca210299da95faa5d9b66e4e",
+    "tests/gateway/test_emotions_cold_snapshot.py": "99ac4b8aae1c90f874fe8535e78172e80cc40c90cf632a795ad0e47c466d7bf0",
     "tests/gateway/test_emotions_command.py": "10bae054691e2bf0f92a94a71e539c1f034f3fe1b0e5a17c3811b10bc6ac1cf6",
     "tests/gateway/test_emotions_command_profiles.py": "6df50a120a8a7483acb634e8d4029010d3c884d607870be09f0edd4f75317777",
     "tests/gateway/test_emotions_config_normalization.py": "6101991710e3bdb9b6d5108e431702704ec7d0538c4f0e4637fdb7035069a03c",
@@ -164,7 +164,7 @@
     "tests/gateway/test_presence_request_mode.py": "e7e8efa445e4f78c0e19c2079ccf99903e70999bc7adedbe448b65e2069ff8da",
     "tests/gateway/test_presence_shadow_host.py": "9b62f00b9db998b8fabd2c3e19a07d4ac07287430dd6693d319300a0b14103ad",
     "tests/gateway/test_presence_stream_receipts.py": "f4ceb0a9e0c8727bdb0b3cb923dff1515b8d3012bfd0d21eb9faed4a09af4ee1",
-    "tests/gateway/test_trusted_human_origin_ingress.py": "4b798fbe89383cae177b4fdb1ad95109950ed40f8f0d9083dcc1d490072515b7",
+    "tests/gateway/test_trusted_human_origin_ingress.py": "889a77b256c629e66b088328dce284babfe3897ddd179a80bbbf016a45443db5",
     "tests/gateway/test_workstream_suggestion_offer.py": "f7b489a93f26984e7985d8102ece9842dfd08376ebd832f9068d6823df56f6ed",
     "tests/plugins/platforms/photon/test_presence_watchdog.py": "74cc9ad5641bfe81b2dc631eb8f1c3636ad5c0affb039cb7410ed77c0e578b6e",
     "tests/scripts/test_presence_evidence_footgun.py": "48efbe85f33aa218525f9229edeb3f4d0f460fcfebdde76dce00d22f5e89594d",

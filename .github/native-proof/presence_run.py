@@ -6,8 +6,8 @@ DEST=ROOT/'evidence'
 DEST.mkdir(exist_ok=True)
 def git(*args):return subprocess.check_output(['git','-C',str(SRC),*args],text=True).strip()
 sha=git('rev-parse','HEAD');tree=git('rev-parse','HEAD^{tree}')
-assert sha=='a5bd8d80e292747fa52435ca20e311f1ca91dcd1'
-assert tree=='ec5219e6536730b823fa4366e0285ed51cc2a11b'
+assert sha=='8125059709cd65cfa6e921ec8d9cb5f940feaf28'
+assert tree=='3b2164c702c2821d77043808272074f0001d2724'
 manifest=json.loads((Path(__file__).parent/'presence-manifest.json').read_text())
 python=SRC/'.venv'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
 env=os.environ.copy()
