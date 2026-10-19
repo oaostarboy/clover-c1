@@ -1,0 +1,79 @@
+"""Offline regression guard: synthetic loopback HTTP only, no external network.
+
+Load with pytest -p qa.presence.network_guard. Existing wire-invariant tests use
+real local HTTP servers; native SDK MockTransport tests need no sockets.
+"""
+import ipaddress
+import socket
+import pytest
+
+
+def _local(host):
+    if host == 'localhost':
+        return True
+    try:
+        return ipaddress.ip_address(host).is_loopback
+    except ValueError:
+        return False
+
+
+@pytest.fixture(autouse=True)
+def presence_offline_network_guard(monkeypatch):
+    resolve, create = socket.getaddrinfo, socket.create_connection
+    connect, connect_ex = socket.socket.connect, socket.socket.connect_ex
+    def check(address):
+        if not isinstance(address, tuple) or not _local(address[0]):
+            raise AssertionError('external networking is forbidden in presence integration regression')
+    def local_resolve(host, *args, **kwargs):
+        if not _local(host):
+            raise AssertionError('external DNS is forbidden in presence integration regression')
+        return resolve(host, *args, **kwargs)
+    def local_create(address, *args, **kwargs):
+        check(address)
+        return create(address, *args, **kwargs)
+    def local_connect(sock, address):
+        if sock.family != socket.AF_UNIX:
+            check(address)
+        return connect(sock, address)
+    def local_connect_ex(sock, address):
+        if sock.family != socket.AF_UNIX:
+            check(address)
+        return connect_ex(sock, address)
+    monkeypatch.setattr(socket, 'getaddrinfo', local_resolve)
+    monkeypatch.setattr(socket, 'create_connection', local_create)
+    monkeypatch.setattr(socket.socket, 'connect', local_connect)
+    monkeypatch.setattr(socket.socket, 'connect_ex', local_connect_ex)
+
+
+import hashlib, json, os
+from pathlib import Path
+import pytest
+SOURCE=Path(__file__).resolve().parents[5]/'source'
+DEST=Path(__file__).resolve().parents[5]/'evidence'
+REC=None
+REPORTS=[]
+@pytest.hookimpl(tryfirst=True)
+def pytest_configure(config):
+    global REC
+    files=[]
+    for arg in config.args:
+        try:
+            p=Path(str(arg)).resolve()
+            rel=p.relative_to(SOURCE.resolve()).as_posix()
+            if rel.startswith('tests/') and p.is_file(): files.append(rel)
+        except (ValueError,OSError): pass
+    if len(files)!=1: return
+    key=hashlib.sha256(files[0].encode()).hexdigest()[:20]+'-'+str(os.getpid())
+    REC={'file':files[0],'key':key,'reports':REPORTS}
+    config.option.xmlpath=str(DEST/(key+'.xml'))
+def pytest_runtest_logreport(report):
+    if REC is not None:
+        REPORTS.append({'nodeid':report.nodeid,'when':report.when,'outcome':report.outcome,'wasxfail':getattr(report,'wasxfail',None),'longrepr':str(report.longrepr) if report.failed or report.skipped else None})
+def pytest_collectreport(report):
+    if REC is not None and report.failed:
+        REPORTS.append({'nodeid':report.nodeid,'when':'collection','outcome':'failed','longrepr':str(report.longrepr)})
+def pytest_sessionfinish(session,exitstatus):
+    if REC is not None:
+        REC.update(exitstatus=int(exitstatus),collected=session.testscollected)
+def pytest_unconfigure(config):
+    if REC is not None: (DEST/(REC['key']+'.json')).write_text(json.dumps(REC),encoding='utf-8')
