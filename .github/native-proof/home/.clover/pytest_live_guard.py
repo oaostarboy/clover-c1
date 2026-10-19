@@ -68,6 +68,7 @@ def pytest_configure(config):
     REC={'file':files[0],'key':key,'parent_pid':os.getppid(),'args':list(map(str,config.invocation_params.args)),'reports':REPORTS}
     config.option.xmlpath=str(DEST/(key+'.xml'))
 def pytest_runtest_logreport(report):
+    _note('phase',nodeid=report.nodeid,when=report.when,outcome=report.outcome)
     if REC is not None:
         REPORTS.append({'nodeid':report.nodeid,'when':report.when,'outcome':report.outcome,'wasxfail':getattr(report,'wasxfail',None),'longrepr':str(report.longrepr) if report.failed or report.skipped else None})
 def pytest_collectreport(report):
@@ -100,7 +101,6 @@ def pytest_sessionstart(session):
     global _DIAG, _STACK
     _DIAG=(DEST/('diagnostic-'+str(os.getpid())+'.jsonl')).open('w', encoding='utf-8')
     _STACK=(DEST/('stacks-'+str(os.getpid())+'.log')).open('w', encoding='utf-8')
-    faulthandler.dump_traceback_later(5,repeat=True,file=_STACK)
     _note('sessionstart')
 @pytest.hookimpl(tryfirst=True)
 def pytest_runtest_logstart(nodeid, location):
@@ -151,10 +151,3 @@ def pytest_runtest_protocol(item, nextitem):
         yield
     finally:
         for obj,name,value in reversed(patches):setattr(obj,name,value)
-        faulthandler.cancel_dump_traceback_later()
-
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_call(item):
-    faulthandler.dump_traceback_later(5,repeat=True,file=_STACK)
-    yield
-    faulthandler.cancel_dump_traceback_later()

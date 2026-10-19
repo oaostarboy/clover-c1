@@ -22,7 +22,7 @@ cmd=[bash,'scripts/run_tests.sh']
 if scope=='diagnose':cmd+=['tests/test_presence_selected_owner_concurrent_probe.py','tests/test_presence_selected_owner_desktop.py','tests/tui_gateway/test_presence_renderer_bridge.py','tests/test_presence_surface_wire.py','tests/gateway/test_emotions_command.py','tests/agent/test_presence_native_providers.py','tests/agent/test_provider_transport_dispatch.py','tests/test_collection_prefetch_isolation.py','tests/test_presence_native_network_boundaries.py','tests/test_native_boundaries.py','tests/gateway/test_presence_integration.py','tests/test_indented_fence_boundaries.py']
 elif scope=='joined':cmd+=manifest['joined_file_selection']+['tests/test_collection_prefetch_isolation.py','tests/test_presence_native_network_boundaries.py']
 else:cmd+=['--slice',scope]
-cmd+=['-j','6','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra','-o','faulthandler_timeout=35']
+cmd+=['-j','6','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra']
 receipt={'sha':sha,'tree':tree,'os':platform.platform(),'scope':scope,'command':cmd,'python':str(python),'status_before':git('status','--porcelain','--untracked-files=no'),'started':time.time()}
 (DEST/'receipt.json').write_text(json.dumps(receipt,indent=2))
 with (DEST/'canonical.log').open('w',encoding='utf-8') as f:
