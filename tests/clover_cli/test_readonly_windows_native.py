@@ -232,7 +232,12 @@ for action in (lambda: (home/'not-allowed').write_bytes(b'no'),
         action()
     except PermissionError:
         blocked += 1
-print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt()}))
+file_baseline_unchanged = guard.baseline == guard._baseline()
+environment_changes = sorted(k for k in set(guard.environment) | set(os.environ)
+                             if guard.environment.get(k) != os.environ.get(k))
+print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt(),
+                  'file_baseline_unchanged':file_baseline_unchanged,
+                  'environment_change_keys':environment_changes}))
 '''
     root = Path(__file__).resolve().parents[2]
     env = {k: os.environ[k] for k in ('PATH', 'SYSTEMROOT') if k in os.environ}
@@ -244,7 +249,7 @@ print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt()}))
     assert child.returncode == 0, child.stderr
     result = json.loads(child.stdout)
     assert result['selected'] and result['blocked'] == 2
-    assert result['guard']['baseline_unchanged']
+    assert result['guard']['baseline_unchanged'], result
     assert len(result['guard']['denied_writes']) == 1
     assert result['guard']['network_events'][0]['admitted'] is False
     assert result['guard']['denied_private_reads'] == []

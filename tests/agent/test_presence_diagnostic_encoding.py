@@ -13,8 +13,30 @@ from tests.agent.test_presence_request_contract_review import invoke, selected
 def no_network(monkeypatch):
     def denied(*args, **kwargs):
         pytest.fail('diagnostic encoding test attempted network')
-    monkeypatch.setattr(socket.socket, 'connect', denied)
+    # Reuse the reviewed synchronous stdlib self-pipe capability. Arbitrary
+    # application loopback, external connections and DNS remain forbidden.
+    from tests.native_boundaries import private_socketpair_boundary
+    pair, connect = private_socketpair_boundary(socket.socketpair, socket.socket.connect, denied)
+    monkeypatch.setattr(socket, 'socketpair', pair)
+    monkeypatch.setattr(socket.socket, 'connect', connect)
+    monkeypatch.setattr(socket.socket, 'connect_ex', denied)
+    monkeypatch.setattr(socket, 'create_connection', denied)
     monkeypatch.setattr(socket, 'getaddrinfo', denied)
+
+
+@pytest.mark.parametrize('route', ['connect_loopback', 'connect_external', 'connect_ex', 'factory', 'dns'])
+def test_diagnostic_guard_still_refuses_application_network(route):
+    with socket.socket() as sock, pytest.raises(pytest.fail.Exception, match='attempted network'):
+        if route == 'connect_loopback':
+            sock.connect(('127.0.0.1', 9))
+        elif route == 'connect_external':
+            sock.connect(('192.0.2.1', 443))
+        elif route == 'connect_ex':
+            sock.connect_ex(('127.0.0.1', 9))
+        elif route == 'factory':
+            socket.create_connection(('127.0.0.1', 9))
+        else:
+            socket.getaddrinfo('example.invalid', 443)
 
 
 @pytest.mark.parametrize('headers', [
