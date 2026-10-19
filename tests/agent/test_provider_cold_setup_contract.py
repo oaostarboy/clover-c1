@@ -32,9 +32,12 @@ with pytest.MonkeyPatch.context() as mp:
         original_code = loader.get_code
         def delayed_code(self, fullname):
             if fullname == 'anthropic':
-                start = time.monotonic()
+                # Native CPython3.11 on Windows uses coarse GetTickCount64
+                # for monotonic(); measure the injected sleep with QPC instead.
+                # The actual completion's event-loop deadline stays unchanged.
+                start = time.perf_counter()
                 time.sleep(1.05)
-                delays.append(time.monotonic()-start)
+                delays.append(time.perf_counter()-start)
             return original_code(self, fullname)
         mp.setattr(loader, 'get_code', delayed_code)
         original_fixture = target.route_fixture
