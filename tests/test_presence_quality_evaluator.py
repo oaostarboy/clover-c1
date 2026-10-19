@@ -31,7 +31,7 @@ def evaluator():
 
 def test_real_cli_keeps_thought_prediction(monkeypatch, tmp_path, capsys):
     text = 'Depuis son départ, tout me semble vide.'
-    thought = {'summary': text, 'quote': text, 'confidence': .9}
+    thought = {'summary': text, 'quote': text, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_interest', 'source_context': 'direct'}
     h, requests, _ = scripted_host(monkeypatch, tmp_path, [assessment(thought=thought)])
     try:
         assert evaluator().main(['--execute-provider-calls', '--case', 'sadness_fr']) == 0
@@ -67,16 +67,20 @@ def test_positive_wrong_owner_is_not_a_true_positive(language):
     ev = evaluator()
     case = normative('thought_user_vs_colleague_' + language)
     quote = case['normative']['spans'][1]['text']
-    raw = json.dumps({'affect': None, 'thought': {'summary': quote, 'quote': quote, 'confidence': .99}})
+    raw = json.dumps({'affect': None, 'thought': {'summary': quote, 'quote': quote, 'confidence': .99, 'owner': 'current_human', 'intent': 'unresolved_interest', 'source_context': 'direct'}})
     result = ev.score_case(case, raw)
     assert result['schema_valid'] is True and result['evidence_literal_valid'] is True
-    assert result['capture']['outcome'] == 'wrong_capture'
-    assert result['capture']['incorrect_third_party_ownership'] is True
-    assert result['attribution']['actual'] == 'third_party'
+    # The joined host rejects this partial third-party proposal. Keep the
+    # wrong model attribution visible, without inventing an accepted capture.
+    assert result['capture']['outcome'] == 'false_negative'
+    assert result['capture']['incorrect_third_party_ownership'] is False
+    assert result['attribution']['actual'] == 'abstain'
+    assert result['attribution']['proposal_incorrect_third_party_ownership'] is True
+    assert result['raw_prediction']['thought']['quote'] == quote
     assert result['normative_pass'] is False
     metrics = ev.summarize([result])['capture_normative']
-    assert metrics['false_positive'] == metrics['false_negative'] == 1
-    assert metrics['precision'] == metrics['recall'] == 0
+    assert metrics['false_positive'] == 0 and metrics['false_negative'] == 1
+    assert metrics['precision'] is None and metrics['recall'] == 0
 
 
 @pytest.mark.parametrize('language', ['en', 'fr'])
@@ -143,7 +147,7 @@ def test_real_cli_positive_capture_and_budget_skips(monkeypatch, tmp_path, capsy
     case = normative('thought_user_interest_en')
     quote = case['text']
     h, requests, _ = scripted_host(monkeypatch, tmp_path, [
-        {'affect': None, 'thought': {'summary': quote, 'quote': quote, 'confidence': .9}}])
+        {'affect': None, 'thought': {'summary': quote, 'quote': quote, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_interest', 'source_context': 'direct'}}])
     try:
         ev = evaluator()
         assert ev.main(['--execute', '--max-calls', '1', '--case', case['id'], '--case',
@@ -219,10 +223,18 @@ def test_normative_assessment_outcome_sets(language, category):
     case = normative('thought_' + category + '_' + language)
     positive = case['normative']['capture_label'] == 'positive'
     quote = case['normative']['spans'][0]['text']
-    sample = {'affect': None, 'thought': {'quote': quote, 'summary': quote, 'confidence': .9} if positive else None}
+    sample = {'affect': None, 'thought': {'quote': quote, 'summary': quote, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_interest', 'source_context': 'direct'} if positive else None}
     result = evaluator().score_case(case, json.dumps(sample))
-    assert result['normative_pass'] is True
-    assert result['capture']['outcome'] == ('true_positive' if positive else 'true_negative')
+    if category == 'user_vs_colleague':
+        # Do not relabel this author-positive to hide conservative full-source
+        # suppression of mixed-speaker/partial extraction in the joined host.
+        assert result['normative_pass'] is False
+        assert result['capture']['outcome'] == 'false_negative'
+        assert result['raw_prediction']['thought']['quote'] == quote
+        assert result['prediction']['thought'] is None
+    else:
+        assert result['normative_pass'] is True
+        assert result['capture']['outcome'] == ('true_positive' if positive else 'true_negative')
 
 
 def test_real_cli_scripted_all_null_never_certifies_capture(tmp_path, capsys):
@@ -246,11 +258,13 @@ def test_real_cli_scripted_wrong_owner_fails(tmp_path, capsys):
     quote = case['normative']['spans'][1]['text']
     path = tmp_path / 'SCRIPTED-wrong-owner.json'
     path.write_text(json.dumps({case['id']: {'raw': json.dumps({'affect': None,
-        'thought': {'summary': quote, 'quote': quote, 'confidence': .99}})}}))
+        'thought': {'summary': quote, 'quote': quote, 'confidence': .99, 'owner': 'current_human', 'intent': 'unresolved_interest', 'source_context': 'direct'}})}}))
     assert evaluator().main(['--replay-scripted', str(path), '--case', case['id']]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report['results'][0]['normative_pass'] is False
-    assert report['summary']['capture_normative']['incorrect_third_party_ownership'] == 1
+    assert report['summary']['capture_normative']['incorrect_third_party_ownership'] == 0
+    assert report['results'][0]['attribution']['proposal_incorrect_third_party_ownership'] is True
+    assert report['results'][0]['capture']['outcome'] == 'false_negative'
 
 
 @pytest.mark.parametrize('raw', ['{"affect":null,"affect":null,"thought":null}',
@@ -264,7 +278,7 @@ def test_schema_rejections_are_not_semantic_passes(raw):
 
 def test_nonliteral_evidence_is_separate_from_schema():
     quote = 'invented but safe source text'
-    raw = json.dumps({'affect': None, 'thought': {'summary': quote, 'quote': quote, 'confidence': .99}})
+    raw = json.dumps({'affect': None, 'thought': {'summary': quote, 'quote': quote, 'confidence': .99, 'owner': 'current_human', 'intent': 'unresolved_interest', 'source_context': 'direct'}})
     result = evaluator().score_case(normative('thought_user_interest_en'), raw)
     assert result['schema_valid'] is True
     assert result['evidence_literal_valid'] is False
@@ -410,7 +424,7 @@ def test_real_cli_late_stop_drops_prediction_without_refunding(monkeypatch, tmp_
 @pytest.mark.parametrize('confidence,expected', [(.69, 'false_negative'), (.7, 'true_positive')])
 def test_raw_low_confidence_thought_is_retained_but_not_accepted(confidence, expected):
     case = normative('thought_user_interest_en')
-    thought = {'quote': case['text'], 'summary': case['text'], 'confidence': confidence}
+    thought = {'quote': case['text'], 'summary': case['text'], 'confidence': confidence, 'owner': 'current_human', 'intent': 'unresolved_interest', 'source_context': 'direct'}
     result = evaluator().score_case(case, json.dumps({'affect': None, 'thought': thought}))
     assert result['raw_prediction']['thought'] == thought
     assert result['capture']['outcome'] == expected
@@ -437,18 +451,11 @@ def test_metadata_pins_prompt_schema_and_fixture_bytes():
 
 
 def test_active_schema_model_attribution_is_retained_without_inventing_it():
-    # SCRIPTED schema-adapter test of QA reporting only, not a product parser test.
-    from agent.presence_assessment import parse
-    def extended_parser(raw, text):
-        value = json.loads(raw)
-        for key in ('owner', 'intent', 'source_context'):
-            value['thought'].pop(key)
-        return parse(json.dumps(value), text)
+    # Exercise the actual joined product schema, never a widening QA adapter.
     case = normative('thought_user_interest_en')
     thought = {'quote': case['text'], 'summary': case['text'], 'confidence': .9,
                'owner': 'current_human', 'intent': 'unresolved_interest', 'source_context': 'direct'}
-    result = evaluator().score_case(case, json.dumps({'affect': None, 'thought': thought}),
-                                    assessment_parser=extended_parser)
+    result = evaluator().score_case(case, json.dumps({'affect': None, 'thought': thought}))
     assert result['attribution']['model_attribution'] == {key: thought[key] for key in (
         'owner', 'intent', 'source_context')}
     assert result['attribution']['model_attribution_status'] == 'reported_by_active_schema'
