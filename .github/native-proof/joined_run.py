@@ -37,6 +37,8 @@ slice_index, slices = int(env.get('SLICE_INDEX', '0')), int(env.get('SLICES', '1
 files = manifest['files'][slice_index::slices]
 if mode == 'preflight':
     files = ['tests/gateway/test_emotions_command.py', 'tests/gateway/test_emotions_revision_reads.py']
+if env.get('READER_ONLY') == 'true':
+    files = ['tests/clover_cli/test_readonly_windows_native.py']
 selected_files = files
 receipt = dict(sha=sha, tree=tree, os=platform.platform(), mode=mode,
                slice_index=slice_index, slices=slices, python=python,

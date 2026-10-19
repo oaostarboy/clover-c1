@@ -11,6 +11,12 @@ on:
       diagnostic_only:
         type: boolean
         default: false
+      windows_only:
+        type: boolean
+        default: false
+      reader_only:
+        type: boolean
+        default: false
 permissions:
   contents: read
 jobs:
@@ -21,11 +27,12 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: ${{ fromJSON(inputs.diagnostic_only && '["windows-latest"]' || '["windows-latest","ubuntu-latest","macos-latest"]') }}
+        os: ${{ fromJSON((inputs.diagnostic_only || inputs.windows_only) && '["windows-latest"]' || '["windows-latest","ubuntu-latest","macos-latest"]') }}
     env:
       TARGET_SHA: ${{ inputs.target_sha }}
       TARGET_TREE: ${{ inputs.target_tree }}
       MODE: acceptance
+      READER_ONLY: ${{ inputs.reader_only }}
       SLICE_INDEX: '0'
       SLICES: '1'
     steps:
