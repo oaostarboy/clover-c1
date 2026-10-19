@@ -50,6 +50,7 @@ from pathlib import Path
 import pytest
 SOURCE=Path(__file__).resolve().parents[5]/'source'
 DEST=Path(__file__).resolve().parents[5]/'evidence'
+TRACKED=set(json.loads((Path(__file__).resolve().parents[2]/'presence-manifest.json').read_text())['tracked_test_paths'])
 REC=None
 REPORTS=[]
 @pytest.hookimpl(tryfirst=True)
@@ -60,11 +61,11 @@ def pytest_configure(config):
         try:
             p=Path(str(arg)).resolve()
             rel=p.relative_to(SOURCE.resolve()).as_posix()
-            if rel.startswith('tests/') and p.is_file(): files.append(rel)
+            if rel in TRACKED and p.is_file(): files.append(rel)
         except (ValueError,OSError): pass
     if len(files)!=1: return
     key=hashlib.sha256(files[0].encode()).hexdigest()[:20]+'-'+str(os.getpid())
-    REC={'file':files[0],'key':key,'reports':REPORTS}
+    REC={'file':files[0],'key':key,'parent_pid':os.getppid(),'args':list(map(str,config.invocation_params.args)),'reports':REPORTS}
     config.option.xmlpath=str(DEST/(key+'.xml'))
 def pytest_runtest_logreport(report):
     if REC is not None:
