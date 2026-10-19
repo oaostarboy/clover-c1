@@ -140,7 +140,11 @@ def test_normal_current_interest_to_exact_route_capture_status_and_one_later_ack
         assert h.user_rows()[0]['content'] == TEXT
         assert bot.send_message.await_count == 0 and not ThoughtStore().publications()
         before = len(observed), ThoughtStore().generation()
+        # Ordinary main startup may canonicalize its temporary configuration.
+        # The read-only status command itself must preserve the exact bytes.
+        config_before = (h.home / 'config.yaml').read_bytes()
         status = inbound_command(h, '/emotions')
+        assert (h.home / 'config.yaml').read_bytes() == config_before
         assert 'confidence=0.90' in status and 'gentle' in status
         assert before == (len(observed), ThoughtStore().generation())
         h.inbound_human(LATER, message_id=103)

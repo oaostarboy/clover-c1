@@ -21,7 +21,7 @@ def test_automatic_thought_cannot_offer_connection_that_ignores_new_context(monk
         [assessment(thought={'summary': source, 'quote': source, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'}), old_connection])
     try:
         h.inbound_human(source, message_id=100)
-        h.inbound_human('Deployment packaging now has compression benchmarks and reproducible archives.', message_id=101)
+        h.inbound_human('Deployment packaging could be safer with compression benchmarks and reproducible archives. The old manifest checksum matches.', message_id=101)
         assert len(requests) == 2
         assert not ThoughtStore().publications() and bot.send_message.await_count == 0
     finally:
