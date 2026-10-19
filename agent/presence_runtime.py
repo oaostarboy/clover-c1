@@ -273,7 +273,8 @@ class PresenceTurn:
                 return False
             return (thought is not None and self.state.is_current(thought)
                     and all(self.reader.read_text(ref) is not None  # windows-footgun: ok — receipt-backed evidence, not pathlib I/O
-                            and self.store.source_is_current(self.key, ref) for ref in decision.evidence)
+                            and self.store.source_is_current(self.key, ref)
+                            for ref in (self.topic_source,) + decision.evidence)
                     and self.current())
         if not publish_current():
             return

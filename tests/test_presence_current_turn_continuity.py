@@ -92,6 +92,27 @@ def test_current_connection_evidence_deleted_at_attempt_cannot_publish(monkeypat
         h.close()
 
 
+def test_manual_thought_also_rechecks_uncited_current_context_at_attempt(monkeypatch, tmp_path):
+    connection = {'connection': 'Deployment packaging can verify manifest checksum before publishing.',
+                  'evidence_indices': [0], 'confidence': .9}
+    h, requests, bot = scripted_host(monkeypatch, tmp_path, [connection])
+    original = ThoughtStore.attempt
+    def attempt(store, *args):
+        result = original(store, *args)
+        row_id = h.user_rows()[-1]['id']
+        h.db._execute_write(lambda conn: conn.execute('DELETE FROM messages WHERE id=?', (row_id,)))
+        return result
+    monkeypatch.setattr(ThoughtStore, 'attempt', attempt)
+    try:
+        h.inbound_human('Carry thought: deployment packaging\nEvidence: manifest checksum before publishing.', message_id=100)
+        h.inbound_human('Help verify deployment packaging', message_id=101)
+        assert len(requests) == 1
+        assert bot.send_message.await_count == 0
+        assert all(p['state'] != 'acknowledged' for p in ThoughtStore().publications())
+    finally:
+        h.close()
+
+
 def test_desktop_french_ordinary_interest_uses_same_assessment_and_one_later_ack(monkeypatch, tmp_path):
     import time
     from tests.tui_gateway.test_presence_integration import desktop_host
