@@ -200,7 +200,7 @@ def metadata(paths):
     later_prompt, later_schema = contract('agent/presence_initiation.py', '_parse_response', 'Find one useful new connection')
     try:
         revision = subprocess.run(['git', '-C', str(ROOT), 'rev-parse', 'HEAD', 'HEAD^{tree}'],
-                                  capture_output=True, text=True, timeout=3, check=True).stdout.splitlines()
+                                  stdin=subprocess.DEVNULL, capture_output=True, text=True, timeout=3, check=True).stdout.splitlines()
     except (OSError, subprocess.SubprocessError):
         revision = [None, None]
     return {'candidate_commit': revision[0], 'candidate_committed_tree': revision[1],
