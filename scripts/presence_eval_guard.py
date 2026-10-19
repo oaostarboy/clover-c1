@@ -29,6 +29,51 @@ def evaluation_open(path, flags, mode=0o600, *, dir_fd=None):
         _OPEN_DIR_FD.reset(token)
 
 
+def _windows_readonly_pipe(value):
+    """Prove a non-filesystem pipe and kernel-granted read-only access.
+
+    fcntl is unavailable on Windows. Do not substitute a descriptor/mode label:
+    writable, unknown, regular-file and character handles remain ungranted.
+    """
+    if os.name != 'nt' or type(value) is not int:
+        return False
+    try:
+        import ctypes
+        from ctypes import wintypes
+        import msvcrt
+
+        if not stat.S_ISFIFO(os.fstat(value).st_mode):
+            return False
+        handle = msvcrt.get_osfhandle(value)
+        kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+        kind = kernel.GetFileType
+        kind.argtypes = [wintypes.HANDLE]
+        kind.restype = wintypes.DWORD
+        if kind(handle) != 3:  # FILE_TYPE_PIPE, not a disk or character device.
+            return False
+
+        class ObjectBasicInformation(ctypes.Structure):
+            _fields_ = [('Attributes', wintypes.ULONG), ('GrantedAccess', wintypes.ULONG),
+                       ('HandleCount', wintypes.ULONG), ('PointerCount', wintypes.ULONG),
+                       ('Reserved', wintypes.ULONG * 10)]
+
+        query = ctypes.WinDLL('ntdll').NtQueryObject
+        query.argtypes = [wintypes.HANDLE, wintypes.ULONG, ctypes.c_void_p,
+                          wintypes.ULONG, ctypes.POINTER(wintypes.ULONG)]
+        query.restype = wintypes.LONG
+        info, returned = ObjectBasicInformation(), wintypes.ULONG()
+        status = query(handle, 0, ctypes.byref(info), ctypes.sizeof(info), ctypes.byref(returned))
+        # Only concrete FILE_READ_DATA/READ_EA/READ_ATTRIBUTES/READ_CONTROL/
+        # SYNCHRONIZE rights. Unknown or any write/delete/ownership rights deny.
+        allowed = 0x00120089
+        return (status == 0 and returned.value == ctypes.sizeof(info)
+                and bool(info.GrantedAccess & 0x1) and not info.GrantedAccess & ~allowed
+                and msvcrt.get_osfhandle(value) == handle
+                and stat.S_ISFIFO(os.fstat(value).st_mode) and kind(handle) == 3)
+    except Exception:
+        return False
+
+
 class ReadOnlyEvaluationGuard:
     def __init__(self, *, home, source, write_dirs):
         self.home = Path(home).absolute()
@@ -155,10 +200,13 @@ class ReadOnlyEvaluationGuard:
                     readonly_pipe = False
                     if isinstance(args[0], int):
                         try:
-                            import fcntl
-                            import stat
-                            readonly_pipe = (stat.S_ISFIFO(os.fstat(args[0]).st_mode)
-                                and fcntl.fcntl(args[0], fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY)
+                            if os.name == 'nt':
+                                readonly_pipe = _windows_readonly_pipe(args[0])
+                            else:
+                                import fcntl
+                                import stat
+                                readonly_pipe = (stat.S_ISFIFO(os.fstat(args[0]).st_mode)
+                                    and fcntl.fcntl(args[0], fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY)
                         except (ImportError, OSError, ValueError):
                             pass
                     if not readonly_pipe:
