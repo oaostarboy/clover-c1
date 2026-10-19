@@ -20,7 +20,7 @@ bash=str(Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Git/bin/bash.e
 if os.name=='nt': assert Path(bash).is_file(), 'Git for Windows Bash is required'
 cmd=[bash,'scripts/run_tests.sh']
 if scope=='diagnose':cmd+=['tests/test_presence_selected_owner_concurrent_probe.py','tests/test_presence_selected_owner_desktop.py','tests/tui_gateway/test_presence_renderer_bridge.py','tests/test_presence_surface_wire.py','tests/gateway/test_emotions_command.py','tests/agent/test_presence_native_providers.py','tests/agent/test_provider_transport_dispatch.py','tests/test_collection_prefetch_isolation.py','tests/test_presence_native_network_boundaries.py','tests/test_native_boundaries.py','tests/gateway/test_presence_integration.py','tests/test_indented_fence_boundaries.py']
-elif scope=='joined':cmd+=manifest['joined_file_selection']
+elif scope=='joined':cmd+=manifest['joined_file_selection']+['tests/test_collection_prefetch_isolation.py','tests/test_presence_native_network_boundaries.py']
 else:cmd+=['--slice',scope]
 cmd+=['-j','6','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra','-o','faulthandler_timeout=35']
 receipt={'sha':sha,'tree':tree,'os':platform.platform(),'scope':scope,'command':cmd,'python':str(python),'status_before':git('status','--porcelain','--untracked-files=no'),'started':time.time()}
@@ -32,6 +32,11 @@ receipt.update(exit_code=rc,ended=time.time(),status_after=git('status','--porce
 records=[json.loads(p.read_text()) for p in DEST.glob('*.json') if p.name!='receipt.json' and 'reports' in json.loads(p.read_text())]
 reports=[x for r in records for x in r.get('reports',[])]
 receipt['files_with_reports']=len(records)
+expected=set(manifest['joined_file_selection']+['tests/test_collection_prefetch_isolation.py','tests/test_presence_native_network_boundaries.py']) if scope=='joined' else set(cmd[2:cmd.index('-j')])
+receipt['expected_file_count']=len(expected)
+receipt['missing_file_receipts']=sorted(expected-{r['file'] for r in records})
+receipt['failed_phase_count']=sum(r['outcome']=='failed' for r in reports)
+if receipt['missing_file_receipts'] or receipt['failed_phase_count'] or receipt['status_before'] or receipt['status_after']: rc=receipt['exit_code']=1
 receipt['call_passed']=sum(r['when']=='call' and r['outcome']=='passed' for r in reports)
 receipt['failed_phases']=[{'nodeid':r['nodeid'],'when':r['when']} for r in reports if r['outcome']=='failed']
 receipt['skipped_phases']=sum(r['outcome']=='skipped' for r in reports)
