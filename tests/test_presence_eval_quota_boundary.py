@@ -62,6 +62,7 @@ def probe(tmp_path, action, code=PROBE):
 def test_guarded_reservation_preserves_private_files(tmp_path, action):
     result, home, quota = probe(tmp_path, action)
     assert json.loads((home/'private.json').read_text()) == {'version':1,'binding':'SCRIPTED','used':0}
+    assert sorted(p.name for p in home.iterdir()) == ['private.json']
     assert result['guard']['baseline_unchanged'] is True
     assert result['guard']['network_events'] == []
     assert result['status'] == ('allowed' if action == 'ordinary' else 'held'), result
@@ -75,5 +76,6 @@ def test_reservation_itself_rejects_aliases_without_relying_on_audit(tmp_path, a
     code = PROBE.replace('g.install()', '')
     result, home, quota = probe(tmp_path, action, code)
     assert json.loads((home/'private.json').read_text())['used'] == 0
+    assert sorted(p.name for p in home.iterdir()) == ['private.json']
     assert result['status'] == ('allowed' if action == 'ordinary' else 'held')
     assert result['reserved'] == ([True,True,True,False] if action == 'ordinary' else [])
