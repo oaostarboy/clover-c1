@@ -1,27 +1,61 @@
-name: Independent native test-clock diagnosis
+name: Joined deadline final high-resolution native contracts
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  clocks:
-    runs-on: windows-latest
-    timeout-minutes: 10
+  experiment:
+    name: ${{ matrix.os }} / ${{ matrix.variant }} (explicit expected contract)
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {os: windows-latest, variant: provider-red, source: e2c969246a608ead140d537d99fab86257aca0ad}
+          - {os: ubuntu-latest, variant: provider-red, source: e2c969246a608ead140d537d99fab86257aca0ad}
+          - {os: windows-latest, variant: candidate, source: 3282af6f75b2d1f0fbffb08522bfddb469368abf}
+          - {os: ubuntu-latest, variant: candidate, source: 3282af6f75b2d1f0fbffb08522bfddb469368abf}
+          - {os: macos-latest, variant: candidate, source: 3282af6f75b2d1f0fbffb08522bfddb469368abf}
+    env:
+      MODE: acceptance
+      SLICE_INDEX: "0"
+      SLICES: "1"
+      CONTROL_VARIANT: ${{ matrix.variant }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ matrix.source }}
+          path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
           version: "0.9.28"
-      - name: Measure the actual native CPython3.11 clocks
+          enable-cache: true
+          cache-dependency-glob: source/uv.lock
+      - name: Install locked isolated test dependencies (no retry)
+        working-directory: source
         shell: bash
         run: |
           uv python install 3.11
-          uv run --python 3.11 --no-project .github/native-proof/windows_clock_probe.py
+          uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web --extra messaging
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 26
+      - name: Install locked renderer dependencies (no retry)
+        working-directory: source
+        shell: bash
+        run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
+      - name: Canonical exact-source checks (no retries)
+        shell: bash
+        run: python helpers/.github/native-proof/deadline_ab_run.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: native-clock-${{ github.run_id }}
+          name: deadline-ab-${{ runner.os }}-${{ matrix.variant }}-${{ github.run_id }}
           path: evidence
           if-no-files-found: error

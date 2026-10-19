@@ -12,8 +12,8 @@
     "expected_case_count": 1
   },
   "provider-red": {
-    "source_sha": "9e7e18d7bdb9a238dab3e7f834ba37bf7333982d",
-    "tree": "2134106d273387c74be2287fdb349b7240c60d15",
+    "source_sha": "e2c969246a608ead140d537d99fab86257aca0ad",
+    "tree": "b665200b9c67119f842ef7b5b146113f195b3c5f",
     "files": [
       "tests/agent/test_provider_cold_setup_contract.py"
     ],
@@ -24,8 +24,8 @@
     "expected_case_count": 2
   },
   "candidate": {
-    "source_sha": "497976e3b40331db9fc064d73d632915297f55a6",
-    "tree": "ba26ee17b14061bd5e6fd8e06252b05bcd038de1",
+    "source_sha": "3282af6f75b2d1f0fbffb08522bfddb469368abf",
+    "tree": "c764c81779ba6ffa51d0566460718c9db1fdea56",
     "files": [
       "tests/agent/test_provider_security_corrected.py",
       "tests/test_independent_native_indent_review.py",
