@@ -435,7 +435,8 @@ def _reserve_isolated_call(quota_dir, binding, limit):
         before = validate_object()
         content = os.read(fd, 4097)
         after = validate_object()
-        if (len(content) > 4096 or (before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
+        if (len(content) != before.st_size or len(content) > 4096
+                or (before.st_size, before.st_mtime_ns, before.st_ctime_ns) !=
                 (after.st_size, after.st_mtime_ns, after.st_ctime_ns)):
             raise ReadOnlyStateError('evaluation_ledger_changed')
         ledger = ({'version': 1, 'binding': binding, 'used': 0} if created else

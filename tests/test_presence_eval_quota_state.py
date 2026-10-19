@@ -27,6 +27,7 @@ bad = {
     'negative_used': b'{"version":1,"binding":"SCRIPTED","used":-1}',
     'over_used': b'{"version":1,"binding":"SCRIPTED","used":4}',
     'oversized': seed + b' '*4096, 'invalid_utf8': b'\xff',
+    'short_read': seed + b' '*1024,
     'multibyte_oversized': seed + ('é'*2048).encode(),
 }
 if action in bad:
@@ -47,7 +48,9 @@ elif action == 'missing': quota.rmdir()
 original = ledger.read_bytes().hex() if action in bad else None
 reads=[]
 real_read=os.read
-def bounded(fd,n): reads.append(n); return real_read(fd,n)
+def bounded(fd,n):
+    reads.append(n)
+    return real_read(fd,len(seed) if action == 'short_read' else n)
 os.read=bounded
 status, reservations = 'allowed', []
 try:
@@ -70,7 +73,7 @@ print(json.dumps({'status':status,'reserved':reservations,'reads':reads,'origina
 
 @pytest.mark.parametrize('action', [
     'empty','malformed','array','duplicate','bool_used','bool_version','wrong_binding',
-    'negative_used','over_used','oversized','invalid_utf8','multibyte_oversized',
+    'negative_used','over_used','oversized','invalid_utf8','multibyte_oversized','short_read',
     'fifo','directory_leaf','ledger_mode','root_mode','root_symlink','ancestor_symlink',
     'missing','wrong_owner','wrong_dirfd',
 ])
@@ -81,7 +84,7 @@ def test_invalid_state_is_held_without_rewriting_or_repair(tmp_path, action):
     assert not (home/'outside-new.json').exists()
     ledger=quota/'presence-eval-quota.json'
     if action in {'empty','malformed','array','duplicate','bool_used','bool_version',
-                  'wrong_binding','negative_used','over_used','oversized','invalid_utf8','multibyte_oversized'}:
+                  'wrong_binding','negative_used','over_used','oversized','invalid_utf8','multibyte_oversized','short_read'}:
         # Rejection must preserve the original corrupt bytes, not reset them.
         assert ledger.read_bytes().hex() == result['original']
     if action in {'missing','wrong_owner','wrong_dirfd'}:
