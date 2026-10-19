@@ -127,6 +127,12 @@ def test_malformed_numeric_usage_never_becomes_known(monkeypatch, provider, valu
         else: body['usageMetadata'] = {'candidatesTokenCount': value, 'thoughtsTokenCount': 0}
         return httpx.Response(200, json=body)
     config = route_fixture(monkeypatch, provider, respond)
+    if provider == 'anthropic':
+        # This positive case tests malformed usage, not cold SDK readiness.
+        # Prepare only the SDK module, before the unchanged one-second call.
+        # Cold overrun must still HOLD before HTTP in the separate subprocess
+        # contract; no production acquisition, deadline or result guard moves.
+        __import__('anthropic')
     result = run(config)
     assert result.usage == 'unknown' and result.output_tokens is None
 
