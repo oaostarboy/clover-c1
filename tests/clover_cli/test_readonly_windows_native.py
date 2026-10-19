@@ -183,3 +183,54 @@ def test_live_quota_unsupported_before_mutation(state):
     with pytest.raises(ReadOnlyStateError, match='evaluation_quota_unsupported'):
         _reserve_isolated_call(home, 'synthetic', 1)
     assert sorted(p.name for p in home.iterdir()) == before
+
+
+def test_native_cold_selection_under_real_evaluation_guard(tmp_path, monkeypatch):
+    import json
+    import sys
+    from tests.clover_cli.test_runtime_provider_readonly import profile, inventory
+    home, _, _ = profile(monkeypatch, tmp_path)
+    secure_acl(home)
+    before = inventory(home)
+    code = r'''
+import json, os, sys
+from pathlib import Path
+from scripts.presence_eval_guard import ReadOnlyEvaluationGuard
+home = Path(os.environ['CLOVER_HOME'])
+guard = ReadOnlyEvaluationGuard(home=home, source=Path.cwd(), write_dirs=[])
+guard.install()
+from clover_cli.runtime_provider import resolve_runtime_provider
+runtime = resolve_runtime_provider(read_only=True)
+assert runtime['credential_pool'].current() is not None
+blocked = 0
+import socket
+for action in (lambda: (home/'not-allowed').write_bytes(b'no'),
+               lambda: socket.getaddrinfo('example.invalid', 443)):
+    try:
+        action()
+    except PermissionError:
+        blocked += 1
+print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt()}))
+'''
+    root = Path(__file__).resolve().parents[2]
+    env = {k: os.environ[k] for k in ('PATH', 'SYSTEMROOT') if k in os.environ}
+    env.update(HOME=str(tmp_path), USERPROFILE=str(tmp_path), CLOVER_HOME=str(home),
+               CLOVER_MANAGED_DIR=str(tmp_path/'managed'), PYTHONPATH=str(root),
+               PYTHONDONTWRITEBYTECODE='1')
+    child = subprocess.run([sys.executable, '-c', code], cwd=root, env=env,
+                           capture_output=True, text=True, timeout=20)
+    assert child.returncode == 0, child.stderr
+    result = json.loads(child.stdout)
+    assert result['selected'] and result['blocked'] == 2
+    assert result['guard']['baseline_unchanged']
+    assert len(result['guard']['denied_writes']) == 1
+    assert result['guard']['network_events'][0]['admitted'] is False
+    assert result['guard']['denied_private_reads'] == []
+    assert inventory(home) == before
+
+
+@pytest.mark.parametrize('tail', ['file:stream', 'NUL', 'file.', 'file ', '../file', './file'])
+def test_literal_aliases_refused(state, tail):
+    home, _ = state
+    with pytest.raises(ReadOnlyStateError):
+        read_existing_file(str(home) + '/' + tail)
