@@ -139,7 +139,7 @@ def pytest_runtest_protocol(item, nextitem):
                 def observed_unknown(self,*a,**kw):
                     before=remaining()
                     result=unknown(self,*a,**kw)
-                    _note('unknown_transition',changed=bool(result),remaining_before=before,remaining_after=remaining())
+                    _note('unknown_finalizer',returned=type(result).__name__,remaining_before=before,remaining_after=remaining())
                     return result
                 patches.extend([(authority,'validate_active',validate),(ThoughtStore,'unknown',unknown)])
                 authority.validate_active=observed_validate

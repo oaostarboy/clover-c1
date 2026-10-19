@@ -4179,6 +4179,7 @@
     "tests/verify/test_recipes.py",
     "tests/verify/test_verify_cmd.py",
     "tests/test_collection_prefetch_isolation.py",
-    "tests/test_presence_native_network_boundaries.py"
+    "tests/test_presence_native_network_boundaries.py",
+    "tests/cron/test_presence_runtime_state.py"
   ]
 }
