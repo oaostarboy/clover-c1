@@ -13,7 +13,27 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            scope: joined-final
+            scope: "0"
+          - os: windows-latest
+            scope: "1"
+          - os: windows-latest
+            scope: "2"
+          - os: windows-latest
+            scope: "3"
+          - os: windows-latest
+            scope: "4"
+          - os: windows-latest
+            scope: "5"
+          - os: windows-latest
+            scope: "6"
+          - os: windows-latest
+            scope: "7"
+          - os: windows-latest
+            scope: "8"
+          - os: windows-latest
+            scope: "9"
+          - os: windows-latest
+            scope: "10"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -45,8 +65,8 @@ jobs:
       - name: Exact-source canonical suite (no retries)
         shell: bash
         env:
-          SCOPE: ${{ matrix.scope }}
-        run: python helpers/.github/native-proof/presence_run.py
+          FILE_INDEX: ${{ matrix.scope }}
+        run: python helpers/.github/native-proof/settlement_run.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
