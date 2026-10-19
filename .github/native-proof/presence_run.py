@@ -6,8 +6,8 @@ DEST=ROOT/'evidence'
 DEST.mkdir(exist_ok=True)
 def git(*args):return subprocess.check_output(['git','-C',str(SRC),*args],text=True).strip()
 sha=git('rev-parse','HEAD');tree=git('rev-parse','HEAD^{tree}')
-assert sha=='c97d09f977e8f9511690c10cc42018ff219e88f5'
-assert tree=='4f0414acd27b0e81219d8fae48aa45c886aee160'
+assert sha=='44ed73336bea1120eba1ae09a3f9cc8051e4208e'
+assert tree=='ac3afa3692a7d1e152c79663dd3b34c57beb53b6'
 manifest=json.loads((Path(__file__).parent/'presence-manifest.json').read_text())
 python=SRC/'.venv'/('Scripts/python.exe' if os.name=='nt' else 'bin/python')
 env=os.environ.copy()
@@ -19,11 +19,11 @@ scope=env['SCOPE']
 bash=str(Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Git/bin/bash.exe') if os.name=='nt' else 'bash'
 if os.name=='nt': assert Path(bash).is_file(), 'Git for Windows Bash is required'
 cmd=[bash,'scripts/run_tests.sh']
-selection=['tests/agent/test_presence_native_providers.py','tests/test_presence_selected_owner_concurrent_probe.py',
- 'tests/gateway/test_presence_integration.py','tests/test_indented_fence_boundaries.py','tests/gateway/test_emotions_final_fence.py']
+selection=['tests/cron/test_presence_read_snapshot.py','tests/cron/test_presence_runtime_state.py','tests/cron/test_presence_store.py','tests/cron/test_presence_link.py',
+ 'tests/test_presence_selected_owner_concurrent_probe.py','tests/test_presence_selected_owner_callback_deadline_probe.py','tests/test_presence_selected_owner_publication_probe.py',
+ 'tests/agent/test_presence_native_providers.py','tests/agent/test_provider_security_corrected.py']
 cmd+=selection
-cmd+=['-j','6','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra','-k',
- 'native_request_mode or two_real_after_reply or authenticated_after_reply or (native_payload and buffered) or (mutation_after_final and policy-root)']
+cmd+=['-j','1','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra']
 receipt={'sha':sha,'tree':tree,'os':platform.platform(),'scope':scope,'command':cmd,'python':str(python),'status_before':git('status','--porcelain','--untracked-files=no'),'started':time.time()}
 (DEST/'receipt.json').write_text(json.dumps(receipt,indent=2))
 with (DEST/'canonical.log').open('w',encoding='utf-8') as f:

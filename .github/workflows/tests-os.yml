@@ -13,9 +13,9 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            scope: stages
+            scope: focused
           - os: macos-latest
-            scope: stages
+            scope: focused
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -23,7 +23,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: c97d09f977e8f9511690c10cc42018ff219e88f5
+          ref: 44ed73336bea1120eba1ae09a3f9cc8051e4208e
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
