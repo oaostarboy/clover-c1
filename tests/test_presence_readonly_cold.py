@@ -77,40 +77,7 @@ from pathlib import Path
 from scripts.presence_eval_guard import ReadOnlyEvaluationGuard
 quota = Path(os.environ['QUOTA'])
 guard = ReadOnlyEvaluationGuard(home=Path(os.environ['CLOVER_HOME']), source=Path.cwd(), write_dirs=[quota])
-# Diagnostic only: preserve the original denial and record OS-backed fd facts.
-import fcntl, sys
-original_audit = guard.audit
-denied_operations = []
-def diagnosed_audit(event, args):
-    try:
-        return original_audit(event, args)
-    except PermissionError:
-        if event == 'open':
-            row = {'event': event, 'args': list(args), 'stack': []}
-            frame = sys._getframe(1)
-            while frame is not None:
-                row['stack'].append([frame.f_code.co_filename, frame.f_code.co_name, frame.f_lineno])
-                frame = frame.f_back
-            if isinstance(args[0], int):
-                fd = args[0]
-                info = os.fstat(fd)
-                row.update(fd_flags=fcntl.fcntl(fd, fcntl.F_GETFL),
-                           fd_access=fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE,
-                           fd_mode=info.st_mode, fd_device=info.st_dev, fd_inode=info.st_ino,
-                           fd_uid=info.st_uid, fd_gid=info.st_gid, fd_rdev=info.st_rdev)
-                sys.stderr.write('COLD_AUDIT_BEFORE_GETPATH ' + json.dumps(row) + '\n')
-                if sys.platform == 'darwin':
-                    try:
-                        path = fcntl.fcntl(fd, 50, bytes(1024))  # Darwin F_GETPATH.
-                        row.update(f_getpath_errno=0, fd_target=os.fsdecode(path.split(b'\0', 1)[0]))
-                    except OSError as exc:
-                        row.update(f_getpath_errno=exc.errno, fd_target=None)
-                else:
-                    row['fd_target'] = os.readlink('/proc/self/fd/' + str(fd))
-            denied_operations.append(row)
-            sys.stderr.write('COLD_AUDIT_DENIED ' + json.dumps(row) + '\n')
-        raise
-sys.addaudithook(diagnosed_audit)
+guard.install()
 from scripts.eval_presence_current_turn import execute_isolated_cases, load_cases
 from agent import auxiliary_client as aux
 import httpx
@@ -126,7 +93,7 @@ async def scripted_async(transport, request):
 httpx.AsyncHTTPTransport.handle_async_request = scripted_async
 cases,_ = load_cases('normative')
 result,attempts,invocations = execute_isolated_cases([next(c for c in cases if c['id']=='thought_user_interest_en')],max_calls=3,quota_dir=quota,request_budget_consent=True)
-print(json.dumps({'status':result[0]['status'],'wires':wires,'attempts':attempts,'invocations':invocations,'guard':guard.receipt(),'denied_operations':denied_operations}))
+print(json.dumps({'status':result[0]['status'],'wires':wires,'attempts':attempts,'invocations':invocations,'guard':guard.receipt()}))
 '''
     env = {k:v for k,v in os.environ.items() if k in ('PATH','LANG','TZ')}
     env.update(HOME=str(tmp_path), CLOVER_HOME=str(home), CLOVER_MANAGED_DIR=str(tmp_path/'managed'),
@@ -134,7 +101,7 @@ print(json.dumps({'status':result[0]['status'],'wires':wires,'attempts':attempts
     run = subprocess.run([sys.executable,'-c',code],cwd=ROOT,env=env,capture_output=True,text=True,timeout=20)
     assert run.returncode == 0, run.stderr
     result = json.loads(run.stdout)
-    assert result['guard']['denied_writes'] == [], json.dumps(result, sort_keys=True)
+    assert result['guard']['denied_writes'] == []
     assert result['guard']['denied_private_reads'] == []
     assert result['guard']['network_events'] == []
     assert result['status'] == 'measured' and result['wires'] == ['chatgpt.com']
