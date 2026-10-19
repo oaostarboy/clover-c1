@@ -12,7 +12,7 @@ jobs:
       fail-fast: false
       matrix:
         os: [windows-latest, macos-latest]
-        scope: [joined]
+        scope: [joined, "1/4", "2/4", "3/4", "4/4"]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -34,6 +34,13 @@ jobs:
         run: |
           uv python install 3.11
           uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web --extra messaging
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 26
+      - name: Install locked desktop renderer test dependencies (no retry)
+        working-directory: source
+        shell: bash
+        run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
       - name: Exact-source canonical suite (no retries)
         shell: bash
         env:
