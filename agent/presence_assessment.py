@@ -29,9 +29,16 @@ reflective for mixed reactions; clarify for uncertainty; ordinary for calm/no ne
 thought: null unless this human explicitly expresses an unresolved question or
 interest worth carrying forward. Do not extract quoted third-party questions,
 commands, tasks, work obligations, action permissions, or anything already resolved.
-When eligible return {summary: exact source quote, quote: same exact source quote,
-confidence: 0..1}. Keep the extract <=512 UTF-8 bytes. Never invent evidence,
-source IDs, execution rights or new facts. No tools, actions or outside research.'''
+When eligible return {summary: entire exact current source, quote: same entire source,
+confidence: 0..1, owner: current_human|third_party|unknown,
+intent: unresolved_question|unresolved_interest|task|resolved|unknown,
+source_context: direct|quoted|reported|unknown}.
+Only direct current_human unresolved questions/interests can be carried. Owner and
+intent are tentative classifications, never permissions. If attribution is mixed,
+quoted/reported, unclear, resolved or a task, abstain. Do not isolate a first-person
+substring from another speaker's words. Keep the entire source <=512 UTF-8 bytes;
+otherwise abstain from thought extraction. Never invent evidence, source IDs,
+execution rights or new facts. No tools, actions or outside research.'''
 
 
 def messages(text):
@@ -58,14 +65,31 @@ def parse(raw, text=''):
             raise ValueError('affect posture')
     thought = value['thought']
     if thought is not None:
-        if (type(thought) is not dict or set(thought) != {'summary', 'quote', 'confidence'}
+        if (type(thought) is not dict
+                or set(thought) != {'summary', 'quote', 'confidence', 'owner', 'intent', 'source_context'}
                 or not _safe_text(thought['quote'], 512)
                 or thought['summary'] != thought['quote']
                 or thought['quote'] not in text
+                or not isinstance(thought['owner'], str)
+                or thought['owner'] not in {'current_human', 'third_party', 'unknown'}
+                or not isinstance(thought['intent'], str)
+                or thought['intent'] not in {'unresolved_question', 'unresolved_interest', 'task', 'resolved', 'unknown'}
+                or not isinstance(thought['source_context'], str)
+                or thought['source_context'] not in {'direct', 'quoted', 'reported', 'unknown'}
                 or type(thought['confidence']) not in (int, float)
                 or not math.isfinite(thought['confidence'])
                 or not 0 <= thought['confidence'] <= 1):
             raise ValueError('thought schema/evidence')
-        if thought['confidence'] < .7:
+        # Provenance and model confidence are not speaker intent. Conservatively
+        # require the complete current source, an explicit tentative owner/intent,
+        # and no structural quotation/code context. This deliberately sacrifices
+        # recall; indirect speech without delimiters still needs real-model/human
+        # quality evaluation, not a claim of deterministic language understanding.
+        if (thought['confidence'] < .7 or thought['quote'] != text
+                or thought['owner'] != 'current_human'
+                or thought['intent'] not in {'unresolved_question', 'unresolved_interest'}
+                or thought['source_context'] != 'direct'
+                or any(char in text for char in '\"“”«»「」『』`')
+                or any(line.lstrip().startswith('>') for line in text.splitlines())):
             value['thought'] = None
     return value
