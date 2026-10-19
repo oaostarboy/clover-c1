@@ -355,8 +355,14 @@ text=render()
 after={str(p.relative_to(pathlib.Path.home())):p.read_bytes().hex() for p in pathlib.Path.home().rglob('*') if p.is_file()}
 print(json.dumps({'before':before,'after':after,'text':text,'network_attempts':attempts,'introduced_modules':sorted(set(sys.modules)-modules)}))
 """
-    result=subprocess.run([sys.executable,'-c',code],cwd=source,
-        env={'PATH':'/usr/bin:/bin','HOME':str(home),'CLOVER_HOME':str(home),'PYTHONPATH':str(source)},
+    import os
+    env = {'PATH':'/usr/bin:/bin','HOME':str(home),'CLOVER_HOME':str(home),
+           'PYTHONPATH':str(source),'CLOVER_TEST_ISOLATION':str(home)}
+    if os.name == 'nt':
+        # Native Path.home ignores HOME. Keep the child in its private home
+        # and retain only Windows' required stdlib location, not operator env.
+        env.update(USERPROFILE=str(home), SYSTEMROOT=os.environ['SYSTEMROOT'])
+    result=subprocess.run([sys.executable,'-c',code],cwd=source,env=env,
         capture_output=True,text=True,timeout=30)
     assert result.returncode==0,result.stderr
     data=json.loads(result.stdout)
