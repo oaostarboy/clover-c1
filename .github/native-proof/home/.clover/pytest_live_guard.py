@@ -80,74 +80,11 @@ def pytest_sessionfinish(session,exitstatus):
 def pytest_unconfigure(config):
     if REC is not None: (DEST/(REC['key']+'.json')).write_text(json.dumps(REC),encoding='utf-8')
 
-# Diagnostic-only observer; never changes an application result or deadline.
-import faulthandler, threading, time, traceback, sys
-_DIAG = None
-_STACK = None
-_T0 = time.monotonic()
+# Isolated probe records with no per-call disk logging.
+import time, sys
+_T0=time.monotonic()
 def _note(kind, **values):
-    if _DIAG is not None:
-        _DIAG.write(json.dumps(dict(t=round(time.monotonic()-_T0,6),kind=kind,**values))+"\n")
-        _DIAG.flush()
-_original_thread_start = threading.Thread.start
-def _observed_start(thread, *args, **kwargs):
-    target = getattr(thread, '_target', None)
-    if getattr(target, '__module__', '') == 'clover_cli.banner':
-        _note('banner_thread_start', frames=traceback.format_stack(limit=12))
-    return _original_thread_start(thread, *args, **kwargs)
-threading.Thread.start = _observed_start
-@pytest.hookimpl(tryfirst=True)
-def pytest_sessionstart(session):
-    global _DIAG, _STACK
-    _DIAG=(DEST/('diagnostic-'+str(os.getpid())+'.jsonl')).open('w', encoding='utf-8')
-    _STACK=(DEST/('stacks-'+str(os.getpid())+'.log')).open('w', encoding='utf-8')
-    _note('sessionstart')
-@pytest.hookimpl(tryfirst=True)
-def pytest_runtest_logstart(nodeid, location):
-    _note('test_start',nodeid=nodeid)
-@pytest.hookimpl(hookwrapper=True)
-def pytest_runtest_protocol(item, nextitem):
-    # Install only after the test has naturally loaded/registers its callback.
-    # No global Python profiling, eager SDK imports, extra reads or new budgets.
-    import functools
-    module=sys.modules.get('gateway.platforms.base')
-    patches=[]
-    installed=False
-    if module is not None:
-        cls=module.BasePlatformAdapter
-        register=cls.register_post_delivery_callback
-        @functools.wraps(register)
-        def observed_register(self,*args,**kwargs):
-            nonlocal installed
-            if not installed and 'agent.presence_runtime' in sys.modules:
-                installed=True
-                import agent.presence_authority as authority
-                from cron.presence import ThoughtStore
-                validate=authority.validate_active
-                unknown=ThoughtStore.unknown
-                def remaining():
-                    active=authority._ACTIVE.get()
-                    return active[2]-time.monotonic() if active is not None and active[2] is not None else None
-                @functools.wraps(validate)
-                def observed_validate():
-                    try:
-                        return validate()
-                    except BaseException as exc:
-                        _note('authority_fence_refusal',exception=type(exc).__name__,remaining=remaining())
-                        raise
-                @functools.wraps(unknown)
-                def observed_unknown(self,*a,**kw):
-                    before=remaining()
-                    result=unknown(self,*a,**kw)
-                    _note('unknown_finalizer',returned=type(result).__name__,remaining_before=before,remaining_after=remaining())
-                    return result
-                patches.extend([(authority,'validate_active',validate),(ThoughtStore,'unknown',unknown)])
-                authority.validate_active=observed_validate
-                ThoughtStore.unknown=observed_unknown
-            return register(self,*args,**kwargs)
-        patches.append((cls,'register_post_delivery_callback',register))
-        cls.register_post_delivery_callback=observed_register
-    try:
-        yield
-    finally:
-        for obj,name,value in reversed(patches):setattr(obj,name,value)
+    with (DEST/('phase-'+str(os.getpid())+'.jsonl')).open('a',encoding='utf-8') as f:
+        f.write(json.dumps(dict(t=time.monotonic()-_T0,kind=kind,**values))+'\n')
+sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
+from stage_probe import pytest_runtest_call
