@@ -44,7 +44,7 @@ def test_scripted_multilingual_normative_cases_reach_compose_and_status(monkeypa
                                   'bool_confidence', 'nan_confidence', 'unknown_posture', 'oversize'])
 def test_untrusted_schema_cannot_invent_evidence_or_authority(mutate):
     text = 'I wonder how deployment packaging could be safer.'
-    sample = assessment(thought={'summary': text, 'quote': text, 'confidence': .9})
+    sample = assessment(thought={'summary': text, 'quote': text, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'})
     if mutate == 'invented_quote':
         sample['thought']['quote'] = sample['thought']['summary'] = 'invented evidence'
     elif mutate == 'rewritten_summary':
@@ -95,7 +95,7 @@ def test_late_results_cannot_write_reading_or_thought(monkeypatch, tmp_path, rac
             config = yaml.safe_load((h.home/'config.yaml').read_text(encoding='utf-8'))
             config['presence']['enabled'] = False
             (h.home/'config.yaml').write_text(yaml.safe_dump(config), encoding='utf-8')
-        return assessment(thought={'summary': text, 'quote': text, 'confidence': .9})
+        return assessment(thought={'summary': text, 'quote': text, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'})
     h, requests, bot = scripted_host(monkeypatch, tmp_path, [output])
     try:
         h.inbound_human(text, message_id=100)
@@ -163,7 +163,7 @@ def test_lower_configured_budget_and_shared_three_request_ceiling(monkeypatch, t
 def test_stop_during_thought_write_leaves_no_pending_state(monkeypatch, tmp_path):
     text = 'I wonder how deployment packaging could be safer.'
     h, requests, _ = scripted_host(monkeypatch, tmp_path,
-        [assessment(thought={'summary': text, 'quote': text, 'confidence': .9})])
+        [assessment(thought={'summary': text, 'quote': text, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'})])
     original = ThoughtStore.put
     def put(store, thought):
         store.stop()

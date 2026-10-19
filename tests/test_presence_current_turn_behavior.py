@@ -87,7 +87,7 @@ def test_ordinary_question_is_captured_without_manual_command_then_later_offered
     from agent.presence_state import ContextKey
     from tests.gateway.test_workstream_suggestion_offer import scope
     text = 'I wonder how deployment packaging could be safer.'
-    thought = {'summary': text, 'quote': text, 'confidence': .9}
+    thought = {'summary': text, 'quote': text, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'}
     connection = {'connection': 'Deployment packaging can verify manifest checksum before publishing.',
                   'evidence_indices': [0, 1], 'confidence': .9}
     h, requests, bot = scripted_host(monkeypatch, tmp_path,

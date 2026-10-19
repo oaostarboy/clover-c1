@@ -18,7 +18,7 @@ def test_automatic_thought_cannot_offer_connection_that_ignores_new_context(monk
     old_connection = {'connection': 'Deployment packaging can verify manifest checksum before publishing.',
                       'evidence_indices': [0], 'confidence': .9}
     h, requests, bot = scripted_host(monkeypatch, tmp_path,
-        [assessment(thought={'summary': quote, 'quote': quote, 'confidence': .9}), old_connection])
+        [assessment(thought={'summary': source, 'quote': source, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'}), old_connection])
     try:
         h.inbound_human(source, message_id=100)
         h.inbound_human('Deployment packaging now has compression benchmarks and reproducible archives.', message_id=101)
@@ -32,7 +32,7 @@ def test_repeated_source_and_irrelevant_new_context_make_no_initiative_call(monk
     from agent import presence_runtime as runtime
     text = 'I wonder how deployment packaging could be safer.'
     h, requests, bot = scripted_host(monkeypatch, tmp_path,
-        [assessment(thought={'summary': text, 'quote': text, 'confidence': .9}),
+        [assessment(thought={'summary': text, 'quote': text, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'}),
          {'affect': None, 'thought': None}])
     now = [runtime.clock()]
     monkeypatch.setattr(runtime, 'clock', lambda: now[0])
@@ -74,7 +74,7 @@ def test_current_connection_evidence_deleted_at_attempt_cannot_publish(monkeypat
     connection = {'connection': 'Deployment packaging can verify manifest checksum before publishing.',
                   'evidence_indices': [0, 1], 'confidence': .9}
     h, requests, bot = scripted_host(monkeypatch, tmp_path,
-        [assessment(thought={'summary': text, 'quote': text, 'confidence': .9}), connection])
+        [assessment(thought={'summary': text, 'quote': text, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'}), connection])
     original = ThoughtStore.attempt
     def attempt(store, *args):
         result = original(store, *args)
@@ -121,7 +121,7 @@ def test_desktop_french_ordinary_interest_uses_same_assessment_and_one_later_ack
     connection = {'connection': 'Le déploiement logiciel peut vérifier les sommes de contrôle et les signatures.',
                   'evidence_indices': [0, 1], 'confidence': .9}
     h, requests, _ = scripted_host(monkeypatch, tmp_path,
-        [assessment('ordinary', .2, .2, thought={'summary': quote, 'quote': quote, 'confidence': .9}), connection])
+        [assessment('ordinary', .2, .2, thought={'summary': quote, 'quote': quote, 'confidence': .9, 'owner': 'current_human', 'intent': 'unresolved_question', 'source_context': 'direct'}), connection])
     agent, transport, sid, session, send = desktop_host(h, monkeypatch)
     try:
         send(quote)
