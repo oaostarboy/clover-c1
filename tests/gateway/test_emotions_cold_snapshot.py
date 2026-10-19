@@ -7,6 +7,18 @@ import sys
 import pytest
 
 
+def _cold_environment(home, source):
+    """Keep the child hermetic while preserving native Windows locations."""
+    env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(home),
+           'CLOVER_HOME': str(home), 'PYTHONPATH': str(source)}
+    if sys.platform == 'win32':
+        env['USERPROFILE'] = str(home)
+        for name in ('SYSTEMROOT', 'TEMP', 'TMP', 'LOCALAPPDATA', 'APPDATA'):
+            if name in os.environ:
+                env[name] = os.environ[name]
+    return env
+
+
 @pytest.mark.parametrize('config', [None, 'presence:\n  enabled: false\n',
     'presence:\n  enabled: true\n', 'presence: [',
     'presence:\n  enabled: false\nmodel:\n  provider: openai\n  default: synthetic-model\n'])
@@ -40,8 +52,7 @@ armed=False
 print(json.dumps(dict(before=before,after=inventory(),text=text,attempts=attempts,secret_reads=secret_reads,modules=sorted(set(sys.modules)-modules))))
 '''
     result = subprocess.run([sys.executable, '-B', '-c', code], cwd=source,
-        env={'PATH':os.environ.get('PATH','/usr/bin:/bin'), 'HOME':str(home),
-             'CLOVER_HOME':str(home), 'PYTHONPATH':str(source)},
+        env=_cold_environment(home, source),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)
@@ -107,8 +118,7 @@ print(json.dumps(dict(before=before,after=inventory(),text=text,modules=sorted(s
 '''
     source = Path(__file__).resolve().parents[2]
     result = subprocess.run([sys.executable, '-B', '-c', code], cwd=source,
-        env={'PATH':os.environ.get('PATH','/usr/bin:/bin'), 'HOME':str(home),
-             'CLOVER_HOME':str(home), 'PYTHONPATH':str(source)},
+        env=_cold_environment(home, source),
         capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     data = json.loads(result.stdout)

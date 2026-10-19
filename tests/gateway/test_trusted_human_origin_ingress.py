@@ -49,6 +49,10 @@ def network_guard(monkeypatch):
     stdlib socketpair may connect its own private loopback pair on Windows;
     that unaddressable event-loop IPC is not application network access.
     """
+    # Desktop server imports prefetch the unrelated release status. Keep that
+    # background network edge out of this offline presence/ingress fixture;
+    # every application socket/DNS refusal below remains unchanged.
+    monkeypatch.setattr('clover_cli.banner.prefetch_update_check', lambda: None)
     attempts = []
 
     def _refuse(kind):
