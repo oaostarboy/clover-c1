@@ -20,7 +20,13 @@ from tests.gateway.test_presence_delivery import enabled_context, synthetic_offe
 def block_real_network(monkeypatch):
     def forbidden(*args, **kwargs):
         raise AssertionError("W3 contract tests must not use real networking")
-    monkeypatch.setattr(socket.socket, "connect", forbidden)
+    from tests.native_boundaries import private_socketpair_boundary
+    pair, connect = private_socketpair_boundary(
+        socket.socketpair, socket.socket.connect, forbidden)
+    monkeypatch.setattr(socket, "socketpair", pair)
+    monkeypatch.setattr(socket.socket, "connect", connect)
+    monkeypatch.setattr(socket.socket, "connect_ex", forbidden)
+    monkeypatch.setattr(socket, "create_connection", forbidden)
     monkeypatch.setattr(socket, "getaddrinfo", forbidden)
 
 
