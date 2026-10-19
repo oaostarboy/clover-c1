@@ -86,5 +86,3 @@ _T0=time.monotonic()
 def _note(kind, **values):
     with (DEST/('phase-'+str(os.getpid())+'.jsonl')).open('a',encoding='utf-8') as f:
         f.write(json.dumps(dict(t=time.monotonic()-_T0,kind=kind,**values))+'\n')
-sys.path.insert(0,str(Path(__file__).resolve().parents[2]))
-from stage_probe import pytest_runtest_call

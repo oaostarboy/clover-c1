@@ -19,9 +19,8 @@ scope=env['SCOPE']
 bash=str(Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Git/bin/bash.exe') if os.name=='nt' else 'bash'
 if os.name=='nt': assert Path(bash).is_file(), 'Git for Windows Bash is required'
 cmd=[bash,'scripts/run_tests.sh']
-selection=['tests/cron/test_presence_read_snapshot.py','tests/cron/test_presence_runtime_state.py','tests/cron/test_presence_store.py','tests/cron/test_presence_link.py',
- 'tests/test_presence_selected_owner_concurrent_probe.py','tests/test_presence_selected_owner_callback_deadline_probe.py','tests/test_presence_selected_owner_publication_probe.py',
- 'tests/agent/test_presence_native_providers.py','tests/agent/test_provider_security_corrected.py']
+selection=manifest['joined_file_selection']+['tests/test_collection_prefetch_isolation.py','tests/test_presence_native_network_boundaries.py','tests/cron/test_presence_runtime_state.py','tests/cron/test_presence_read_snapshot.py']
+assert len(selection)==len(set(selection))==97
 cmd+=selection
 cmd+=['-j','1','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra']
 receipt={'sha':sha,'tree':tree,'os':platform.platform(),'scope':scope,'command':cmd,'python':str(python),'status_before':git('status','--porcelain','--untracked-files=no'),'started':time.time()}
