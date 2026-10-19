@@ -57,7 +57,11 @@ class ReadOnlyEvaluationGuard:
             path = self._path(args[0])
             flags = args[2] if len(args) > 2 and isinstance(args[2], int) else 0
             writing = bool(flags & (os.O_WRONLY | os.O_RDWR | os.O_CREAT | os.O_TRUNC | os.O_APPEND))
-            if writing and path != Path('/dev/null') and not self._within(path, self.write_dirs):
+            # Permit only each OS's non-persistent null sink, not a pathname
+            # ending in "nul" (extended namespaces can address real such files).
+            null_sink = (os.name == 'posix' and path == Path('/dev/null')) or (
+                os.name == 'nt' and type(args[0]) is str and args[0].casefold() == 'nul')
+            if writing and not null_sink and not self._within(path, self.write_dirs):
                 self.denied_writes.append(event + ':' + str(path))
                 raise PermissionError('evaluation_write_forbidden')
             if not writing:

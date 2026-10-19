@@ -100,6 +100,13 @@ def _read_windows(path, *, private, limit):
     remote volumes, reparse points and unavailable security APIs fail closed.
     """
     try:
+        import sys
+        raw = os.fspath(path)
+        if not isinstance(raw, str):
+            raise ReadOnlyStateError('invalid_state_path')
+        # Raw NT I/O does not emit CPython's open event itself. Preserve the
+        # enclosing audit guard's private-read scope BEFORE any handle/data I/O.
+        sys.audit('open', raw, 'rb', os.O_RDONLY | getattr(os, 'O_BINARY', 0))
         from agent.windows_audit_reader import read_bytes
         from clover_cli.windows_ssh_runtime import _current_sid
         import win32security as security
@@ -150,9 +157,6 @@ def _read_windows(path, *, private, limit):
 
         # Keep literal path components until the reviewed validator sees them;
         # Path(...) would normalize dot/trailing separators before validation.
-        raw = os.fspath(path)
-        if not isinstance(raw, str):
-            raise ReadOnlyStateError('invalid_state_path')
         split = max(raw.rfind('/'), raw.rfind('\\'))
         if split < 2:
             raise ReadOnlyStateError('invalid_state_path')

@@ -263,6 +263,8 @@ print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt(),
     assert len(result['guard']['denied_writes']) == 1
     assert result['guard']['network_events'][0]['admitted'] is False
     assert result['guard']['denied_private_reads'] == []
+    assert result['guard']['auth_reads'] >= 1, 'native credential reads must remain visible to audit hooks'
+    record_property('cold_auth_read_audit_events', result['guard']['auth_reads'])
     assert inventory(home) == before
 
 
