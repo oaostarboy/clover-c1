@@ -78,8 +78,7 @@ from scripts.presence_eval_guard import ReadOnlyEvaluationGuard
 quota = Path(os.environ['QUOTA'])
 guard = ReadOnlyEvaluationGuard(home=Path(os.environ['CLOVER_HOME']), source=Path.cwd(), write_dirs=[quota])
 # Diagnostic only: preserve the original denial and record OS-backed fd facts.
-import ctypes, fcntl, stat, sys
-libc = ctypes.CDLL(None, use_errno=True)
+import fcntl, sys
 original_audit = guard.audit
 denied_operations = []
 def diagnosed_audit(event, args):
@@ -99,14 +98,17 @@ def diagnosed_audit(event, args):
                            fd_access=fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE,
                            fd_mode=info.st_mode, fd_device=info.st_dev, fd_inode=info.st_ino,
                            fd_uid=info.st_uid, fd_gid=info.st_gid, fd_rdev=info.st_rdev)
+                sys.stderr.write('COLD_AUDIT_BEFORE_GETPATH ' + json.dumps(row) + '\n')
                 if sys.platform == 'darwin':
-                    path = ctypes.create_string_buffer(1024)
-                    rc = libc.fcntl(fd, 50, path)  # Darwin F_GETPATH, observation only.
-                    row.update(f_getpath_rc=rc, f_getpath_errno=ctypes.get_errno(),
-                               fd_target=os.fsdecode(path.value) if rc == 0 else None)
+                    try:
+                        path = fcntl.fcntl(fd, 50, bytes(1024))  # Darwin F_GETPATH.
+                        row.update(f_getpath_errno=0, fd_target=os.fsdecode(path.split(b'\0', 1)[0]))
+                    except OSError as exc:
+                        row.update(f_getpath_errno=exc.errno, fd_target=None)
                 else:
                     row['fd_target'] = os.readlink('/proc/self/fd/' + str(fd))
             denied_operations.append(row)
+            sys.stderr.write('COLD_AUDIT_DENIED ' + json.dumps(row) + '\n')
         raise
 sys.addaudithook(diagnosed_audit)
 from scripts.eval_presence_current_turn import execute_isolated_cases, load_cases
