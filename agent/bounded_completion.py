@@ -80,6 +80,12 @@ async def _http_failure_diagnostic(response, deadline):
     diagnostic = {'http_status': response.status_code, 'body_status': 'empty',
         'error_type': None, 'error_code': None, 'error_param': None,
         'usage': 'unknown', 'cost': None}
+    # HTTPX decodes before yielding aiter_bytes chunks, so a later size check
+    # cannot bound compressed output. Omit encoded/ambiguous bodies entirely;
+    # truncated also denotes this intentional omission, never a parsed body.
+    if response.headers.get('content-encoding', 'identity').strip().lower() != 'identity':
+        diagnostic['body_status'] = 'truncated'
+        return diagnostic
     data = bytearray()
     try:
         # Diagnostics use only a small fraction of the EXISTING deadline.
