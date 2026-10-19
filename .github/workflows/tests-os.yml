@@ -1,21 +1,29 @@
-name: Joined deadline controlled stage observations
+name: Joined deadline explicit native RED GREEN contracts
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  reproduce:
-    name: ${{ matrix.os }} / exact unchanged targeted files
+  experiment:
+    name: ${{ matrix.os }} / ${{ matrix.variant }} (explicit expected contract)
     runs-on: ${{ matrix.os }}
     timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, ubuntu-latest]
+        include:
+          - {os: windows-latest, variant: bridge-red, source: 12cb6fe4bde2ab87dc57bb247eda5abd106ef572}
+          - {os: ubuntu-latest, variant: bridge-red, source: 12cb6fe4bde2ab87dc57bb247eda5abd106ef572}
+          - {os: windows-latest, variant: provider-red, source: 9e7e18d7bdb9a238dab3e7f834ba37bf7333982d}
+          - {os: ubuntu-latest, variant: provider-red, source: 9e7e18d7bdb9a238dab3e7f834ba37bf7333982d}
+          - {os: windows-latest, variant: candidate, source: 497976e3b40331db9fc064d73d632915297f55a6}
+          - {os: ubuntu-latest, variant: candidate, source: 497976e3b40331db9fc064d73d632915297f55a6}
+          - {os: macos-latest, variant: candidate, source: 497976e3b40331db9fc064d73d632915297f55a6}
     env:
       MODE: acceptance
       SLICE_INDEX: "0"
       SLICES: "1"
+      CONTROL_VARIANT: ${{ matrix.variant }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -23,7 +31,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 79e5df1357c0a7bd14788e512d30e2293731374f
+          ref: ${{ matrix.source }}
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
@@ -46,10 +54,10 @@ jobs:
         run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
       - name: Canonical exact-source checks (no retries)
         shell: bash
-        run: python helpers/.github/native-proof/joined_run.py
+        run: python helpers/.github/native-proof/deadline_ab_run.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: presence-${{ runner.os }}-${{ env.MODE }}-${{ env.SLICE_INDEX }}-${{ github.run_id }}
+          name: deadline-ab-${{ runner.os }}-${{ matrix.variant }}-${{ github.run_id }}
           path: evidence
           if-no-files-found: error

@@ -1,0 +1,42 @@
+{
+  "bridge-red": {
+    "source_sha": "12cb6fe4bde2ab87dc57bb247eda5abd106ef572",
+    "tree": "7c7d94d5da26c0e079c729d6c9eda65f113c7978",
+    "files": [
+      "tests/tui_gateway/test_presence_renderer_bridge_preparation.py"
+    ],
+    "expected_failed_ids": [
+      "tests/tui_gateway/test_presence_renderer_bridge_preparation.py::test_prepublication_preparation_does_not_spend_renderer_delivery_clock"
+    ],
+    "failure_text": "Test timed out in 15000ms.",
+    "expected_case_count": 1
+  },
+  "provider-red": {
+    "source_sha": "9e7e18d7bdb9a238dab3e7f834ba37bf7333982d",
+    "tree": "2134106d273387c74be2287fdb349b7240c60d15",
+    "files": [
+      "tests/agent/test_provider_cold_setup_contract.py"
+    ],
+    "expected_failed_ids": [
+      "tests/agent/test_provider_cold_setup_contract.py::test_cold_sdk_setup_and_one_second_completion_have_separate_contracts[prepared_usage]"
+    ],
+    "failure_text": "bounded completion deadline exceeded",
+    "expected_case_count": 2
+  },
+  "candidate": {
+    "source_sha": "497976e3b40331db9fc064d73d632915297f55a6",
+    "tree": "ba26ee17b14061bd5e6fd8e06252b05bcd038de1",
+    "files": [
+      "tests/agent/test_provider_security_corrected.py",
+      "tests/test_independent_native_indent_review.py",
+      "tests/test_presence_stream_native_wire.py",
+      "tests/tui_gateway/test_presence_independent_bridge_diagnostic.py",
+      "tests/tui_gateway/test_presence_renderer_bridge.py",
+      "tests/agent/test_provider_cold_setup_contract.py",
+      "tests/tui_gateway/test_presence_renderer_bridge_preparation.py"
+    ],
+    "expected_failed_ids": [],
+    "failure_text": "",
+    "expected_case_count": 97
+  }
+}
