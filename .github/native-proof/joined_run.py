@@ -23,7 +23,7 @@ manifest = json.loads((HELPERS / 'presence-manifest.json').read_text())
 def git(*args):
     return subprocess.check_output(['git', '-C', str(SRC), *args], text=True).strip()
 sha, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
-assert sha == manifest['source_sha'] and tree == manifest['tree']
+assert sha == os.environ['TARGET_SHA'] and tree == os.environ['TARGET_TREE']
 python = os.environ.get('PROOF_PYTHON') or str(SRC / '.venv' / ('Scripts/python.exe' if os.name == 'nt' else 'bin/python'))
 env = {k: v for k, v in os.environ.items() if k not in ('VIRTUAL_ENV', 'PYTHONPATH', 'PYTHONHOME')}
 env['HOME'] = str(HELPERS / 'home')
