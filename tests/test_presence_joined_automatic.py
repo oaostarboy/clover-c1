@@ -62,13 +62,13 @@ def test_normal_current_interest_to_exact_route_capture_status_and_one_later_ack
         monkeypatch.setattr(h.runner, '_resolve_session_agent_runtime', lambda **kw: (model, dict(
             provider='openai', api_key=token, base_url='https://api.openai.com/v1',
             api_mode='chat_completions', credential_pool=pool)))
-        monkeypatch.setattr('agent.image_routing._lookup_supports_vision', lambda *a, **kw: False)
         def forbidden(*a, **kw):
             pytest.fail('bounded work selected/refreshed another account')
         monkeypatch.setattr(pool, 'select', forbidden)
         monkeypatch.setattr(pool, '_refresh_entry', forbidden)
     cfg['auxiliary']['presence'] = task
     (h.home / 'config.yaml').write_text(yaml.safe_dump(cfg))
+    monkeypatch.setattr('agent.image_routing._lookup_supports_vision', lambda *a, **kw: False)
     config_before = (h.home / 'config.yaml').read_bytes()
     auth_before = (h.home / 'auth.json').read_bytes() if (h.home / 'auth.json').exists() else None
     monkeypatch.setattr(aux, 'resolve_provider_client', REAL_RESOLVER)
