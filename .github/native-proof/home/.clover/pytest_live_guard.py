@@ -107,25 +107,8 @@ def pytest_runtest_logstart(nodeid, location):
     _note('test_start',nodeid=nodeid)
 @pytest.hookimpl(hookwrapper=True)
 def pytest_runtest_call(item):
-    # Code-name observer also sees lazy imports during the test body.
-    watched = {
-        'agent/presence_runtime.py': {'current','snapshot','_publish','publish_current','publish'},
-        'agent/presence_authority.py': {'validate_active','runtime','scoped'},
-        'agent/bounded_completion.py': {'remaining_budget'},
-        'cron/presence.py': {'claim','attempt','acknowledge','unknown'},
-    }
-    previous=sys.getprofile()
-    def observe(frame,event,arg):
-        filename=frame.f_code.co_filename.replace('\\','/')
-        for suffix,names in watched.items():
-            if filename.endswith(suffix) and frame.f_code.co_name in names and event in {'call','return'}:
-                data={'method':frame.f_code.co_name,'event':event}
-                if event=='return':
-                    data['result']=arg if type(arg) in (bool,int,float,type(None)) else type(arg).__name__
-                _note('seam',**data)
-                break
-    sys.setprofile(observe)
-    try:
-        yield
-    finally:
-        sys.setprofile(previous)
+    # Sampling only. Global Python profiling materially dilates short leases;
+    # acceptance must not carry its per-Python-call overhead.
+    faulthandler.dump_traceback_later(5,repeat=True,file=_STACK)
+    yield
+    faulthandler.cancel_dump_traceback_later()
