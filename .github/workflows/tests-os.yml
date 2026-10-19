@@ -1,4 +1,4 @@
-name: Joined deadline exact-source targeted reproduction
+name: Joined deadline controlled stage observations
 on:
   workflow_dispatch:
 permissions:

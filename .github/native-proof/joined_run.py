@@ -45,7 +45,7 @@ def invoke(file, label, extra):
     directory = DEST / label
     directory.mkdir()
     before = set(DEST.iterdir())
-    cmd = [bash, 'scripts/run_tests.sh', file, '-j', '1', '--file-timeout', '240', '--file-retries', '0', '--', '-q', '-p', 'no:randomly', '--tb=short', '-ra', '-p', 'settlement_partition']
+    cmd = [bash, 'scripts/run_tests.sh', file, '-j', '1', '--file-timeout', '240', '--file-retries', '0', '--', '-q', '-p', 'no:randomly', '--tb=short', '-ra', '-p', 'settlement_partition', '-p', 'deadline_stage_trace']
     if mode == 'preflight':
         cmd += ['-p', 'settlement_diagnostic']
     cmd += extra
