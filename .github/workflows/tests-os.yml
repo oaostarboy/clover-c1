@@ -1,4 +1,4 @@
-name: Presence candidate native suite (test branch only)
+name: Windows settlement bounded diagnostic
 on:
   workflow_dispatch:
 permissions:
@@ -13,8 +13,6 @@ jobs:
       matrix:
         include:
           - os: windows-latest
-            scope: joined-final
-          - os: macos-latest
             scope: joined-final
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
