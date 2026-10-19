@@ -7358,6 +7358,10 @@ async def presence_completion(*, messages: list, max_output_tokens: int, timeout
     import asyncio
     from agent.bounded_completion import complete, CompletionHeld, call_deadline, remaining_budget
     deadline = call_deadline(timeout)
+    from agent.presence_authority import active_deadline
+    callback_deadline = active_deadline()
+    if callback_deadline is not None:
+        deadline = min(deadline, callback_deadline)
     async with asyncio.timeout_at(deadline):
         await asyncio.sleep(0)
         from copy import deepcopy

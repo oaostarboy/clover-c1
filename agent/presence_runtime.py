@@ -5,7 +5,7 @@ Private Telegram and authenticated desktop are wired; sharing requires an explic
 """
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
@@ -123,6 +123,11 @@ class PresenceTurn:
         result = copy(self)
         result.turn = None
         result._publication_used = False
+        if result.selected_owner is not None:
+            # A fresh explicit authenticated opportunity gets a new short
+            # lease, but retains the exact original weak connection snapshot.
+            # No main-context inference, pool selection or identity link.
+            result.selected_owner = replace(result.selected_owner, expires=None).bounded()
         result.event_id = uuid4().hex
         result.source_id = None
         result.key = self.store.linked_key(self.original_key)
@@ -216,13 +221,15 @@ class PresenceTurn:
         try:
             # One task-local lease, including acquisition and publication.
             # Reset in scoped's finally, also on caller cancellation/failure.
-            async with asyncio.timeout(5):
+            deadline = asyncio.get_running_loop().time() + 5
+            async with asyncio.timeout_at(deadline):
                 await asyncio.sleep(0)
                 snapshot = self.snapshot()
                 if snapshot is None:
                     return
                 with scoped(self.selected_owner,
-                        lambda: self.current() and self.state.is_current(snapshot.thought)):
+                        lambda: self.current() and self.state.is_current(snapshot.thought),
+                        deadline=deadline):
                     await self._publish(adapter, source, surface=surface, kind=kind)
         except (ValueError, TimeoutError):
             return

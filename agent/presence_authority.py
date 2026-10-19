@@ -106,11 +106,21 @@ def capture(agent):
 def validate_active():
     active = _ACTIVE.get()
     if active is not None:
-        owner, current = active
+        owner, current, deadline = active
+        from agent.bounded_completion import remaining_budget
+        if deadline is not None:
+            remaining_budget(deadline)
         if not current():
             _held('selected_authority_revoked')
         if owner is not None:
             owner.runtime()
+        if deadline is not None:
+            remaining_budget(deadline)
+
+
+def active_deadline():
+    active = _ACTIVE.get()
+    return active[2] if active is not None else None
 
 
 def callback_context():
@@ -123,13 +133,13 @@ def callback_context():
 
 
 @contextmanager
-def scoped(owner, current):
+def scoped(owner, current, *, deadline=None):
     from agent.auxiliary_client import scoped_runtime_main
     # An empty explicit dict prevents ambient/compatibility state from being
     # consulted. Configured task credentials and legitimate keyless routes
     # remain available to the normal bounded resolver without a main owner.
     runtime = owner.runtime() if owner is not None else {}
-    token = _ACTIVE.set((owner, current))
+    token = _ACTIVE.set((owner, current, deadline))
     try:
         with scoped_runtime_main(runtime):
             validate_active()

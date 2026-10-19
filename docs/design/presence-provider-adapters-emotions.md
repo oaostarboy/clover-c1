@@ -18,8 +18,8 @@ A configured Codex app-server is never silently replaced with HTTP.
 Credential resolution remains with the existing provider/auth owners. The new
 `allow_fallback=False` resolver option disables auto detection and custom-provider
 fallback, and prevents exhausted Codex/Anthropic/OpenRouter pools from borrowing legacy
-credentials. Explicit keys precede pool selection; API-key owners do not iterate
-secondary pool accounts in this mode. Regional endpoint discovery (Z.AI/Kimi)
+credentials. Explicit keys precede already-selected owner handles; the bounded
+lane does not select or iterate secondary pool accounts. Regional endpoint discovery (Z.AI/Kimi)
 holds without an explicit owned endpoint; Copilot exchange holds without an
 already-owned API token and endpoint. These are specific missing auth-owner
 capabilities, not a requirement to use Codex or buy another key. Concrete model routing skips auxiliary
