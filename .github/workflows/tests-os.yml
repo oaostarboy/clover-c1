@@ -1,26 +1,65 @@
-name: Windows diagnostic stdlib controls (branch only)
+name: Windows settlement bounded diagnostic
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  control:
-    runs-on: windows-latest
-    timeout-minutes: 10
+  native:
+    name: ${{ matrix.os }} / ${{ matrix.scope }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            scope: "1"
+          - os: windows-latest
+            scope: "2"
+          - os: windows-latest
+            scope: "4"
+          - os: windows-latest
+            scope: "5"
+          - os: windows-latest
+            scope: "6"
+          - os: windows-latest
+            scope: "8"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 44ed73336bea1120eba1ae09a3f9cc8051e4208e
+          path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
           version: "0.9.28"
-      - shell: bash
+          enable-cache: true
+          cache-dependency-glob: source/uv.lock
+      - name: Install locked test-only environment (no retry)
+        working-directory: source
+        shell: bash
         run: |
-          uv python install 3.11.14
-          uv run --no-project --python 3.11.14 .github/native-proof/diagnostic_control.py
+          uv python install 3.11
+          uv sync --locked --python 3.11 --extra all --extra dev --extra anthropic --extra mistral --extra fal --extra modal --extra daytona --extra hindsight --extra parallel-web --extra messaging
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
+        with:
+          node-version: 26
+      - name: Install locked desktop renderer test dependencies (no retry)
+        working-directory: source
+        shell: bash
+        run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
+      - name: Exact-source canonical suite (no retries)
+        shell: bash
+        env:
+          FILE_INDEX: ${{ matrix.scope }}
+        run: python helpers/.github/native-proof/settlement_run.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: diagnostic-control-${{ github.run_id }}
+          name: presence-${{ matrix.os }}-${{ strategy.job-index }}-${{ github.run_id }}
           path: evidence
           if-no-files-found: error

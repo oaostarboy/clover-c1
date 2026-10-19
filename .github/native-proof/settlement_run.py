@@ -78,11 +78,21 @@ receipt['all_ids']=all_ids
 save()
 # Original full owner file is kept together to reproduce predecessor effects.
 size=len(all_ids) if file==FILES[0] else 8
+plan=json.loads((Path(__file__).parent/'settlement-remaining.json').read_text())
+assert plan['product_sha']==sha and plan['product_tree']==tree
+entry=plan['files'][file]
+assert entry['all_ids']==all_ids, 'collection differs from preserved first native run'
+ranges=entry['ranges']
+scope_ids=[node for start,stop in ranges for node in all_ids[start:stop]]
+assert scope_ids and len(scope_ids)==len(set(scope_ids))
+assert all(0 <= start < stop <= len(all_ids) for start,stop in ranges)
+receipt['scope_ids']=scope_ids
+receipt['prior_run']=plan['prior_run']
+receipt['scope']='explicit remaining partitions after diagnostic correction, not whole-file by itself'
 executed=[]
 failed=[]
 issues=[]
-for start in range(0,len(all_ids),size):
- stop=min(start+size,len(all_ids))
+for start,stop in ranges:
  row, records, directory=run('batch-'+str(start),['--case-start',str(start),'--case-stop',str(stop)])
  expected=all_ids[start:stop]
  if len(row['collection'])!=1 or row['collection'][0]['all_ids']!=all_ids or row['collection'][0]['selected_ids']!=expected:
@@ -103,7 +113,7 @@ for start in range(0,len(all_ids),size):
  if row['exit_code']!=0 or len(records)!=1 or records[0].get('exitstatus')!=0 or observed!=sorted(expected) or xml_counts['error'] or xml_counts['failure']:
   issues.append({'batch':start,'issue':'nonzero/incomplete/error execution; see raw canonical/XML/JSON'})
  save()
-receipt.update(ended=time.time(),status_after=git('status','--porcelain','--untracked-files=no'),executed_ids=executed,failed_phases=failed,issues=issues,missing_ids=sorted(set(all_ids)-set(executed)),duplicate_ids=[k for k,n in collections.Counter(executed).items() if n>1])
+receipt.update(ended=time.time(),status_after=git('status','--porcelain','--untracked-files=no'),executed_ids=executed,failed_phases=failed,issues=issues,missing_ids=sorted(set(scope_ids)-set(executed)),duplicate_ids=[k for k,n in collections.Counter(executed).items() if n>1])
 receipt['accepted']=not(issues or failed or receipt['missing_ids'] or receipt['duplicate_ids'] or receipt['status_before'] or receipt['status_after'])
 receipt['exit_code']=0 if receipt['accepted'] else 1
 save()
