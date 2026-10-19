@@ -291,6 +291,39 @@ class ThoughtStore:
             values = json.loads(row[0])
             return tuple((ContextKey(Scope(**v['key']['scope']), v['key']['conversation_root']), v['surface']) for v in values)
 
+    def runtime_state(self, key: ContextKey) -> tuple[ContextKey, int, tuple[int, bool]]:
+        """Read live link/generation/Stop fences in one validated observation.
+
+        Publication revalidates frequently. Opening and fully validating three
+        independent connections per fence can consume its bounded callback
+        lease on native filesystems. Keep all store checks, without caching any
+        result across a source/provider/transport boundary.
+        """
+        with self._transaction() as conn:
+            if conn is None:
+                return key, 0, (0, False)
+            version = conn.execute("PRAGMA user_version").fetchone()[0]
+            if version < 2:
+                return key, 0, (0, False)
+            if version >= 4:
+                row = conn.execute(
+                    "SELECT e.epoch,e.stopped,e.generation,m.link_id FROM presence_epoch e "
+                    "LEFT JOIN presence_link_members m ON m.context=? WHERE e.id=1",
+                    (_context(key),)).fetchone()
+            elif version == 3:
+                row = conn.execute(
+                    "SELECT epoch,stopped,generation,NULL FROM presence_epoch WHERE id=1").fetchone()
+            else:
+                row = conn.execute(
+                    "SELECT epoch,stopped,0,NULL FROM presence_epoch WHERE id=1").fetchone()
+            if row is None:
+                raise PresenceStoreError("invalid initiative epoch")
+            if row[3] is not None:
+                link_id = row[3]
+                key = ContextKey(Scope(key.scope.profile, key.scope.project,
+                    'private:presence:'+link_id, link_id), 'presence:'+link_id)
+            return key, row[2], (row[0], bool(row[1]))
+
     def linked_key(self, key):
         with self._transaction() as conn:
             if conn is None or conn.execute("PRAGMA user_version").fetchone()[0] < 4:

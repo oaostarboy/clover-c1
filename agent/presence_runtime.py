@@ -147,10 +147,9 @@ class PresenceTurn:
         try:
             return (self.gateway_current() is True and effective_policy()[0]
                     and ws.scope_for_agent(self.agent) == self.original_key.scope
-                    and self.store.linked_key(self.original_key) == self.key
-                    and self.input_generation == self.store.generation()
+                    and self.store.runtime_state(self.original_key) == (
+                        self.key, self.input_generation, (self.epoch, False))
                     and self.input_generation >= 0
-                    and self.store.initiative_status() == (self.epoch, False)
                     and self.stop_generation == getattr(self.agent, '_human_ingress_stop_generation', 0))
         except Exception:
             return False
