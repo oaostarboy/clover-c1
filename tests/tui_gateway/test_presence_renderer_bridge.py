@@ -35,9 +35,7 @@ def test_actual_desktop_native_frame_mounts_and_roundtrips_owner_ack(monkeypatch
         'src/app/chat/presence-native-bridge.test.tsx', '--maxWorkers', '1', '--no-file-parallelism']
     # A log file cannot deadlock on a full PIPE during fresh bundler startup.
     log = (tmp_path/'renderer.log').open('w+')
-    child = subprocess.Popen(command, cwd=root/'apps/desktop',
-        env=dict(os.environ, CLOVER_PRESENCE_NATIVE_FRAME=str(fixture),
-                 CLOVER_PRESENCE_NATIVE_SESSION=sid), stdout=log, stderr=subprocess.STDOUT, text=True)
+    child = None
 
     def write_json(path, value):
         staged = Path(str(path)+'.tmp')
@@ -53,6 +51,7 @@ def test_actual_desktop_native_frame_mounts_and_roundtrips_owner_ack(monkeypatch
         if frame.get('params',{}).get('type') != 'presence.initiative':
             return native_write(frame)
         assert ready.exists(), 'owner issued live publication before mounted renderer readiness'
+        assert child is not None, 'owner issued live publication before renderer startup'
         transport.frames.append(frame)
         write_json(fixture, frame)
         deadline = time.monotonic()+15
@@ -74,7 +73,17 @@ def test_actual_desktop_native_frame_mounts_and_roundtrips_owner_ack(monkeypatch
 
     monkeypatch.setattr(transport, 'write', write)
     try:
+        # Ordinary turn preparation is not mounted-renderer delivery. Keep it
+        # inside the same45s setup bound, but before Vitest starts its15s test
+        # clock. The real owner still issues its unchanged5s ACK ticket only
+        # after mounted readiness and presence.after_reply below.
         startup_deadline = time.monotonic()+45
+        send('Carry thought: deployment packaging\nEvidence: manifest checksum before publishing.')
+        complete = send('Help verify deployment packaging')
+        assert time.monotonic() < startup_deadline, 'ordinary turn preparation exceeded setup bound'
+        child = subprocess.Popen(command, cwd=root/'apps/desktop',
+            env=dict(os.environ, CLOVER_PRESENCE_NATIVE_FRAME=str(fixture),
+                     CLOVER_PRESENCE_NATIVE_SESSION=sid), stdout=log, stderr=subprocess.STDOUT, text=True)
         while not ready.exists():
             assert child.poll() is None, output()
             assert time.monotonic() < startup_deadline, 'renderer never reported mounted readiness'
@@ -82,8 +91,6 @@ def test_actual_desktop_native_frame_mounts_and_roundtrips_owner_ack(monkeypatch
         readiness = json.loads(ready.read_text())
         assert readiness['session_id'] == sid and readiness['activeElement'] == 'BODY'
         record_property('mounted_renderer_readiness', json.dumps(readiness))
-        send('Carry thought: deployment packaging\nEvidence: manifest checksum before publishing.')
-        complete = send('Help verify deployment packaging')
         reply = server.dispatch({'id':'after','method':'presence.after_reply', 'params':{
             'session_id':sid,'token':complete['presence_after_reply_token']}}, transport=transport)
         assert reply['result']['accepted']
@@ -109,9 +116,10 @@ def test_actual_desktop_native_frame_mounts_and_roundtrips_owner_ack(monkeypatch
         assert len(requests) == 1
         assert [r['role'] for r in h.db.get_messages('desktop-stored') if r['role'] != 'session_meta'] == ['user','assistant','user','assistant']
     finally:
-        if child.poll() is None:
-            child.kill()
-        child.wait(timeout=5)
+        if child is not None:
+            if child.poll() is None:
+                child.kill()
+            child.wait(timeout=5)
         log.close()
         agent.close()
         h.close()
