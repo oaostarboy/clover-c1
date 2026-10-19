@@ -10,9 +10,9 @@ from tests.gateway.test_trusted_human_origin_ingress import network_guard  # noq
 
 
 def inbound_command(h, text, mid=101):
+    original=h.adapter.send.side_effect
     async def run():
         completed=asyncio.Event()
-        original=h.adapter.send.side_effect
         async def sent(*a,**kw):
             completed.set()
             if original is not None:
@@ -25,8 +25,15 @@ def inbound_command(h, text, mid=101):
         await h.adapter._handle_text_message(h.update(text,message_id=mid),object())
         await asyncio.wait_for(completed.wait(),5)
         assert h.adapter.send.await_count==before+1
+        deadline=asyncio.get_running_loop().time()+5
+        while h.adapter._active_sessions:
+            assert asyncio.get_running_loop().time() < deadline
+            await asyncio.sleep(0.01)
         return h.adapter.send.await_args
-    args=asyncio.run(run())
+    try:
+        args=asyncio.run(run())
+    finally:
+        h.adapter.send.side_effect=original
     return args.args[1] if len(args.args)>1 else args.kwargs['content']
 
 

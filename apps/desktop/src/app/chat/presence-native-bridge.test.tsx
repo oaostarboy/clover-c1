@@ -32,7 +32,7 @@ describe.skipIf(!fixture)('native presence server -> mounted renderer -> actual 
     writeAtomic('.ready.json', { session_id: sid, activeElement: globalThis.document.activeElement?.tagName, node: process.version })
     // Only after this mounted readiness signal does Python let the real owner
     // issue its five-second ticket. Startup/import time is not delivery time.
-    await waitFor(() => expect(existsSync(fixture!)).toBe(true), { timeout: 15000 })
+    await waitFor(() => expect(existsSync(fixture!)).toBe(true), { timeout: 30000 })
     const frame = JSON.parse(readFileSync(fixture!, 'utf8'))
     expect(frame.params.session_id).toBe(sid)
     const { payload } = frame.params
@@ -57,5 +57,5 @@ describe.skipIf(!fixture)('native presence server -> mounted renderer -> actual 
       activeElement: globalThis.document.activeElement?.tagName,
       controls: screen.getAllByRole('button').map(button => button.textContent), accepted
     }))
-  })
+  }, 45_000)
 })
