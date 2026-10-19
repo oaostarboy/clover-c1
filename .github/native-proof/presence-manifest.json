@@ -272,7 +272,6 @@
   "original_files": 113,
   "new_union_files": 12,
   "preflight_files": [
-    "tests/clover_cli/test_readonly_windows_native.py",
     "tests/test_presence_eval_windows_pipe.py"
   ]
 }

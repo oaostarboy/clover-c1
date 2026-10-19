@@ -5,6 +5,7 @@ from pathlib import Path
 DEST=Path(__file__).resolve().parents[5]/'evidence'
 ORIGINAL=subprocess.run
 INJECTION=r'''
+import sys
 _original_audit = guard.audit
 def _observed_audit(event, args):
     if event == 'open' and args and isinstance(args[0], int):
@@ -24,6 +25,7 @@ def _observed_audit(event, args):
         sys.stderr.write('JOIN_FD_FACT '+json.dumps({'fd': args[0], 'mode': args[1],
             'flags': args[2] if len(args)>2 else None, 'stat': _facts, 'frames': _frames})+'\n')
     return _original_audit(event, args)
+_observed_audit.__cantrace__ = True
 guard.audit = _observed_audit
 
 def _pipe_query_trace(frame, event, arg):
