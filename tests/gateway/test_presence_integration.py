@@ -17,8 +17,18 @@ from cron.presence import ThoughtStore
 def setup_host(monkeypatch, tmp_path):
     h = OfferHarness(monkeypatch, tmp_path, proactive=ACTIVE)
     (h.home / 'config.yaml').write_text(yaml.safe_dump({
-        'proactive': ACTIVE, 'presence': {'enabled': True},
-        'auxiliary': {'presence': {'provider': 'openai', 'model': 'synthetic-model'}}}))
+        'agent': {'disabled_toolsets': ['terminal', 'browser']},
+        'display': {'tool_progress': 'off', 'thinking_progress': False},
+        'compression': {'enabled': False},
+        'proactive': ACTIVE,
+        'presence': {'enabled': True},
+        'auxiliary': {
+            'background_review': {'enabled': False},
+            'free_only': True,
+            'presence': {'provider': 'openai', 'model': 'synthetic-model'},
+        },
+    }))
+    monkeypatch.setattr('agent.image_routing._lookup_supports_vision', lambda *a, **kw: False)
     requests = []
     async def transport(request):
         requests.append(json.loads(request.content))
