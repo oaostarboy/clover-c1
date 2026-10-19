@@ -27,12 +27,14 @@ def sample():
         time.sleep(4)
         frames = sys._current_frames()
         note('threads', stacks={str(tid): traceback.format_stack(frame) for tid, frame in frames.items() if tid != threading.get_ident()})
+        # Test the watchdog-race hypothesis without removing native stacks.
+        if STACK is not None:
+            faulthandler.dump_traceback(file=STACK, all_threads=True)
 
 def pytest_configure(config):
     global STACK
     STACK = (DEST / ('faulthandler-'+str(os.getpid())+'.log')).open('w', encoding='utf-8')
     faulthandler.enable(STACK, all_threads=True)
-    faulthandler.dump_traceback_later(8, repeat=True, file=STACK)
     threading.Thread(target=sample, daemon=True, name='settlement-diagnostic').start()
     note('configure', python=sys.executable, args=list(map(str, config.args)))
 
@@ -77,5 +79,5 @@ def pytest_runtest_logreport(report):
 def pytest_unconfigure(config):
     faulthandler.cancel_dump_traceback_later()
     note('end', stages=TIMES.copy())
-    if STACK is not None:
-        STACK.close()
+    # Keep descriptor alive for the daemon sampler until process exit.
+    # Closing here would race an in-progress sample.
