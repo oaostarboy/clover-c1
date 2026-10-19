@@ -11,7 +11,8 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [windows-latest, macos-latest]
+        # macOS unchanged-source lanes remain active in run 39186545631.
+        os: [windows-latest]
         scope: [joined, "1/4", "2/4", "3/4", "4/4"]
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd

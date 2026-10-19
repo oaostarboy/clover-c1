@@ -15,7 +15,10 @@ env.pop('VIRTUAL_ENV',None);env.pop('PYTHONPATH',None)
 env['HOME']=str(Path(__file__).parent/'home')
 env['CLOVER_PYTHON']=str(python)
 scope=env['SCOPE']
-cmd=['bash','scripts/run_tests.sh']
+# Never resolve bare bash.exe through PATH: native Windows exposes a WSL shim.
+bash=str(Path(os.environ.get('ProgramFiles','C:/Program Files'))/'Git/bin/bash.exe') if os.name=='nt' else 'bash'
+if os.name=='nt': assert Path(bash).is_file(), 'Git for Windows Bash is required'
+cmd=[bash,'scripts/run_tests.sh']
 if scope=='joined':cmd+=manifest['joined_file_selection']
 else:cmd+=['--slice',scope]
 cmd+=['-j','6','--file-timeout','240','--file-retries','0','--','-q','-p','no:randomly','--tb=short','-ra']
