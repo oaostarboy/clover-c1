@@ -25,6 +25,7 @@ files=['tests/test_presence_eval_quota_unsupported.py'] if os.name=='nt' else [
     'tests/test_presence_eval_quota_unsupported.py','tests/test_presence_eval_guard_descriptors.py',
     'tests/test_presence_readonly_cold.py','tests/test_presence_isolated_evaluator.py',
     'tests/clover_cli/test_runtime_provider_readonly.py','tests/clover_cli/test_config_snapshot.py']
+files=(['tests/test_presence_eval_quota_boundary.py'] if os.environ.get('INVENTORY_ONLY')=='true' else files)
 env={k:v for k,v in os.environ.items() if k in ('PATH','SYSTEMROOT','SystemRoot','USERPROFILE','HOMEDRIVE','HOMEPATH','LOCALAPPDATA','APPDATA','TEMP','TMP','PSModulePath','PSMODULEPATH')}
 env.update(HOME=str(E/'home'),CLOVER_PYTHON=str(PY),TZ='UTC',LANG='C.UTF-8',PYTHONDONTWRITEBYTECODE='1')
 rows=[]; failed=False
@@ -44,7 +45,7 @@ for index,file in enumerate(files):
     if run.returncode: print((out/'canonical.log').read_text()[-6000:])
 
 aliases=[]
-if os.name!='nt':
+if os.name!='nt' and os.environ.get('INVENTORY_ONLY')!='true':
     assert git('rev-parse','HEAD',root=W/'baseline')=='a5d8d024212400ed7add239287b0569806c7ce4a'
     for source_name,cases in [('descriptor_alias_controls.py',['symlink_fd','symlink_open','hardlink_fd','escape_dotdot','pipe_write_disguised']),('quota_controls.py',['ordinary','hardlink'])]:
         data=(H/source_name).read_bytes()
