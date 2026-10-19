@@ -1,14 +1,22 @@
-name: Joined presence exact-source offline acceptance
+name: Joined deadline exact-source targeted reproduction
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
-  preflight:
-    name: windows-latest / two known deadline cases
-    runs-on: windows-latest
-    timeout-minutes: 90
-    steps: &proof-steps
+  reproduce:
+    name: ${{ matrix.os }} / exact unchanged targeted files
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+    env:
+      MODE: acceptance
+      SLICE_INDEX: "0"
+      SLICES: "1"
+    steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           path: helpers
@@ -45,33 +53,3 @@ jobs:
           name: presence-${{ runner.os }}-${{ env.MODE }}-${{ env.SLICE_INDEX }}-${{ github.run_id }}
           path: evidence
           if-no-files-found: error
-    env:
-      MODE: preflight
-      SLICE_INDEX: "0"
-      SLICES: "1"
-  acceptance:
-    needs: preflight
-    name: ${{ matrix.os }} / exact source slice ${{ matrix.slice }}
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 90
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - {os: ubuntu-latest, slice: "0", slices: "2"}
-          - {os: ubuntu-latest, slice: "1", slices: "2"}
-          - {os: macos-latest, slice: "0", slices: "2"}
-          - {os: macos-latest, slice: "1", slices: "2"}
-          - {os: windows-latest, slice: "0", slices: "8"}
-          - {os: windows-latest, slice: "1", slices: "8"}
-          - {os: windows-latest, slice: "2", slices: "8"}
-          - {os: windows-latest, slice: "3", slices: "8"}
-          - {os: windows-latest, slice: "4", slices: "8"}
-          - {os: windows-latest, slice: "5", slices: "8"}
-          - {os: windows-latest, slice: "6", slices: "8"}
-          - {os: windows-latest, slice: "7", slices: "8"}
-    env:
-      MODE: acceptance
-      SLICE_INDEX: ${{ matrix.slice }}
-      SLICES: ${{ matrix.slices }}
-    steps: *proof-steps
