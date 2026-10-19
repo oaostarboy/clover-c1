@@ -148,6 +148,11 @@ class ThoughtStore:
                 # Serialize migration, duplicate detection and mutation across
                 # independent connections/processes, not a Python-only lock.
                 conn.execute("BEGIN IMMEDIATE")
+            else:
+                # Validation and the requested fence must see the same SQLite
+                # snapshot. Autocommit SELECTs can otherwise validate one commit
+                # then return unvalidated rows from a concurrent WAL writer.
+                conn.execute("BEGIN")
             # Check BEFORE any journal/schema mutation. Unsupported stores remain
             # byte-unchanged, including when an admission is attempted.
             version = conn.execute("PRAGMA user_version").fetchone()[0]
