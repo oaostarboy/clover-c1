@@ -1,0 +1,597 @@
+{
+  "notice": "Assistant-authored normative proposals, not human-validated gold. No model accuracy or calibrated confidence is established.",
+  "provenance": {
+    "author": "Clover Cognition evaluator worker (AI assistant)",
+    "basis": "Approved behavior contract and independent QA findings",
+    "label_status": "author_suggested_requires_human_review",
+    "split": "heldout_candidate_not_used_for_prompt_tuning",
+    "blind_or_human_validated": false,
+    "language_review": {
+      "en": "unverified_by_human",
+      "fr": "unverified_by_human",
+      "other_languages": "unverified_no_generalization"
+    }
+  },
+  "cases": [
+    {
+      "id": "thought_user_interest_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "I still wonder how balcony gardens survive winter.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "capture_user"
+        ],
+        "capture_label": "positive",
+        "attribution": "user_unresolved",
+        "spans": [
+          {
+            "text": "I still wonder how balcony gardens survive winter.",
+            "classification": "user_unresolved"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_user_vs_colleague_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "My colleague asks \"Why do oceans glow?\". I still wonder why desert flowers bloom at night.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "capture_user"
+        ],
+        "capture_label": "positive",
+        "attribution": "user_unresolved",
+        "spans": [
+          {
+            "text": "I still wonder why desert flowers bloom at night.",
+            "classification": "user_unresolved"
+          },
+          {
+            "text": "Why do oceans glow?",
+            "classification": "third_party"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_quoted_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "Translate the sentence \"I still wonder why desert flowers bloom at night.\".",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "quoted",
+        "spans": [
+          {
+            "text": "I still wonder why desert flowers bloom at night.",
+            "classification": "quoted"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_colleague_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "My colleague still wonders how balcony gardens survive winter; this is not my question.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "third_party",
+        "spans": [
+          {
+            "text": "how balcony gardens survive winter",
+            "classification": "third_party"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_task_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "Check how balcony gardens survive winter and send the report tomorrow.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "task",
+        "spans": [
+          {
+            "text": "how balcony gardens survive winter",
+            "classification": "task"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_resolved_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "I wondered how balcony gardens survive winter, but the guide answered my question.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "resolved",
+        "spans": [
+          {
+            "text": "how balcony gardens survive winter",
+            "classification": "resolved"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_code_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "Explain this code: question = \"how balcony gardens survive winter\"",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "code",
+        "spans": [
+          {
+            "text": "how balcony gardens survive winter",
+            "classification": "code"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_negation_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "I am not wondering how balcony gardens survive winter; that is not an open interest of mine.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "negated",
+        "spans": [
+          {
+            "text": "how balcony gardens survive winter",
+            "classification": "negated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_ambiguous_en",
+      "kind": "assessment",
+      "language": "en",
+      "text": "Maybe winter gardens?",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain",
+          "clarify"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "ambiguous",
+        "attribution": "ambiguous",
+        "spans": [
+          {
+            "text": "Maybe winter gardens?",
+            "classification": "ambiguous"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_user_interest_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Je me demande encore comment les jardins de balcon survivent en hiver.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "capture_user"
+        ],
+        "capture_label": "positive",
+        "attribution": "user_unresolved",
+        "spans": [
+          {
+            "text": "Je me demande encore comment les jardins de balcon survivent en hiver.",
+            "classification": "user_unresolved"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_user_vs_colleague_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Mon collègue demande « Pourquoi les océans brillent-ils ? ». Je me demande encore pourquoi les fleurs du désert éclosent la nuit.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "capture_user"
+        ],
+        "capture_label": "positive",
+        "attribution": "user_unresolved",
+        "spans": [
+          {
+            "text": "Je me demande encore pourquoi les fleurs du désert éclosent la nuit.",
+            "classification": "user_unresolved"
+          },
+          {
+            "text": "Pourquoi les océans brillent-ils ?",
+            "classification": "third_party"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_quoted_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Traduis la phrase « Je me demande encore pourquoi les fleurs du désert éclosent la nuit. ».",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "quoted",
+        "spans": [
+          {
+            "text": "Je me demande encore pourquoi les fleurs du désert éclosent la nuit.",
+            "classification": "quoted"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_colleague_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Mon collègue se demande comment les jardins de balcon survivent en hiver ; ce n'est pas ma question.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "third_party",
+        "spans": [
+          {
+            "text": "comment les jardins de balcon survivent en hiver",
+            "classification": "third_party"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_task_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Vérifie comment les jardins de balcon survivent en hiver et envoie le rapport demain.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "task",
+        "spans": [
+          {
+            "text": "comment les jardins de balcon survivent en hiver",
+            "classification": "task"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_resolved_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Je me demandais comment les jardins de balcon survivent en hiver, mais le guide a répondu à ma question.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "resolved",
+        "spans": [
+          {
+            "text": "comment les jardins de balcon survivent en hiver",
+            "classification": "resolved"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_code_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Explique ce code : question = \"comment les jardins de balcon survivent en hiver\"",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "code",
+        "spans": [
+          {
+            "text": "comment les jardins de balcon survivent en hiver",
+            "classification": "code"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_negation_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Je ne me demande pas comment les jardins de balcon survivent en hiver ; ce n'est pas un intérêt à garder.",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "negative",
+        "attribution": "negated",
+        "spans": [
+          {
+            "text": "comment les jardins de balcon survivent en hiver",
+            "classification": "negated"
+          }
+        ]
+      }
+    },
+    {
+      "id": "thought_ambiguous_fr",
+      "kind": "assessment",
+      "language": "fr",
+      "text": "Peut-être les jardins en hiver ?",
+      "normative": {
+        "acceptable_postures": [
+          "ordinary",
+          "abstain",
+          "clarify"
+        ],
+        "capture_outcomes": [
+          "abstain"
+        ],
+        "capture_label": "ambiguous",
+        "attribution": "ambiguous",
+        "spans": [
+          {
+            "text": "Peut-être les jardins en hiver ?",
+            "classification": "ambiguous"
+          }
+        ]
+      }
+    },
+    {
+      "id": "connection_novel_en",
+      "kind": "connection",
+      "language": "en",
+      "thought": "I still wonder how balcony gardens survive winter.",
+      "text": "Balcony gardens survive winter: an insulated planter traps heat and reduces frost damage.",
+      "normative": {
+        "context_classification": "novel",
+        "acceptable_actions": [
+          "offer",
+          "hold"
+        ],
+        "human_rating_required": [
+          "relevance",
+          "novelty",
+          "usefulness"
+        ],
+        "rationale": "A novel relevant context may support one useful connection or justified abstention; repetition and unrelated context must hold."
+      }
+    },
+    {
+      "id": "connection_repeated_en",
+      "kind": "connection",
+      "language": "en",
+      "thought": "I still wonder how balcony gardens survive winter.",
+      "text": "I still wonder how balcony gardens survive winter.",
+      "normative": {
+        "context_classification": "repeated",
+        "acceptable_actions": [
+          "hold"
+        ],
+        "human_rating_required": [
+          "relevance",
+          "novelty",
+          "usefulness"
+        ],
+        "rationale": "A novel relevant context may support one useful connection or justified abstention; repetition and unrelated context must hold."
+      }
+    },
+    {
+      "id": "connection_unrelated_en",
+      "kind": "connection",
+      "language": "en",
+      "thought": "I still wonder how balcony gardens survive winter.",
+      "text": "The train timetable changed at the central station.",
+      "normative": {
+        "context_classification": "unrelated",
+        "acceptable_actions": [
+          "hold"
+        ],
+        "human_rating_required": [
+          "relevance",
+          "novelty",
+          "usefulness"
+        ],
+        "rationale": "A novel relevant context may support one useful connection or justified abstention; repetition and unrelated context must hold."
+      }
+    },
+    {
+      "id": "connection_ambiguous_en",
+      "kind": "connection",
+      "language": "en",
+      "thought": "I still wonder how balcony gardens survive winter.",
+      "text": "That reminds me of something.",
+      "normative": {
+        "context_classification": "ambiguous",
+        "acceptable_actions": [
+          "offer",
+          "hold"
+        ],
+        "human_rating_required": [
+          "relevance",
+          "novelty",
+          "usefulness"
+        ],
+        "rationale": "A novel relevant context may support one useful connection or justified abstention; repetition and unrelated context must hold."
+      }
+    },
+    {
+      "id": "connection_novel_fr",
+      "kind": "connection",
+      "language": "fr",
+      "thought": "Je me demande encore comment les jardins de balcon survivent en hiver.",
+      "text": "Les jardins de balcon survivent en hiver : une jardinière isolée garde la chaleur et réduit les dégâts du gel.",
+      "normative": {
+        "context_classification": "novel",
+        "acceptable_actions": [
+          "offer",
+          "hold"
+        ],
+        "human_rating_required": [
+          "relevance",
+          "novelty",
+          "usefulness"
+        ],
+        "rationale": "A novel relevant context may support one useful connection or justified abstention; repetition and unrelated context must hold."
+      }
+    },
+    {
+      "id": "connection_repeated_fr",
+      "kind": "connection",
+      "language": "fr",
+      "thought": "Je me demande encore comment les jardins de balcon survivent en hiver.",
+      "text": "Je me demande encore comment les jardins de balcon survivent en hiver.",
+      "normative": {
+        "context_classification": "repeated",
+        "acceptable_actions": [
+          "hold"
+        ],
+        "human_rating_required": [
+          "relevance",
+          "novelty",
+          "usefulness"
+        ],
+        "rationale": "A novel relevant context may support one useful connection or justified abstention; repetition and unrelated context must hold."
+      }
+    },
+    {
+      "id": "connection_unrelated_fr",
+      "kind": "connection",
+      "language": "fr",
+      "thought": "Je me demande encore comment les jardins de balcon survivent en hiver.",
+      "text": "Les horaires des trains ont changé à la gare centrale.",
+      "normative": {
+        "context_classification": "unrelated",
+        "acceptable_actions": [
+          "hold"
+        ],
+        "human_rating_required": [
+          "relevance",
+          "novelty",
+          "usefulness"
+        ],
+        "rationale": "A novel relevant context may support one useful connection or justified abstention; repetition and unrelated context must hold."
+      }
+    },
+    {
+      "id": "connection_ambiguous_fr",
+      "kind": "connection",
+      "language": "fr",
+      "thought": "Je me demande encore comment les jardins de balcon survivent en hiver.",
+      "text": "Cela me rappelle quelque chose.",
+      "normative": {
+        "context_classification": "ambiguous",
+        "acceptable_actions": [
+          "offer",
+          "hold"
+        ],
+        "human_rating_required": [
+          "relevance",
+          "novelty",
+          "usefulness"
+        ],
+        "rationale": "A novel relevant context may support one useful connection or justified abstention; repetition and unrelated context must hold."
+      }
+    }
+  ]
+}

@@ -160,6 +160,13 @@ def test_evaluator_defaults_to_no_provider_calls(capsys):
 
 def test_evaluator_opt_in_branch_uses_real_configured_scripted_route(monkeypatch, tmp_path, capsys):
     h, requests, _ = scripted_host(monkeypatch, tmp_path, [assessment()])
+    # Evaluation must use an already-current config, never migrate a profile.
+    import yaml
+    from clover_cli.config import DEFAULT_CONFIG
+    path = h.home / 'config.yaml'
+    config = yaml.safe_load(path.read_text(encoding='utf-8'))
+    config['_config_version'] = DEFAULT_CONFIG['_config_version']
+    path.write_text(yaml.safe_dump(config), encoding='utf-8')
     try:
         assert load_evaluator().main(['--execute-provider-calls', '--case', 'sadness_fr']) == 0
         result = json.loads(capsys.readouterr().out)
