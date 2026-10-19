@@ -228,6 +228,8 @@ guard.install()
 from clover_cli.runtime_provider import resolve_runtime_provider
 runtime = resolve_runtime_provider(read_only=True)
 assert runtime['credential_pool'].current() is not None
+# Capture before baseline verification performs its own audited auth read.
+selection_auth_reads = guard.auth_reads
 blocked = 0
 import socket
 for action in (lambda: (home/'not-allowed').write_bytes(b'no'),
@@ -241,7 +243,7 @@ environment_changes = sorted(k for k in set(guard.environment) | set(os.environ)
                              if guard.environment.get(k) != os.environ.get(k))
 print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt(),
                   'file_baseline_unchanged':file_baseline_unchanged,
-                  'environment_change_keys':environment_changes}))
+                  'environment_change_keys':environment_changes, 'selection_auth_reads':selection_auth_reads}))
 '''
     root = Path(__file__).resolve().parents[2]
     env = {k: os.environ[k] for k in ('PATH', 'SYSTEMROOT') if k in os.environ}
@@ -263,8 +265,8 @@ print(json.dumps({'selected':True, 'blocked':blocked, 'guard':guard.receipt(),
     assert len(result['guard']['denied_writes']) == 1
     assert result['guard']['network_events'][0]['admitted'] is False
     assert result['guard']['denied_private_reads'] == []
-    assert result['guard']['auth_reads'] >= 1, 'native credential reads must remain visible to audit hooks'
-    record_property('cold_auth_read_audit_events', result['guard']['auth_reads'])
+    assert result['selection_auth_reads'] >= 1, 'native credential reads must remain visible to audit hooks'
+    record_property('cold_auth_read_audit_events', result['selection_auth_reads'])
     assert inventory(home) == before
 
 
