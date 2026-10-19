@@ -62,7 +62,11 @@ def test_cold_selected_path_has_no_hidden_initialization(monkeypatch, tmp_path):
 
 @pytest.mark.parametrize('catalog_cache', [False, True])
 def test_cold_full_evaluator_keeps_os_guard_through_actual_wire(monkeypatch, tmp_path, catalog_cache):
-    home, _, _ = profile(monkeypatch, tmp_path)
+    home, config, _ = profile(monkeypatch, tmp_path)
+    import yaml
+    config['presence'] = {'enabled': False}
+    config['proactive'] = {'aux': {'max_calls_per_event': 0, 'max_calls_per_day': 0, 'max_output_tokens': 0}}
+    (home/'config.yaml').write_text(yaml.safe_dump(config))
     if catalog_cache:
         (home/'models_dev_cache.json').write_text('SCRIPTED-corrupt-public-catalog-do-not-repair')
     quota = tmp_path / 'quota'

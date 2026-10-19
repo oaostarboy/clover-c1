@@ -23,8 +23,11 @@ not a server token, hidden-reasoning, or cost cap. Consent must cover this run;
 choosing another directory is not permission to reset an existing allowance.
 Keep `presence-eval-quota.json` for the same authorization: reservations are
 fsynced before entry, capped at three total, bound to settings/selected account,
-and never refunded after errors or uncertain completion. Lower configured daily,
-per-event-zero, and output limits remain restrictive. A `STOP` marker in that
+and never refunded after errors or uncertain completion. This explicit grant
+owns an independent <=3-request experiment budget; live background aux limits
+(including zeros) remain byte-unchanged, are not raised, and are not consumed.
+The ordinary `--execute` path still honors those live limits. Administrator-pinned
+lower/zero caps constrain the experiment. A `STOP` marker in that
 directory, changed settings, or managed disabled policy holds execution. Any
 existing live presence database requires an authenticated host instead; this
 standalone path never reads its private thought records or evades live Stop.

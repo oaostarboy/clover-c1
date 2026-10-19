@@ -415,7 +415,6 @@ def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consen
     from agent.bounded_completion import complete, select_route, CompletionHeld
     from agent.presence_assessment import messages
     from agent.presence_initiation import _safe_text
-    from agent.workstreams import load_settings
 
     results = [not_measured(c, 'max_calls') for c in cases]
     attempts = invocations = 0
@@ -442,15 +441,23 @@ def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consen
                 raise CompletionHeld('existing_live_store_requires_authenticated_host')
             if (Path(quota_dir) / 'STOP').exists():
                 raise CompletionHeld('stopped')
-            return config
-        config = read()
+            return config, managed
+        config, managed_policy = read()
         task = config.get('auxiliary', {}).get('presence', {})
         if any(task.get(key) not in (None, '') for key in ('api_key','key_env','api_key_env','key_cmd')):
             return hold('isolated_task_credential_override_forbidden')
-        settings = load_settings(config)
-        limit = min(3, settings.aux_max_calls_per_day)
-        tokens = min(512, settings.aux_max_output_tokens)
-        if min(limit, tokens, settings.aux_max_calls_per_event) <= 0:
+        # This explicit grant owns a separate experiment quota. Live background
+        # aux zeros are NOT enabled/raised/consumed. IT-pinned caps still win.
+        managed_aux = managed_policy.get('proactive', {}).get('aux', {})
+        if not isinstance(managed_aux, dict):
+            return hold('invalid_managed_budget')
+        def cap(name, maximum):
+            value = managed_aux.get(name, maximum)
+            if type(value) is not int or value < 0:
+                raise CompletionHeld('invalid_managed_budget')
+            return min(maximum, value)
+        limit, tokens = cap('max_calls_per_day', 3), cap('max_output_tokens', 512)
+        if min(limit, tokens, cap('max_calls_per_event', 1)) <= 0:
             return hold('zero_budget')
         runtime = resolve_runtime_provider(read_only=True)
         route = select_route(config)
@@ -477,7 +484,7 @@ def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consen
         started = time.monotonic()
         reserved = invoked = False
         try:
-            if read() != config:
+            if read() != (config, managed_policy):
                 raise CompletionHeld('configured_route_changed')
             if not _reserve_isolated_call(quota_dir, binding, limit):
                 return hold('budget_denied')
@@ -492,7 +499,7 @@ def execute_isolated_cases(cases, *, max_calls, quota_dir, request_budget_consen
                 invocations += 1
                 completion = asyncio.run(invoke())
                 completion.authority.validate()
-            if read() != config:
+            if read() != (config, managed_policy):
                 raise CompletionHeld('configured_route_changed')
             result = score_case(case, completion.text)
             result.update(raw_output=completion.text, output_usage={

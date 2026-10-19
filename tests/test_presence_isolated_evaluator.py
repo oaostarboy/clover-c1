@@ -13,8 +13,14 @@ from tests.test_presence_quality_evaluator import evaluator
 pytestmark = pytest.mark.skipif(os.name != 'posix', reason='Secure POSIX evaluation')
 
 
-def test_isolated_evaluation_uses_real_selected_owner_and_bounded_wire(monkeypatch, tmp_path):
+@pytest.mark.parametrize('live_budget_disabled', [False, True])
+def test_isolated_evaluation_uses_real_selected_owner_and_bounded_wire(monkeypatch, tmp_path, live_budget_disabled):
     home, config, credential = profile(monkeypatch, tmp_path)
+    if live_budget_disabled:
+        import yaml
+        config['presence'] = {'enabled': False}
+        config['proactive'] = {'aux': {'max_calls_per_event': 0, 'max_calls_per_day': 0, 'max_output_tokens': 0}}
+        (home/'config.yaml').write_text(yaml.safe_dump(config))
     quota = tmp_path / 'quota'
     quota.mkdir(mode=0o700)
     before = inventory(home), dict(os.environ)
@@ -57,7 +63,7 @@ def test_isolated_cli_requires_explicit_request_budget_consent(tmp_path, capsys)
     assert 'request-budget' in capsys.readouterr().err
 
 
-@pytest.mark.parametrize('control', ['no_consent', 'zero_budget', 'stop', 'live_store', 'managed_disabled', 'task_credentials'])
+@pytest.mark.parametrize('control', ['no_consent', 'managed_zero_budget', 'stop', 'live_store', 'managed_disabled', 'task_credentials'])
 def test_isolated_gates_hold_before_reservation_or_provider(monkeypatch, tmp_path, control):
     home, config, credential = profile(monkeypatch, tmp_path)
     quota = tmp_path / 'quota'
@@ -66,10 +72,8 @@ def test_isolated_gates_hold_before_reservation_or_provider(monkeypatch, tmp_pat
         import yaml
         config['auxiliary'] = {'presence': {'api_key': 'SCRIPTED-no-task-account-override'}}
         (home/'config.yaml').write_text(yaml.safe_dump(config))
-    elif control == 'zero_budget':
-        import yaml
-        config['proactive'] = {'aux': {'max_calls_per_day': 0}}
-        (home/'config.yaml').write_text(yaml.safe_dump(config))
+    elif control == 'managed_zero_budget':
+        (tmp_path/'managed'/'config.yaml').write_text('proactive:\n  aux:\n    max_calls_per_day: 0\n')
     elif control == 'stop': (quota/'STOP').touch()
     elif control == 'live_store':
         (home/'cron').mkdir(mode=0o700)
