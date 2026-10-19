@@ -42,8 +42,16 @@ class ReadOnlyEvaluationGuard:
             # fdopen emits a second open audit event with the existing fd. Do
             # not blanket-allow descriptors: resolve and check the exact target.
             try:
-                return Path(os.readlink('/proc/self/fd/' + str(value))).absolute()
-            except OSError:
+                if sys.platform == 'darwin':
+                    import fcntl
+                    # Darwin has no /proc/self/fd. F_GETPATH resolves the open
+                    # object in the kernel; failure is not a descriptor grant.
+                    raw = fcntl.fcntl(value, getattr(fcntl, 'F_GETPATH', 50), bytes(1024))
+                    target = os.fsdecode(raw.split(b'\0', 1)[0])
+                else:
+                    target = os.readlink('/proc/self/fd/' + str(value))
+                return Path(target) if os.path.isabs(target) else None
+            except (OSError, ValueError):
                 return None
         if isinstance(value, (str, bytes, os.PathLike)):
             return Path(os.fsdecode(value)).absolute()
@@ -61,6 +69,24 @@ class ReadOnlyEvaluationGuard:
                 self.denied_writes.append(event + ':' + str(path))
                 raise PermissionError('evaluation_write_forbidden')
             if not writing:
+                if path is None:
+                    # Read-only pipe handles contain no private filesystem
+                    # target. SDK platform-header discovery wraps one before
+                    # its subprocess attempt (which remains forbidden below).
+                    # Prove both object kind and actual OS access; never grant
+                    # an unresolved regular file, writable pipe or unknown fd.
+                    readonly_pipe = False
+                    if isinstance(args[0], int):
+                        try:
+                            import fcntl
+                            import stat
+                            readonly_pipe = (stat.S_ISFIFO(os.fstat(args[0]).st_mode)
+                                and fcntl.fcntl(args[0], fcntl.F_GETFL) & os.O_ACCMODE == os.O_RDONLY)
+                        except (ImportError, OSError, ValueError):
+                            pass
+                    if not readonly_pipe:
+                        self.denied_private_reads.append('unresolved_descriptor')
+                        raise PermissionError('evaluation_private_read_forbidden')
                 if path and path.name == 'auth.json':
                     self.auth_reads += 1
                 allowed = (self.home / 'config.yaml', self.home / 'auth.json', self.home / '.env')

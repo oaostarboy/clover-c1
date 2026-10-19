@@ -17,14 +17,19 @@ from scripts.presence_eval_guard import ReadOnlyEvaluationGuard
 home, quota, target = map(Path, sys.argv[1:4])
 action = sys.argv[4]
 writing = action.endswith('write')
-fd = -1 if action.startswith('unknown') else os.open(target, os.O_RDWR if writing else os.O_RDONLY)
+if action.startswith('pipe'):
+    read_fd, write_fd = os.pipe()
+    fd, other = (write_fd, read_fd) if writing or action == 'pipe_write_as_read' else (read_fd, write_fd)
+    os.close(other)
+else:
+    fd = -1 if action.startswith('unknown') else os.open(target, os.O_RDWR if writing else os.O_RDONLY)
 access = None if fd == -1 else fcntl.fcntl(fd, fcntl.F_GETFL) & os.O_ACCMODE
 guard = ReadOnlyEvaluationGuard(home=home, source=Path.cwd(), write_dirs=[quota])
 guard.install()
 status, value = 'allowed', None
 try:
-    if fd == -1:
-        # Exercise failed target resolution without invoking an invalid OS open.
+    if fd == -1 or action == 'pipe_write_as_read':
+        # Exercise failed resolution / an audit-mode disguise before any I/O.
         guard.audit('open', (fd, 'r+' if writing else 'r', os.O_RDWR if writing else os.O_RDONLY))
     else:
         with os.fdopen(fd, 'r+' if writing else 'r') as stream:
@@ -49,6 +54,9 @@ print(json.dumps(dict(status=status, value=value, access=access, guard=guard.rec
     ('outside_write', 'denied'),
     ('unknown_read', 'denied'),
     ('unknown_write', 'denied'),
+    ('pipe_read', 'allowed'),
+    ('pipe_write', 'denied'),
+    ('pipe_write_as_read', 'denied'),
 ])
 def test_descriptor_targets_preserve_allow_and_deny_boundaries(tmp_path, action, expected):
     home, quota = tmp_path/'home', tmp_path/'quota'
