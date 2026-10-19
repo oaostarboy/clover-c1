@@ -1,21 +1,22 @@
-name: Native Windows ACK causal stages (diagnostic only)
+name: Windows original-cohort ACK trace (diagnostic only)
 on:
   workflow_dispatch:
 permissions:
   contents: read
 jobs:
   observe:
-    name: ${{ matrix.os }} / unchanged whole-file boundaries
+    name: Windows / original acceptance slice ${{ matrix.slice }}
     runs-on: ${{ matrix.os }}
     timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
         os: [windows-latest]
+        slice: [3, 5]
     env:
-      MODE: preflight
-      SLICE_INDEX: "0"
-      SLICES: "1"
+      MODE: acceptance
+      SLICE_INDEX: ${{ matrix.slice }}
+      SLICES: "8"
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -23,7 +24,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 6a7fb60426d990c783bfc1cb2791af67f3a8c751
+          ref: 166dfa688332e5b20f6e38e52827596add35b278
           path: source
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
@@ -44,12 +45,12 @@ jobs:
         working-directory: source
         shell: bash
         run: npm ci --include-workspace-root --workspace apps/desktop --workspace packages/clover-ui --workspace apps/shared
-      - name: Observe two unchanged whole files with original assertions clocks and guards
+      - name: Observe original acceptance cohort with unchanged assertions clocks guards
         shell: bash
         run: python helpers/.github/native-proof/joined_run.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
-          name: boundary-observation-${{ runner.os }}-${{ github.run_id }}
+          name: cohort-observation-${{ runner.os }}-${{ matrix.slice }}-${{ github.run_id }}
           path: evidence
           if-no-files-found: error
