@@ -3826,7 +3826,7 @@ class GatewaySlashCommandsMixin:
                             + watcher_status_suffix())
                 if value.startswith("view "):
                     target = value[5:]
-                    if target not in {"basic", "advanced", "timing", "frequency", *ADVANCED_ENTRIES, "recall", "suggestions", "audit", "skill-drafts"}:
+                    if target not in {"basic", "advanced", "timing", "frequency", *ADVANCED_ENTRIES, "recall", "suggestions", "presence", "audit", "skill-drafts"}:
                         used = True
                         return "Invalid page; no settings changed."
                     view = target
