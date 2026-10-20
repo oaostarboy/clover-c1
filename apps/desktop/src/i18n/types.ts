@@ -51,6 +51,7 @@ interface AuxTaskCopy {
 }
 
 export interface Translations {
+  presence: { title: string; inspect: string; forget: string; correct: string; stop: string; failed: string }
   common: {
     apply: string
     back: string

@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "packet": "W4",
+  "scope": "First offline QA slice against S0 only; not a review of concurrent W1/W2/W3 branches",
+  "base_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+  "candidate_patch_sha256": "577c313628f2fe8e14eceea70f85663faa6894ff9f3230f228177598fbe925da",
+  "branch": "qa/clover-157-presence-w4",
+  "release_approved": false,
+  "deployed": false,
+  "live_enabled": false,
+  "specification_compliance": "incomplete; reproducible blockers below",
+  "code_security_review": "focused fresh-context read-only review of S0; no cross-model sign-off",
+  "qa_checker_independently_reviewed": false,
+  "verification": {
+    "native_os": "Linux",
+    "original_focused_tests_passed": 73,
+    "new_receipt_checker_tests_passed": 29,
+    "new_adversarial_tests_failed": 5,
+    "distinct_findings": 3,
+    "tdd_cycles_recorded": 8,
+    "production_files_changed_by_this_worker": 0,
+    "source_notices_match_pinned_upstream": true
+  },
+  "reproduction": {
+    "cwd": "/home/starboy/.clover/workspace/clover-157-presence-w4-review",
+    "environment": {
+      "CLOVER_PYTHON": "/home/starboy/.clover/workspace/automatic-helper-checklists/release/stage/venv/bin/python"
+    },
+    "command": "bash scripts/run_tests.sh tests/agent/test_presence_w4_adversarial.py -j 1 --file-retries 0 -v --tb=short"
+  },
+  "blockers": [
+    {
+      "id": "W4-S0-001",
+      "severity": "medium",
+      "owner": "W1, with W0 integration owner",
+      "source": "agent/presence_shadow.py:40-50",
+      "test": "test_oversized_synthetic_number_uses_neutral_fallback_without_crashing",
+      "failed_cases": 3,
+      "finding": "float(10 ** 400) raises OverflowError, which _clamp does not catch. Each structured affect field can crash the trusted admission API instead of receiving a neutral fallback.",
+      "impact": "S0 has no automatic assessment producer and never sends; this is a malformed-input blocker before connecting a real assessment owner.",
+      "fix_required": "Handle oversized integer conversion under a failing test and preserve finite bounds. Do not increase confidence from invalid input."
+    },
+    {
+      "id": "W4-S0-002",
+      "severity": "medium",
+      "owner": "W1",
+      "source": "agent/presence_shadow.py:100-120",
+      "test": "test_source_owner_delete_before_assessment_rejects_stale_synthetic_reading",
+      "failed_cases": 1,
+      "finding": "Deleting the authenticated source row before admit_affect still returns true and stores a reading. Admission compares the captured turn but does not read the current source owner.",
+      "impact": "Later shadow evaluation does reject the deleted source. This is an admission/delete-propagation gap, not demonstrated outbound disclosure.",
+      "fix_required": "Revalidate source existence/revision and generation before assessment commit; invalidate dependent ephemeral state when source evidence is deleted or corrected."
+    },
+    {
+      "id": "W4-S0-003",
+      "severity": "medium",
+      "owner": "W0/W3 integration checkpoint",
+      "source": "agent/presence_shadow.py:134-171; agent/workstream_suggestions.py:181-190",
+      "test": "test_revocation_during_source_read_prevents_offer_commit",
+      "failed_cases": 1,
+      "finding": "Changing presence.enabled to false during the source-owner read still permits a shadow offer and writes offered_event_id. The final current() guard checks run/Stop generation but not a revocation epoch or effective policy.",
+      "impact": "S0 remains internal surface=false, and live Stop controls were explicitly deferred. This blocks promotion to delivery, not evidence that any message was sent.",
+      "fix_required": "Bind revocation to the shared epoch and revalidate immediately before state commit/publication. Preserve ordinary requested replies."
+    }
+  ],
+  "remaining_release_gates": [
+    "Owner fixes followed by independent recheck of these three findings",
+    "Source-pinned combined W1/W2/W3 candidate; this review does not cover their work",
+    "Full canonical regression suite and native Windows/macOS/Linux acceptance lanes",
+    "Supported distribution artifact license/NOTICE inclusion audit",
+    "Independent different-model code/security review, including this QA checker",
+    "Budget, durable restart, cross-surface claim/ACK and ambiguous-send acceptance coverage"
+  ],
+  "packaging_note": "Ordinary uv build --wheel is intentionally rejected by this repository. The failed attempt is not a packaging defect and did not establish license inclusion. Pinned upstream source LICENSE and NOTICE match byte-for-byte.",
+  "evidence_directory": "/home/starboy/.clover/workspace/artifacts/clover-157-presence-w4"
+}

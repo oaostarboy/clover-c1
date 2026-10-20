@@ -15,7 +15,7 @@ readme = "README.md"
 requires-python = ">=3.11,<3.14"
 authors = [{ name = "Clover Cognition" }]
 license = "MIT"
-license-files = ["LICENSE"]
+license-files = ["LICENSE", "third_party/neko/LICENSE", "third_party/neko/NOTICE", "third_party/neko/README.md"]
 dependencies = [
   # Core — every direct dep is exact-pinned to ==X.Y.Z (no ranges).
   # Rationale: ranges allow PyPI to ship a fresh version of a transitive

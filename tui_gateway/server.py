@@ -2977,7 +2977,17 @@ def _capture_ws_human_submission(req, transport):
         session = _sessions.get(sid)
         if session is None or session.get("transport") is not transport:
             return None
-        if session.get("running") or session.get("_closing"):
+        if session.get("_closing"):
+            return None
+        if session.get("running"):
+            # This authenticated input revokes older optional work even when
+            # the ordinary queue cannot mint a fresh human-origin receipt.
+            # Do not attest/rewrite queued content or bypass its existing owner.
+            try:
+                from agent.presence_lifecycle import note_human_input
+                note_human_input(str(_session_home(session)))
+            except Exception:
+                logger.debug('queued presence revocation unavailable', exc_info=True)
             return None
         generation = int(session.get("_queued_prompt_generation", 0))
         key = session.get("session_key")
@@ -12951,6 +12961,12 @@ def _run_prompt_submit(
                 if _error_surface:
                     payload["error_surface"] = _error_surface
             _retire_turn_marker(session, marker_key)
+            if getattr(agent, '_presence_turn', None) is not None:
+                try:
+                    from tui_gateway.presence import stage_after_reply
+                    stage_after_reply(sys.modules[__name__], sid, session, result, payload)
+                except Exception:
+                    logger.debug('optional desktop presence deferred', exc_info=True)
             _emit("message.complete", sid, payload)
 
             # ── /goal continuation (Ralph-style loop) ─────────────────
@@ -15142,6 +15158,7 @@ _PENDING_INPUT_COMMANDS: frozenset[str] = frozenset(
         "goal",
         "loop",
         "proactive",
+        "emotions",
         "moa",
         "undo",
         "learn",
@@ -17477,6 +17494,7 @@ from . import (  # noqa: E402
     methods_config as _methods_config,
     methods_images as _methods_images,
     methods_profiles as _methods_profiles,
+    methods_presence as _methods_presence,
     methods_prompt as _methods_prompt,
     methods_session as _methods_session,
     methods_tools as _methods_tools,
@@ -17485,6 +17503,7 @@ from . import (  # noqa: E402
 for _m in (
     _methods_browser_control,
     _methods_session,
+    _methods_presence,
     _methods_prompt,
     _methods_config,
     _methods_complete,

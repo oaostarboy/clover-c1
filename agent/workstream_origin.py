@@ -37,7 +37,10 @@ HUMAN = "human"
 HUMAN_ORIGIN_TTL_SECONDS = 24 * 3600
 
 _SECRET = secrets.token_bytes(32)
-_LOCK = threading.Lock()
+# Allocations under this lock (including optional policy loading) can run GC.
+# An older event's weakref callback then re-enters the same registry on this
+# thread. Keep cross-thread exclusion without deadlocking that cleanup.
+_LOCK = threading.RLock()
 
 
 @dataclass(frozen=True)
@@ -48,6 +51,7 @@ class _Issue:
     scope: tuple = ()
     content_digest: str = ""
     source_current: Optional[Callable[[], bool]] = None
+    presence_generation: int = -1
 
 
 # id(event) -> issue, for events an authenticated adapter minted and the
@@ -75,12 +79,13 @@ class HumanIngress:
     seal: str = ""
     scope: tuple = ()
     content_digest: str = ""
+    presence_generation: int = -1
 
     def _payload(self) -> bytes:
         return json.dumps((
             self.event_id, self.platform, self.profile, self.session_id,
             self.session_key, str(int(self.run_generation)),
-            self.scope, self.content_digest,
+            self.scope, self.content_digest, self.presence_generation,
         ), ensure_ascii=True, separators=(",", ":")).encode("utf-8")
 
 
@@ -90,7 +95,8 @@ def _seal(ingress: HumanIngress) -> str:
 
 def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
                        original_text: Optional[str] = None,
-                       is_current: Optional[Callable[[], bool]] = None) -> bool:
+                       is_current: Optional[Callable[[], bool]] = None,
+                       presence_input: bool = True) -> bool:
     """Adapter-side producer. Call only after the adapter authenticated the
     sender on its own transport and built ``event`` from that inbound message.
 
@@ -114,8 +120,130 @@ def mint_human_ingress(event: Any, *, platform: str, scope: Any = None,
             return False
         binding = scope_binding(scope) if scope is not None else ()
         digest = text_digest(original_text) if original_text is not None else ""
-        _ISSUED[key] = _Issue(ref, str(platform), uuid.uuid4().hex, binding, digest, is_current)
+        generation = -1
+        source = getattr(event, 'source', None)
+        private = (getattr(scope, 'private', False) if scope is not None else
+                   getattr(source, 'chat_type', None) in {'dm', 'private'})
+        if presence_input is True and private and platform in {'telegram', 'desktop'}:
+            try:
+                from agent.presence_lifecycle import note_human_input
+                from agent.workstreams import current_profile
+                generation = note_human_input(scope.profile if scope is not None else current_profile())
+            except Exception:
+                pass  # Ordinary input is unaffected; optional presence holds.
+        _ISSUED[key] = _Issue(ref, str(platform), uuid.uuid4().hex, binding, digest, is_current, generation)
     return True
+
+
+# Command authority is separate from submission provenance. Generic input
+# issues never authorize private status, and commands never redeem a chat turn.
+_COMMAND_ISSUED: Dict[int, tuple] = {}
+_COMMAND_DELIVERIES: Dict[tuple, float] = {}
+_COMMAND_UPDATES: Dict[tuple, float] = {}
+
+
+def _command_binding(event):
+    source = event.source
+    values = {name: getattr(source, name, None) for name in (
+        'chat_id', 'chat_type', 'user_id', 'user_id_alt', 'chat_id_alt',
+        'thread_id', 'scope_id', 'guild_id', 'parent_chat_id', 'profile',
+        'transport_profile', 'is_bot', 'role_authorized', 'profile_route_rejected')}
+    values.update(platform=source.platform.value, text=event.text,
+                  message_id=event.message_id, update_id=event.platform_update_id,
+                  actor=getattr(event, 'user_id', None), internal=event.internal,
+                  control=event.allow_gateway_control)
+    return json.dumps(values, sort_keys=True, ensure_ascii=True, separators=(',', ':'))
+
+
+def mint_human_command(event, *, platform: str, command: str, profile_home=None) -> bool:
+    """Authenticated adapter only. Immutable event/audience binding, not a grant.
+
+    Duplicate transport deliveries are rejected even if rebuilt as new objects.
+    Capacity exhaustion holds instead of evicting live replay guards.
+    """
+    import time
+    try:
+        if (event.internal or not event.allow_gateway_control or event.get_command() != command
+                or event.source.platform.value != platform or event.source.is_bot):
+            return False
+        # Telegram always supplies its native integer Update.update_id. Missing
+        # or malformed identity cannot be repaired from message/chat fields.
+        update_id = event.platform_update_id
+        if platform == 'telegram' and (type(update_id) is not int or not 0 <= update_id < 2**63):
+            return False
+        binding = _command_binding(event)
+        from clover_constants import get_clover_home
+        from pathlib import Path
+        # The receiving adapter resolves the routed runtime home before the
+        # existing gateway wrapper enters its profile scope. No config/auth I/O.
+        profile = str(Path(profile_home).resolve() if profile_home is not None else get_clover_home().resolve())
+        delivery = (profile, platform, event.source.transport_profile, event.source.profile,
+                    event.source.chat_id, event.message_id)
+        update = ((profile, platform, event.source.transport_profile, event.source.profile, update_id)
+                  if platform == 'telegram' else None)
+        if not event.message_id:
+            return False
+        key = id(event)
+        def forget(ref):
+            with _LOCK:
+                old = _COMMAND_ISSUED.get(key)
+                if old is not None and old[0] is ref:
+                    _COMMAND_ISSUED.pop(key, None)
+        ref = weakref.ref(event, forget)
+    except (AttributeError, TypeError, ValueError):
+        return False
+    with _LOCK:
+        now = time.monotonic()
+        for registry in (_COMMAND_DELIVERIES, _COMMAND_UPDATES):
+            for old, expiry in list(registry.items()):
+                if expiry <= now:
+                    registry.pop(old, None)
+        if (key in _COMMAND_ISSUED or delivery in _COMMAND_DELIVERIES
+                or (update is not None and (update in _COMMAND_UPDATES or len(_COMMAND_UPDATES) >= 4096))
+                or len(_COMMAND_DELIVERIES) >= 4096):
+            return False
+        expiry = now + 24 * 3600
+        _COMMAND_DELIVERIES[delivery] = expiry
+        if update is not None:
+            _COMMAND_UPDATES[update] = expiry
+        _COMMAND_ISSUED[key] = (ref, binding, platform, command, profile, expiry)
+    return True
+
+
+def redeem_human_command(event, *, platform: str, command: str):
+    """Single use. Returns only a readback fence, never conversation authority."""
+    import time
+    with _LOCK:
+        issue = _COMMAND_ISSUED.pop(id(event), None)
+    if issue is None or issue[0]() is not event or issue[2:4] != (platform, command):
+        return None
+    def current(*, profile_observed=None):
+        # A read-only host may supply the resolved profile from its sealed
+        # revision snapshot for a final non-I/O binding check. Not user input.
+        try:
+            from clover_constants import get_clover_home
+            profile = str(get_clover_home().resolve()) if profile_observed is None else profile_observed
+            return (time.monotonic() < issue[5] and _command_binding(event) == issue[1]
+                    and profile == issue[4])
+        except (AttributeError, TypeError, ValueError):
+            return False
+    return current if current() else None
+
+
+def submission_is_current(event: Any, *, platform: str) -> bool:
+    """Read-only proof for human commands; never redeem or mint a turn."""
+    if event is None or getattr(event, "internal", False):
+        return False
+    with _LOCK:
+        issue = _ISSUED.get(id(event))
+        if issue is None or issue.event_ref() is not event or issue.platform != platform:
+            return False
+    try:
+        valid = issue.source_current is None or issue.source_current() is True
+    except Exception:
+        return False
+    with _LOCK:
+        return valid and _ISSUED.get(id(event)) is issue
 
 
 def transfer_human_ingress(source: Any, target: Any, *, platform: str, original_text: str) -> bool:
@@ -216,6 +344,7 @@ def redeem_human_ingress(
         session_id=str(session_id), session_key=str(session_key),
         run_generation=int(run_generation),
         scope=issue.scope, content_digest=issue.content_digest,
+        presence_generation=issue.presence_generation,
     )
     return replace(ingress, seal=_seal(ingress))
 

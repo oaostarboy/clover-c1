@@ -19,6 +19,7 @@ RECOMMENDED = {
     "recall": {"enabled": True},
     "suggestions": {"enabled": True, "preferred_timing": "after_reply",
                     "cooldown_seconds": 3600, "max_per_session": 1},
+    "presence": {"enabled": False},
     "compaction_audit": {"enabled": True},
     "procedures": {"enabled": False},
 }
@@ -139,6 +140,7 @@ def advanced_info(name: str, root: dict) -> str:
 
 
 FIELDS = {"recall": ("recall", "enabled"), "suggestions": ("suggestions", "enabled"),
+          "presence": ("presence", "enabled"),
           "timing": ("suggestions", "preferred_timing"),
           "audit": ("compaction_audit", "enabled"),
           "skill-drafts": ("procedures", "enabled")}
@@ -205,7 +207,10 @@ def _choices(root: dict) -> dict:
         raise ValueError("suggestions must be a mapping")
     timing = sugg.get("preferred_timing")
     timing = timing if timing in ("after_reply", "never") else None
+    presence_cfg = root.get("presence", {})
+    presence_on = presence_cfg.get("enabled") is True if isinstance(presence_cfg, dict) else False
     return {"recall": settings.recall_enabled, "suggestions": settings.suggestions_enabled,
+            "presence": presence_on,
             "timing": timing, "cooldown": settings.suggestions_cooldown_seconds,
             "cap": settings.suggestions_max_per_session, "audit": settings.compaction_audit_enabled,
             "skill-drafts": settings.procedures_enabled}
@@ -259,10 +264,12 @@ class ProactiveDraft:
     def render(self, view: str = "basic") -> str:
         c = _choices(self.root)
         labels = {"recall": "🧠 Recall", "suggestions": "💡 Suggestions",
+                  "presence": "🌱 Speak-first presence",
                   "audit": "🧾 Context checks", "skill-drafts": "📚 Skill drafts"}
         descriptions = {
             "recall": "Carry scoped unfinished work and corrections into relevant context. Bounded lexical recall can miss rephrasing.",
             "suggestions": "Offer useful local next steps after a reply. No extra model call or permission to act. Timing, cooldown and session cap still apply.",
+            "presence": "Proactively bring up unfinished thoughts when relevant new context connects. Capped at 3/day with quiet hours.",
             "audit": "Keep bounded evidence through supported text-summary compaction. No model repair; opaque provider compaction is not audited.",
             "skill-drafts": "Optional verified local-audit drafts go to /skills pending for approval. Ordinary skill creation stays independent; matching ordinary skills is not coordinated yet. Review for overlap.",
         }
@@ -288,7 +295,7 @@ class ProactiveDraft:
 
     def choices(self, view: str = "basic") -> list[dict]:
         c = _choices(self.root)
-        if view in {"recall", "suggestions", "audit", "skill-drafts"}:
+        if view in {"recall", "suggestions", "presence", "audit", "skill-drafts"}:
             entries = [(f"{view} on", "On"), (f"{view} off", "Off")]
         elif view == "timing":
             entries = [("timing after_reply", "After replies"), ("timing never", "Never suggest")]
@@ -305,6 +312,7 @@ class ProactiveDraft:
         else:
             entries = [("view " + k, f"{label} · {'On' if c[k] else 'Off'}") for k, label in
                        [("recall", "🧠 Recall"), ("suggestions", "💡 Suggestions"),
+                        ("presence", "🌱 Presence"),
                         ("skill-drafts", "📚 Skill drafts"), ("audit", "🧾 Context checks")]]
             entries += [("view timing", "🕓 Timing · " + {"after_reply": "After reply", "never": "Never"}.get(c['timing'], "Not set")),
                         ("view frequency", "⏱ Frequency · Set"),
@@ -324,6 +332,9 @@ class ProactiveDraft:
                     return "Not saved: preferences changed elsewhere. Open Customize again."
                 updated = copy.deepcopy(raw)
                 updated["proactive"] = self.root
+                # If presence was toggled in changes, also sync root-level presence section
+                if "presence" in self.changes and "enabled" in self.changes["presence"]:
+                    updated.setdefault("presence", {})["enabled"] = self.changes["presence"]["enabled"]
                 # Saving a choice marks customization; later On must not fill
                 # previously absent leaves with a new preset.
                 updated["proactive"]["mode"] = "active"

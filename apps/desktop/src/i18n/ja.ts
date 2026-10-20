@@ -3,6 +3,14 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 
 export const ja = defineLocale({
+  presence: {
+    title: "確認するための考え",
+    inspect: "出典を確認",
+    forget: "忘れる",
+    correct: "訂正",
+    stop: "すべて停止",
+    failed: "変更されませんでした。この操作は期限切れの可能性があります。",
+  },
   common: {
     apply: '適用',
     back: '戻る',

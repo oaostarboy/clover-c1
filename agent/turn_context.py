@@ -606,6 +606,7 @@ def build_turn_context(
             auth_mode=getattr(agent, "auth_mode", "") or "",
             session_id=getattr(agent, "session_id", "") or "",
             cache_scope=_cache_scope,
+            credential_pool=getattr(agent, "_credential_pool", None),
         )
     except Exception:
         pass
@@ -1718,7 +1719,25 @@ def build_turn_context(
         try:
             from agent.workstream_suggestions import prepare_offer_turn
 
+            agent._pending_presence_posture = None
             prepare_offer_turn(agent, _human_row)
+            if getattr(agent, '_presence_turn', None) is not None and (
+                    not moa_active and getattr(agent, 'api_mode', None) != 'codex_app_server'):
+                from agent.presence_runtime import compose_current_posture, PendingPosture
+                _posture = compose_current_posture(agent, _human_row)
+                if _posture:
+                    # Only the current real user sidecar changes. Persist the
+                    # exact bytes before sending; never rewrite prefix/history.
+                    _base = _human_row.get('api_content') or _human_row.get('content')
+                    if isinstance(_base, str):
+                        _composed = _base + '\n\n' + _posture.text
+                        _written = agent._session_db.set_latest_user_api_content(
+                            agent.session_id, _human_row.get('content'), _composed,
+                            expected_row_id=_human_row['_row_id'], is_current=_posture.host.current)
+                        if _written == 1:
+                            _human_row['api_content'] = _composed
+                            agent._pending_presence_posture = PendingPosture(
+                                _posture, _human_row, _base, _composed)
         except Exception:
             logger.debug("workstream suggestion input unavailable", exc_info=True)
     except Exception:

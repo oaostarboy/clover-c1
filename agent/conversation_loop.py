@@ -3248,6 +3248,9 @@ def run_conversation(
                         _use_streaming = False
 
                 def _perform_api_call(next_api_kwargs):
+                    if getattr(agent, '_pending_presence_posture', None) is not None:
+                        from agent.presence_runtime import fence_current_posture
+                        fence_current_posture(agent, next_api_kwargs, api_messages=api_messages)
                     if agent.api_mode == "codex_responses":
                         next_api_kwargs = agent._get_transport().preflight_kwargs(
                             next_api_kwargs,

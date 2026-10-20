@@ -3,6 +3,14 @@ import { FIELD_DESCRIPTIONS, FIELD_LABELS } from '@/app/settings/constants'
 import type { Translations } from './types'
 
 export const en: Translations = {
+  presence: {
+    title: "A thought to check",
+    inspect: "Inspect",
+    forget: "Forget",
+    correct: "Correct",
+    stop: "Stop everywhere",
+    failed: "No change made. This control may have expired.",
+  },
   common: {
     apply: 'Apply',
     back: 'Back',

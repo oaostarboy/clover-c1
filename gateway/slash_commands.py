@@ -1786,6 +1786,11 @@ class GatewaySlashCommandsMixin:
         from gateway.clover_acks import stop_ack
         from gateway.run import _AGENT_PENDING_SENTINEL, _INTERRUPT_REASON_STOP
         source = event.source
+        try:
+            from agent.presence_lifecycle import stop_existing_gateway_presence
+            stop_existing_gateway_presence(self, source)
+        except Exception:
+            logger.debug('presence Stop unavailable; ordinary Stop continues', exc_info=True)
         session_entry = await self.async_session_store.get_or_create_session(source)
         session_key = session_entry.session_key
 
@@ -3626,6 +3631,10 @@ class GatewaySlashCommandsMixin:
         except Exception:
             return False
 
+    async def _handle_emotions_command(self, event: MessageEvent) -> Optional[str]:
+        from agent.emotions import telegram
+        return await telegram(self, event)
+
     async def _handle_proactive_command(self, event: MessageEvent) -> Optional[str]:
         import copy
         import time
@@ -3646,6 +3655,9 @@ class GatewaySlashCommandsMixin:
             return str(exc)
         can_change = self._proactive_caller_is_admin(event.source)
         args = event.get_command_args().strip()
+        if args == 'presence' or args.startswith('presence '):
+            from gateway.presence_controls_host import command
+            return await command(self, event, args[len('presence'):].strip(), can_change=can_change)
         if args.lower().startswith("watcher "):
             if not can_change:
                 return "Watcher controls locked by current scoped admin policy."
@@ -3814,7 +3826,7 @@ class GatewaySlashCommandsMixin:
                             + watcher_status_suffix())
                 if value.startswith("view "):
                     target = value[5:]
-                    if target not in {"basic", "advanced", "timing", "frequency", *ADVANCED_ENTRIES, "recall", "suggestions", "audit", "skill-drafts"}:
+                    if target not in {"basic", "advanced", "timing", "frequency", *ADVANCED_ENTRIES, "recall", "suggestions", "presence", "audit", "skill-drafts"}:
                         used = True
                         return "Invalid page; no settings changed."
                     view = target

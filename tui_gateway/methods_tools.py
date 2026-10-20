@@ -468,11 +468,25 @@ def _(rid, params: dict) -> dict:
 
 @method("command.dispatch")
 def _(rid, params: dict) -> dict:
+    from agent.emotions import literal_session_id
+    raw_sid = params.get("session_id")
+    if not isinstance(params.get("name", ""), str) or not isinstance(params.get("arg", ""), str):
+        return _err(rid, -32602, "literal command name and argument required")
     name, arg = params.get("name", "").lstrip("/"), params.get("arg", "")
     resolved = _resolve_name(name)
     if resolved != name:
         name = resolved
+    # Other commands retain their established sessionless (None/empty) path.
+    # Never hash malformed caller data, coerce it to str, or repair identifiers.
+    if not literal_session_id(raw_sid) and not (name != "emotions" and raw_sid in (None, "")):
+        return _err(rid, -32602, "literal session_id required")
     session = _sessions.get(params.get("session_id", ""))
+
+    if name == "emotions":
+        from tui_gateway import server as emotions_server
+        from agent.emotions import desktop
+        text = "/emotions is read only and takes no arguments." if arg.strip() else desktop(emotions_server, params)
+        return _ok(rid, {"type":"exec", "output":text})
 
     qcmds = _load_cfg().get("quick_commands", {})
     if name in qcmds:
@@ -904,6 +918,10 @@ def _(rid, params: dict) -> dict:
         )
 
     if name == "proactive":
+        if arg.split()[:1] == ['presence']:
+            from tui_gateway import server as presence_server
+            from tui_gateway.presence import desktop_command
+            return _ok(rid, {'type':'exec', 'output':desktop_command(presence_server, params, arg.split()[1:])['text']})
         from clover_cli.proactive import proactive_command
         return _ok(rid, {"type": "exec", "output": proactive_command(arg, can_change=True)})
 
@@ -1169,6 +1187,9 @@ def _(rid, params: dict) -> dict:
 
 @method("slash.exec")
 def _(rid, params: dict) -> dict:
+    from agent.emotions import literal_session_id
+    if not literal_session_id(params.get("session_id")) or not isinstance(params.get("command", ""), str):
+        return _err(rid, -32602, "literal session_id and command required")
     session, err = _sess_nowait(params, rid)
     if err:
         return err

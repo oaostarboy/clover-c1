@@ -3,6 +3,14 @@ import { defineFieldCopy } from '@/app/settings/field-copy'
 import { defineLocale } from './define-locale'
 
 export const zhHant = defineLocale({
+  presence: {
+    title: "一個待核實的想法",
+    inspect: "查看來源",
+    forget: "忘記",
+    correct: "修正",
+    stop: "全部停止",
+    failed: "未作變更。此操作可能已過期。",
+  },
   common: {
     apply: '套用',
     back: '返回',

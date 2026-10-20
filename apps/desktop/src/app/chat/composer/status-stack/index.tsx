@@ -1,8 +1,10 @@
 import { useStore } from '@nanostores/react'
+import { computed } from 'nanostores'
 import { type ReactNode, useEffect, useMemo } from 'react'
 import { useNavigate } from 'react-router'
 
 import { blurComposerInput } from '@/app/chat/composer/focus'
+import { PresenceCard } from '@/app/chat/presence-card'
 import { AGENTS_ROUTE } from '@/app/routes'
 import { composerDockCard } from '@/components/chat/composer-dock'
 import { StatusSection } from '@/components/chat/status-section'
@@ -24,7 +26,10 @@ import {
   stopBackgroundProcess
 } from '@/store/composer-status'
 import { refreshSessionGoal } from '@/store/goals'
+import { $presenceFeed, presenceKey, requestPresenceReturn } from '@/store/presence'
 import { $previewStatusBySession, dismissPreviewArtifact } from '@/store/preview-status'
+import { $activeGatewayProfile } from '@/store/profile'
+import { $activeSessionId } from '@/store/session'
 import { $threadScrolledUp } from '@/store/thread-scroll'
 import { openSessionInNewWindow } from '@/store/windows'
 
@@ -96,6 +101,18 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
   const items = useSessionSlice($statusItemsBySession, sessionId)
   const previews = useSessionSlice($previewStatusBySession, sessionId)
   const scrolledUp = useStore($threadScrolledUp)
+  const profile = useStore($activeGatewayProfile)
+  const activeSessionId = useStore($activeSessionId)
+  useEffect(() => {
+    if (sessionId && activeSessionId === sessionId && globalThis.document.visibilityState === 'visible') {
+      void requestPresenceReturn(profile, sessionId)
+    }
+  }, [activeSessionId, profile, sessionId])
+
+  const presenceSlice = useMemo(() => computed($presenceFeed, entries =>
+    sessionId ? entries[presenceKey(profile, sessionId)] : undefined), [profile, sessionId])
+
+  const presence = useStore(presenceSlice)
 
   const groups = useMemo(() => groupStatusItems(items), [items])
 
@@ -210,6 +227,8 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
   if (previewRows.length > 0 && !hasBackgroundGroup) {
     sections.push({ key: 'preview', node: previewBlock })
   }
+
+  if (presence) {sections.push({ key: 'presence', node: <PresenceCard entry={presence} /> })}
 
   if (queue) {
     sections.push({ key: 'queue', node: queue })

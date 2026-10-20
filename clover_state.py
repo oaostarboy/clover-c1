@@ -12618,7 +12618,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         return cols
 
     def set_latest_user_api_content(
-        self, session_id: str, content: Any, api_content: str
+        self, session_id: str, content: Any, api_content: str, *, expected_row_id: Optional[int] = None,
+        is_current=None, expected_api_content: Optional[str] = None,
     ) -> int:
         """Backfill the ``api_content`` sidecar onto the newest ACTIVE user row.
 
@@ -12633,17 +12634,28 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         row is not the message the caller stamped (racing rewrite, unexpected
         tail shape), nothing is written. Returns the number of rows updated
         (0 or 1).
+        ``is_current`` fences optional current-turn additions inside the actual
+        write/retry callback. ``expected_api_content`` is a CAS guard for rolling
+        back an unsent addition, never a license to rewrite sent history.
         """
         encoded = self._encode_content(content)
 
         def _do(conn):
+            if is_current is not None:
+                try:
+                    if is_current() is not True:
+                        return 0
+                except Exception:
+                    return 0
             cursor = conn.execute(
                 "UPDATE messages SET api_content = ? WHERE id = ("
                 "SELECT id FROM messages "
                 "WHERE session_id = ? AND role = 'user' AND active = 1 "
                 "ORDER BY id DESC LIMIT 1"
-                ") AND content IS ?",
-                (_scrub_surrogates(api_content), session_id, encoded),
+                ") AND content IS ? AND (? IS NULL OR id = ?) "
+                "AND (? IS NULL OR api_content IS ?)",
+                (_scrub_surrogates(api_content), session_id, encoded, expected_row_id, expected_row_id,
+                 expected_api_content, expected_api_content),
             )
             return cursor.rowcount
 

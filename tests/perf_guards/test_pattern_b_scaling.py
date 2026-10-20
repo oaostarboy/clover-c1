@@ -45,6 +45,47 @@ def _min_time(fn, *, repeat: int = 5) -> float:
     return best
 
 
+def _fixed_work_time(fn, *, number: int, repeat: int = 3) -> float:
+    """CPU seconds per call over a fixed batch, not scheduler wall time.
+
+    Fragment cases use equal total input bytes in each batch (16*N vs 4*4N).
+    This amortizes clock/allocator startup and excludes time descheduled by
+    sibling canonical workers. Keep all predetermined samples; never retry a
+    failed assertion. Other guards retain their original measurement contract.
+    """
+    best = float("inf")
+    for _ in range(repeat):
+        start = time.process_time()
+        for _ in range(number):
+            fn()
+        best = min(best, (time.process_time() - start) / number)
+    return best
+
+
+def _fragment_copy_work(assemble, n: int) -> int:
+    """Count logical copied characters, including hidden dict-field += copies.
+
+    str.join accepts the subclass without invoking addition. Repeated string
+    addition returns the subclass and records *both* copied operands, so the
+    quadratic control is deterministic even on a noisy or very fast runner.
+    The final materialized output is also charged once. No source inspection.
+    """
+    copies = [0]
+
+    class Fragment(str):
+        def __add__(self, other):
+            copies[0] += len(self) + len(other)
+            return Fragment(str(self) + str(other))
+
+        def __radd__(self, other):
+            copies[0] += len(other) + len(self)
+            return Fragment(str(other) + str(self))
+
+    length = assemble(n, Fragment("y" * 64))
+    assert length == n * 64, "assembly lost fragment bytes"
+    return copies[0] + length
+
+
 # ---------------------------------------------------------------------------
 # Guard 1 — streamed assistant text accumulation must be linear (#92166).
 # ---------------------------------------------------------------------------
@@ -202,9 +243,17 @@ class TestToolCallFragmentAssemblyLinear:
             entry["function"]["arguments_parts"].append(frag)
         return len("".join(entry["function"]["arguments_parts"]))
 
+    def test_fragment_copy_work_scales_linearly(self):
+        small = _fragment_copy_work(self._assemble_dict_field, 256)
+        large = _fragment_copy_work(self._assemble_dict_field, 1024)
+        assert large / small < self.MAX_RATIO, "fragment copies are superlinear"
+
     def test_4x_fragments_cost_about_4x_time(self):
-        t_small = _min_time(lambda: self._assemble_dict_field(self.N_SMALL, self.FRAG), repeat=3)
-        t_large = _min_time(lambda: self._assemble_dict_field(self.N_LARGE, self.FRAG), repeat=3)
+        # Warm both allocation geometries before collecting fixed batches.
+        assert self._assemble_dict_field(self.N_SMALL, self.FRAG) == self.N_SMALL * len(self.FRAG)
+        assert self._assemble_dict_field(self.N_LARGE, self.FRAG) == self.N_LARGE * len(self.FRAG)
+        t_small = _fixed_work_time(lambda: self._assemble_dict_field(self.N_SMALL, self.FRAG), number=16)
+        t_large = _fixed_work_time(lambda: self._assemble_dict_field(self.N_LARGE, self.FRAG), number=4)
         ratio = t_large / max(t_small, 1e-9)
         assert ratio < self.MAX_RATIO, (
             f"tool-call fragment assembly is superlinear: 4x fragments cost "

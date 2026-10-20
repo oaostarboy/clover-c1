@@ -57,8 +57,15 @@ def prepare_offer_turn(agent: Any, row: Any) -> None:
     The gateway takes it once after a successful ordinary reply. Corrections and
     Feedback events themselves are never opportunities for unsolicited offers.
     """
+    if hasattr(agent, '_presence_turn'):
+        agent._presence_turn = None
+    if hasattr(agent, "_presence_shadow"):
+        agent._presence_shadow = None
     settings = ws.load_settings()
     if not settings.enabled or not settings.suggestions_enabled:
+        db = getattr(agent, "_session_db", None)
+        if hasattr(db, "_presence_pending"):
+            db._presence_pending = None
         return
     agent._workstream_suggestion_turn = None
     scope = ws.scope_for_agent(agent)
@@ -89,6 +96,19 @@ def prepare_offer_turn(agent: Any, row: Any) -> None:
         return
     agent._workstream_suggestion_turn = OfferTurn(
         scope, agent.session_id, root, row_id, ingress.event_id, text, ingress)
+    from clover_cli.config import load_config
+    config = load_config()
+    presence = config.get("presence", {})
+    if isinstance(presence, Mapping) and presence.get("enabled") is True:
+        try:
+            from agent.presence_shadow import prepare_shadow
+            prepare_shadow(agent, agent._workstream_suggestion_turn, now=_now())
+            from agent.presence_runtime import prepare_presence
+            prepare_presence(agent, agent._workstream_suggestion_turn)
+        except Exception:
+            logger.debug("optional presence admission unavailable", exc_info=True)
+    elif hasattr(db, "_presence_pending"):
+        db._presence_pending = None
 
 
 def _artifact_detail(receipt: Mapping[str, Any]) -> Mapping[str, Any]:
@@ -135,6 +155,8 @@ def present_offer(agent: Any, result: Any, *, is_current) -> Optional[dict]:
     altering model messages. A crash after the proposal commit is conservative:
     it stays proposed/unknown and deduped, never falsely marked delivered.
     """
+    if hasattr(agent, "_presence_shadow"):
+        agent._presence_shadow = None
     turn = getattr(agent, "_workstream_suggestion_turn", None)
     if not isinstance(turn, OfferTurn) or not isinstance(result, dict):
         return None
@@ -161,8 +183,19 @@ def present_offer(agent: Any, result: Any, *, is_current) -> Optional[dict]:
     if current_row is None or current_row.get("content") != turn.query:
         return None
     from clover_cli.config import load_config
-    timing = _timing(load_config())
+    config = load_config()
+    timing = _timing(config)
     moment = _now()
+    presence = config.get("presence", {})
+    if isinstance(presence, Mapping) and presence.get("enabled") is True:
+        try:
+            from agent.presence_shadow import evaluate_shadow
+            agent._presence_shadow = evaluate_shadow(
+                agent, turn, settings=settings, timing=timing, now=moment, is_current=is_current)
+        except Exception:
+            logger.debug("optional presence shadow unavailable", exc_info=True)
+    elif hasattr(db, "_presence_pending"):
+        db._presence_pending = None
     # Public write_batch serializes the policy read + proposal claim across
     # processes; a second response cannot race past caps/cooldown/dedupe.
     offered = None
