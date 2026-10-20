@@ -315,7 +315,6 @@ def test_reader_loop_streams_incremental_chunks_from_read1(registry, monkeypatch
 
 # =========================================================================
 # Incremental UTF-8 decoding across chunk boundaries
-# (ported from openclaw/openclaw#112325)
 # =========================================================================
 
 

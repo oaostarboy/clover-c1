@@ -444,7 +444,7 @@ class TestStripThinkBlocks:
         assert "mixed" not in result
         assert "final" in result
 
-    # ─── Tool-call XML block stripping (openclaw/openclaw#67318) ─────────
+    # ─── Tool-call XML block stripping ──────────────────────────────────
     # Some open models (notably Gemma variants via OpenRouter) emit
     # standalone tool-call XML inside assistant content instead of via the
     # structured `tool_calls` field. Left unstripped, raw XML leaks to

@@ -1,6 +1,6 @@
 """Tests for gateway weak credential rejection at startup.
 
-Ported from openclaw/openclaw#64586: rejects known-weak placeholder
+Rejects known-weak placeholder
 tokens at gateway startup instead of letting them silently fail
 against platform APIs.
 """

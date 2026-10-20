@@ -23,7 +23,7 @@ class TestKnownPrefixes:
     def test_gitlab_token_prefixes(self):
         """GitLab token families redact via their literal prefixes.
 
-        Ported from openclaw/openclaw#112954; follow-up invited in #4541.
+        Follow-up invited in #4541.
         """
         tokens = [
             # NOTE: every token is prefix + suffix CONCATENATION so no
