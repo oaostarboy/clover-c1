@@ -10684,6 +10684,20 @@ class TelegramAdapter(BasePlatformAdapter):
         event.text = self._clean_bot_trigger_text(event.text)
         await self._cache_replied_media(msg, event)
         event = self._apply_telegram_group_observe_attribution(event)
+
+        if event.get_command() == "emotions":
+            from agent.workstream_origin import mint_human_command
+            try:
+                runner = getattr(self, "gateway_runner", None)
+                profile_home = None
+                if getattr(getattr(runner, "config", None), "multiplex_profiles", False):
+                    if not event.source.profile:
+                        event.source.profile = self._session_key_profile(event.source)
+                    profile_home = runner._resolve_profile_home_for_source(event.source)
+                mint_human_command(event, platform="telegram", command="emotions", profile_home=profile_home)
+            except Exception:
+                pass
+
         # Telegram clients split messages above 4096 chars into multiple
         # updates.  A long command paste (e.g. ``/queue <huge prompt>``)
         # arrives as a COMMAND chunk near the limit followed by plain TEXT
