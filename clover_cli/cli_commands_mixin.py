@@ -1154,6 +1154,12 @@ class CLICommandsMixin:
             _cprint("  Already on that session.")
             return
 
+        owner = self._session_db.get_handoff_state(target_id)
+        if owner and (owner.get("state") in ("pending", "running") or
+                      (owner.get("state") == "completed" and owner.get("platform") not in (None, "cli"))):
+            _cprint("  Session is still on the messaging platform. Send /mirror cli there first.")
+            return
+
         old_session_id = self.session_id
         # Flush un-persisted messages before ending the old session (#47202).
         if self.agent:

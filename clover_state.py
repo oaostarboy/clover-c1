@@ -7129,7 +7129,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             parent = conn.execute(
                 """SELECT ended_at, cwd, git_branch, git_repo_root,
                           user_id, session_key, chat_id, chat_type,
-                          thread_id, display_name, origin_json, profile_name
+                          thread_id, display_name, origin_json, profile_name,
+                          handoff_state, handoff_platform
                    FROM sessions WHERE id = ?""",
                 (parent_session_id,),
             ).fetchone()
@@ -7147,8 +7148,9 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                    system_prompt_hash,
                    parent_session_id, cwd, git_branch, git_repo_root,
                    profile_name, user_id, session_key, chat_id, chat_type,
-                   thread_id, display_name, origin_json, started_at
-                ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                   thread_id, display_name, origin_json, started_at,
+                   handoff_state, handoff_platform
+                ) VALUES (?, ?, ?, ?, NULL, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     child_session_id,
                     source,
@@ -7173,6 +7175,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     parent["display_name"],
                     parent["origin_json"],
                     time.time(),
+                    parent["handoff_state"] if parent["handoff_state"] == "completed" else None,
+                    parent["handoff_platform"] if parent["handoff_state"] == "completed" else None,
                 ),
             )
             total_messages, total_tool_calls = self._insert_message_rows(
@@ -15842,6 +15846,24 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             )
             return cur.rowcount > 0
         return self._execute_write(_do)
+
+    def mirror_to_cli(self, session_id: str, platform: str) -> bool:
+        """Atomically release a settled gateway session to the CLI.
+
+        The completed handoff row doubles as a durable surface owner. A pending
+        or running handoff cannot be released, and an already CLI-owned row
+        cannot be released twice. No transcript rows are changed.
+        """
+        def _do(conn):
+            cur = conn.execute(
+                "UPDATE sessions SET handoff_state = 'completed', "
+                "handoff_platform = 'cli', handoff_error = NULL "
+                "WHERE id = ? AND (handoff_state IS NULL OR "
+                "(handoff_state = 'completed' AND handoff_platform = ?))",
+                (session_id, platform),
+            )
+            return cur.rowcount > 0
+        return bool(self._execute_write(_do))
 
     def get_handoff_state(self, session_id: str) -> Optional[Dict[str, Any]]:
         """Read the current handoff state for a session.
