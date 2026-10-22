@@ -224,9 +224,11 @@ def execute(a, evidence):
             if reached['reached'] != fault:
                 raise AssertionError('Negative row never reached the named failure boundary')
         else:
-            # Same canonical main(), with a transparent observer that rethrows
-            # the official installer error unchanged; no repair/guard overrides.
-            call('real-cli-update', 'update', expected=expected)
+            # Invoke the actual CLI directly. A diagnostic child that imports
+            # managed_uv before git pull pins the OLD implementation in the
+            # old-release row and changes the lazy-import activation boundary.
+            c.run('real-cli-update', [python, '-I', '-m', 'clover_cli.main',
+                                      'update', '--yes'], expected=expected)
         if holder is not None and holder.poll() is not None:
             raise AssertionError('Updater killed a holder instead of refusing safely')
     finally:
