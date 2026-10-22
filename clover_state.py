@@ -1104,6 +1104,32 @@ class WalUnsupportedError(sqlite3.OperationalError):
     """
 
 
+def _owned_database_update_pending(conn: sqlite3.Connection) -> bool:
+    """Defer new WAL headers while this profile's update/restart is unfinished.
+
+    Reuse the normal owner's lifecycle breadcrumbs; do not invent holder
+    heuristics or change an already-WAL database. Other profile homes and
+    explicitly external databases do not inherit this profile's obligation.
+    """
+    try:
+        from clover_constants import get_clover_home
+        from clover_cli.update_lock import read_live_update
+
+        home = get_clover_home().resolve()
+        if not (home / "fleet_restart_pending").is_file() and read_live_update() is None:
+            return False
+        cursor = conn.execute("PRAGMA database_list")
+        try:
+            main = next((row[2] for row in cursor.fetchall() if row[1] == "main"), "")
+        finally:
+            cursor.close()
+        return bool(main) and Path(main).resolve().parent == home
+    except Exception:
+        # Failure to establish quiescence must not authorize a header change.
+        logger.debug("Could not establish SQLite update boundary", exc_info=True)
+        return True
+
+
 def apply_wal_with_fallback(
     conn: sqlite3.Connection,
     *,
@@ -1206,6 +1232,17 @@ def apply_wal_with_fallback(
                 f"could not set configured journal_mode=delete (got {actual or 'no result'})"
             )
         return actual
+
+    if _owned_database_update_pending(conn):
+        if current_mode != "delete":
+            raise sqlite3.OperationalError(
+                "cannot verify DELETE journal mode while owner update/restart is pending"
+            )
+        if require_wal:
+            raise WalUnsupportedError(
+                "WAL activation deferred until the owner update and gateway restart finish"
+            )
+        return "delete"
 
     # Decide BEFORE the flip whether it would silently overwrite a mode
     # somebody chose. Both inputs are only readable while the file is still
