@@ -26,6 +26,51 @@ concurrency:
   group: windows-external-runtime-${{ github.run_id }}-${{ github.run_attempt }}
   cancel-in-progress: false
 jobs:
+  module-regression:
+    name: Native installer module regression / baseline RED candidate GREEN
+    runs-on: windows-latest
+    timeout-minutes: 25
+    env:
+      TARGET_SHA: ${{ inputs.target_sha || '8a2c6a1b3d95bf4bd339adc6815ebc1074e68665' }}
+      TARGET_TREE: ${{ inputs.target_tree || 'ecbf62d5548127468c6bcb9bcfbf6842092a0c72' }}
+      PYTHONUTF8: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: helpers
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: ab-source
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.11.9'
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+          enable-cache: false
+      - name: Exact-source native regression without installer network payload
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          python helpers/.github/windows-external-runtime/module_regression.py ab-source
+          if ($LASTEXITCODE -ne 0) { throw 'Native module regression failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: installer-module-regression-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/module-regression
+          if-no-files-found: error
+          retention-days: 14
   external-runtime:
     name: Native external venv / ${{ matrix.case }}
     runs-on: windows-latest
@@ -35,8 +80,8 @@ jobs:
       matrix:
         case: [existing-upgrade, candidate-repair, holder-refusal, provision-failure, smoke-rollback]
     env:
-      TARGET_SHA: ${{ inputs.target_sha || '5ec233281f26490471d2e48ee3e5eb0e000d90f8' }}
-      TARGET_TREE: ${{ inputs.target_tree || '44ebcad08d367e63cdc89532fac05b6531d6917f' }}
+      TARGET_SHA: ${{ inputs.target_sha || '8a2c6a1b3d95bf4bd339adc6815ebc1074e68665' }}
+      TARGET_TREE: ${{ inputs.target_tree || 'ecbf62d5548127468c6bcb9bcfbf6842092a0c72' }}
       OLD_SHA: ${{ inputs.old_sha || '9535350bee1d57cf7e466672e6f416403886bec1' }}
       PROBE_CASE: ${{ matrix.case }}
       PYTHONUTF8: '1'
