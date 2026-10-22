@@ -28,7 +28,7 @@ jobs:
           fetch-depth: 0
       - name: Real native installer and installed systemd user service
         env:
-          PREPARE_RUNNER_APT: ${{ contains(github.event.head_commit.message, '[remaining]') && 'true' || 'false' }}
+          PREPARE_RUNNER_APT: 'true'
           MODE: ${{ matrix.mode }}
           BASE: ${{ matrix.base }}
           ENTRY: ${{ matrix.entry }}
@@ -43,6 +43,9 @@ jobs:
           if test -d "$HOME/.clover/logs/update_receipts"; then cp -r "$HOME/.clover/logs/update_receipts" "$RUNNER_TEMP/evidence/"; fi
           for f in gateway_state.json .update_output.txt .update_exit_code .update_refusal.json; do
             if test -f "$HOME/.clover/$f"; then cp "$HOME/.clover/$f" "$RUNNER_TEMP/evidence/${f#.}"; fi
+          done
+          for f in "$HOME"/.clover/logs/update-output.last*.txt "$HOME"/.clover/logs/update-rollback.log; do
+            if test -f "$f"; then cp "$f" "$RUNNER_TEMP/evidence/"; fi
           done
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
