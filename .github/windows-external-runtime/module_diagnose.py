@@ -23,13 +23,18 @@ def main():
     allowed={'PATH','HOME','USERPROFILE','HOMEDRIVE','HOMEPATH','LOCALAPPDATA','APPDATA','SYSTEMROOT','TEMP','TMP','PYTHONUTF8','PYTHONIOENCODING'}
     narrow={k:v for k,v in wide.items() if k.upper() in allowed}
     rows=[]
-    variants=[('wide',wide,[]),('wide-existing-flags',wide,['-ExecutionPolicy','Bypass']),('canonical-locations',narrow,['-ExecutionPolicy','Bypass'])]
-    for key in ['WINDIR','PROGRAMFILES','PSMODULEPATH']:
+    variants=[('wide',wide,[]),('canonical-locations',narrow,['-ExecutionPolicy','Bypass'])]
+    groups = {
+        'shell-locations': {'COMSPEC','OS','SYSTEMDRIVE','PROGRAMDATA','ALLUSERSPROFILE','PUBLIC','COMMONPROGRAMFILES','COMMONPROGRAMFILES(X86)','COMMONPROGRAMW6432','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432','WINDIR'},
+        'machine-identity': {'USERNAME','USERDOMAIN','USERDNSDOMAIN','LOGONSERVER','COMPUTERNAME','NUMBER_OF_PROCESSORS','PROCESSOR_ARCHITECTURE','PROCESSOR_ARCHITEW6432','PROCESSOR_LEVEL','PROCESSOR_REVISION'},
+    }
+    for label, keys in groups.items():
+        env = dict(narrow)
+        env.update({k:v for k,v in wide.items() if k.upper() in keys})
+        variants.append(('canonical-plus-' + label, env, ['-ExecutionPolicy','Bypass']))
+    for key in ['COMSPEC','SYSTEMDRIVE','OS','USERNAME','USERDOMAIN','COMPUTERNAME','NUMBER_OF_PROCESSORS','PROCESSOR_ARCHITECTURE']:
         env=dict(narrow)
-        if key=='PSMODULEPATH':
-            env[key]=str(Path(os.environ['SYSTEMROOT'])/'System32/WindowsPowerShell/v1.0/Modules')
-        else:
-            env.update({k:v for k,v in wide.items() if k.upper()==key})
+        env.update({k:v for k,v in wide.items() if k.upper()==key})
         variants.append(('canonical-plus-'+key,env,['-ExecutionPolicy','Bypass']))
     for label,env,flags in variants:
         row={'label':label,'keys':sorted(env)}
