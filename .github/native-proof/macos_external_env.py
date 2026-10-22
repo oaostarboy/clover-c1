@@ -252,6 +252,14 @@ def main(args):
     records = [json.loads((evidence / "seed-state.json").read_text()),
                json.loads((evidence / "rollback.newest.json").read_text())]
     dump(evidence / "records.json", records)
+    if args.rollback_only:
+        call("verify", "state-after-rollback.json", ["--records", evidence / "records.json"])
+        dump(evidence / "result.json", dict(status="PASS_BOUNDED_NATIVE_ROLLBACK",
+            target_sha=args.target_sha, target_tree=args.target_tree,
+            workflow_sha=os.environ.get("GITHUB_SHA"),
+            rollback=json.loads((evidence / "rollback.json").read_text()),
+            note="Actual failed promoted-path import, original runtime restored, newest writes retained. No service/update claims."))
+        return
     # No credentials, only a local health API with a non-secret fixture key.
     (home / ".env").write_text("API_SERVER_ENABLED=true\nAPI_SERVER_KEY=native-macos-fixture-only\nAPI_SERVER_PORT=18791\nAPI_SERVER_HOST=127.0.0.1\n")
     gateway_log = (evidence / "gateway.log").open("w")
@@ -308,6 +316,7 @@ def main(args):
 if __name__ == "__main__":
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--mode", default="main")
+    p.add_argument("--rollback-only", action="store_true")
     p.add_argument("--source", required=True)
     for name in ["target-sha", "target-tree", "evidence", "uv", "output", "label", "records"]:
         p.add_argument("--" + name)

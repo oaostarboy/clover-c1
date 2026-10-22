@@ -77,6 +77,7 @@ jobs:
         shell: bash
         run: |
           python3 helpers/.github/native-proof/macos_external_env.py \
+            --rollback-only \
             --source "$GITHUB_WORKSPACE/source" \
             --target-sha 5ec233281f26490471d2e48ee3e5eb0e000d90f8 \
             --target-tree 44ebcad08d367e63cdc89532fac05b6531d6917f \

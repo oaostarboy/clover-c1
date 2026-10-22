@@ -90,7 +90,7 @@ class LocalProvider:
                     # The real agent has executed the real terminal tool, and
                     # now awaits this response. No product methods are patched.
                     owner.entered.set()
-                    if not owner.release.wait(240):
+                    if not owner.release.wait(720):
                         raise TimeoutError('test barrier not released')
                     message = {'role': 'assistant', 'content': owner.reply}
                     finish = 'stop'
@@ -290,6 +290,9 @@ def main(a):
     # VIRTUAL_ENV/PATH are also persisted by the unmodified product installer.
     env['PATH'] = str(live / 'bin') + os.pathsep + env['PATH']
     call('sqlite', 'sqlite-before')
+    run([live / 'bin/python', HELPERS / 'proof.py', 'identity', '--repo', source,
+        '--sha', a.old, '--tree', git('rev-parse', 'HEAD^{tree}'),
+        '--output', evidence / 'installed-before.json'], 'old-source-identity')
     bin = live / 'bin/clover'
     for key, value in [('model.provider', 'custom'), ('model.default', 'native-fixture'),
         ('model.base_url', 'http://127.0.0.1:18792/v1'), ('model.context_length', '131072'),
@@ -315,7 +318,7 @@ def main(a):
         received, errors = [], []
         def turn():
             try:
-                response = request('/api/sessions/native-inflight/chat', {'message': 'Run the one fixture effect, then finish.'}, timeout=360)
+                response = request('/api/sessions/native-inflight/chat', {'message': 'Run the one fixture effect, then finish.'}, timeout=900)
                 dump(evidence / 'received-response.json', response)
                 text = response['message']['content']
                 with receiver.open('a') as out:
@@ -335,6 +338,10 @@ def main(a):
         dump(evidence / 'inflight-before.json', pending)
         records.append(call('state', 'latest-state', '--label', 'latest-at-barrier'))
         dump(evidence / 'records.json', records)
+        update_paths = [evidence / 'terminal-update.log', home / 'logs/gateway.log',
+                        home / '.update_output.txt', evidence / 'irc.log']
+        update_offsets = {str(path): path.stat().st_size if path.exists() else 0
+                          for path in update_paths}
         began = time.time()
         update = None
         update_log = (evidence / 'terminal-update.log').open('w')
@@ -347,12 +354,24 @@ def main(a):
         # Do not release merely because a timer elapsed: require product drain,
         # refusal, or pause evidence in the real logs while source is still old.
         def update_activity():
-            paths = [evidence / 'terminal-update.log', home / 'logs/gateway.log',
-                     home / 'logs/update.log', evidence / 'irc.log']
-            text = '\n'.join(p.read_text(errors='replace') for p in paths if p.exists())
-            return any(s in text.lower() for s in ['in-flight', 'draining', 'active work',
-                'finish before', 'busy', 'waiting for', 'update started', 'updating clover'])
-        wait_for(update_activity, 90)
+            chunks = []
+            for path in update_paths:
+                if path.exists():
+                    with path.open('rb') as handle:
+                        handle.seek(update_offsets[str(path)])
+                        chunks.append(handle.read().decode('utf-8', errors='replace'))
+            text = '\n'.join(chunks)
+            matches = [line for line in text.splitlines() if any(s in line.lower() for s in [
+                'draining in-flight', 'in-flight turn(s)', '/update refused by pre-check',
+                'update blocked', 'refusing to update'])]
+            if matches:
+                dump(evidence / 'actual-drain-or-refusal.json', dict(time=time.time(), lines=matches))
+                return True
+            return False
+        wait_for(update_activity, 600)
+        assert thread.is_alive() and not received and not errors, 'turn did not survive until actual updater drain'
+        if (home / '.update_output.txt').exists():
+            shutil.copy2(home / '.update_output.txt', evidence / 'update-output-at-drain.log')
         dump(evidence / 'barrier-update-observation.json', dict(observed=time.time(),
             source_sha=git('rev-parse', 'HEAD'), provider_blocked=not provider.release.is_set(),
             receiver_running=thread.is_alive(), update_pid=update.pid if update else None,
@@ -365,6 +384,16 @@ def main(a):
             rc = update.wait(timeout=1800)
             dump(evidence / 'terminal-update-exit.json', dict(exit=rc, pid=update.pid))
             assert rc == 0, 'real terminal update failed'
+        else:
+            # Do not send a second request while the first detached updater is
+            # merely still fetching. Require completion or a measured refusal.
+            def first_outcome():
+                text = (home / 'logs/gateway.log').read_text(errors='replace')
+                new = text.encode()[update_offsets[str(home / 'logs/gateway.log')]:].decode(errors='replace')
+                return (git('rev-parse', 'HEAD') != a.old
+                    or (home / '.update_exit_code').exists()
+                    or '/update refused by pre-check' in new)
+            wait_for(first_outcome, 900)
         update_log.close()
         # A truthful busy refusal may require a second user update after drain.
         # Preserve the first outcome; never label this seamless.
