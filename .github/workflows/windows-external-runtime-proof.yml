@@ -1,0 +1,76 @@
+name: Windows external environment runtime proof (private candidate only)
+# Test-only helper workflow. A new file cannot be assumed dispatchable before
+# registration on the default branch, so the owner-only helper push route is
+# explicit. This workflow never pushes, merges, publishes, or uses bot secrets.
+on:
+  push:
+    branches: ['ci/windows-external-runtime/**']
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        type: string
+        required: true
+        description: Immutable exact product SHA (not workflow SHA)
+      target_tree:
+        type: string
+        required: true
+        description: Reviewed exact product tree
+      old_sha:
+        type: string
+        required: true
+        default: 9535350bee1d57cf7e466672e6f416403886bec1
+        description: Existing installed source before upgrade
+permissions:
+  contents: read
+concurrency:
+  group: windows-external-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+  cancel-in-progress: false
+jobs:
+  external-runtime:
+    name: Native external venv / ${{ matrix.case }}
+    runs-on: windows-latest
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        case: [existing-upgrade, candidate-repair, holder-refusal, provision-failure, smoke-rollback]
+    env:
+      TARGET_SHA: ${{ inputs.target_sha || 'c4338be28f3ad07f269f9b0090abdacee35cc979' }}
+      TARGET_TREE: ${{ inputs.target_tree || '51521e06f4150a375866c6148416aae2ac2ec68a' }}
+      OLD_SHA: ${{ inputs.old_sha || '9535350bee1d57cf7e466672e6f416403886bec1' }}
+      PROBE_CASE: ${{ matrix.case }}
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          path: helpers
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ env.TARGET_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+          path: source
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405 # v6.2.0
+        with:
+          python-version: '3.11.9'
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          version: '0.9.28'
+          enable-cache: false
+      - name: Real installed native CLI update and retained latest-state assertions
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          & python helpers/.github/windows-external-runtime/probe.py --source source --target-sha $env:TARGET_SHA --target-tree $env:TARGET_TREE --old-sha $env:OLD_SHA --case $env:PROBE_CASE --evidence "$env:RUNNER_TEMP/evidence"
+          if ($LASTEXITCODE -ne 0) { throw "Native external environment probe failed: $env:PROBE_CASE" }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: windows-external-${{ matrix.case }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+          retention-days: 14
