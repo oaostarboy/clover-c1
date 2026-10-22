@@ -52,14 +52,15 @@ def fixture():
         def do_POST(self):
             req=json.loads(self.rfile.read(int(self.headers['Content-Length'])))
             messages=req.get('messages',[])
-            target=any('LINUX_NATIVE_TASK' in str(m.get('content','')) for m in messages)
+            tool_enabled=any(t.get('function',{}).get('name')=='terminal' for t in req.get('tools',[]))
+            target=tool_enabled and any('LINUX_NATIVE_TASK' in str(m.get('content','')) for m in messages)
             tool_done=any(m.get('role')=='tool' and m.get('tool_call_id')==CALL for m in messages)
             audit('provider-events.jsonl',dict(at=time.time(),pid=os.getpid(),path=self.path,target=target,tool_done=tool_done,stream=req.get('stream'),roles=[m.get('role') for m in messages]))
             if target and tool_done:
                 (E/'provider-barrier').touch()
                 wait(lambda:(E/'release').exists(),2400)
             if target and not tool_done:
-                command="/usr/bin/python3 -c "+__import__('shlex').quote("from pathlib import Path; p=Path("+repr(str(E/'effects.txt'))+"); f=p.open('a'); f.write("+repr(EFFECT+'\n')+"); f.close(); print('effect completed')")
+                command="printf '%s\\n' "+EFFECT+" | tee -a "+__import__('shlex').quote(str(E/'effects.txt'))
                 msg={'role':'assistant','content':None,'tool_calls':[{'id':CALL,'type':'function','function':{'name':'terminal','arguments':json.dumps({'command':command,'timeout':30})}}]}
                 finish='tool_calls'
             else:msg={'role':'assistant','content':TOKEN if target else 'OK'};finish='stop'
@@ -128,11 +129,13 @@ def main():
     old=TARGET if base=='target' else git('rev-parse',base+'^{commit}')
     assert git('rev-parse',TARGET+'^{tree}')==os.environ['TARGET_TREE']
     dump(E/'pins.json',dict(target=TARGET,tree=os.environ['TARGET_TREE'],old=old,workflow_sha=os.environ['GITHUB_SHA'],run_url='https://github.com/'+os.environ['GITHUB_REPOSITORY']+'/actions/runs/'+os.environ['GITHUB_RUN_ID'],native_os=platform.platform(),os_release=Path('/etc/os-release').read_text(),mode=mode,entry=entry,layout=layout))
-    installer=scratch/'installer.sh';installer.write_text(subprocess.check_output(['git','-C',str(source),'show',TARGET+':scripts/install.sh'],text=True))
+    installer=scratch/'installer.sh';installer.write_text(subprocess.check_output(['git','-C',str(source),'show',old+':scripts/install.sh'],text=True))
     run(['bash',installer,'--branch','fix/reliability-product-runtime-20261022','--commit',old,'--non-interactive','--skip-setup','--skip-browser','--skip-computer-use'],'installer',timeout=2100)
     py=root/'venv/bin/python';uv=home/'bin/uv'
     if layout=='external':
-        live=scratch/'external-editable';run([uv,'venv',live,'--python',py],'external-venv')
+        # Historical managed Python is a real vulnerable SQLite baseline.
+        run([uv,'python','install','3.11.14','--no-config'],'historical-python')
+        live=scratch/'external-editable';run([uv,'venv',live,'--python','3.11.14','--managed-python','--no-config'],'external-venv')
         run([uv,'pip','install','--python',live/'bin/python','-e',str(root)+'[all]'],'external-editable-install')
         py=live/'bin/python'
     cli=[py.parent/'clover']
