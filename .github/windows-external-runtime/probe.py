@@ -118,6 +118,13 @@ class Commands:
         return log.read_text(encoding='utf-8', errors='replace').strip()
 
 
+def clone_exact_source(commands, checkout, source):
+    # Windows' autocrlf default must not rewrite bytes before provenance checks.
+    # Store this only in the disposable clone so later normal CLI pulls agree.
+    commands.run('clone', ['git', 'clone', '--config', 'core.autocrlf=false',
+                           '--no-hardlinks', checkout, source])
+
+
 def execute(a, evidence):
     if os.name != 'nt' or platform.system() != 'Windows':
         raise RuntimeError('This probe executes ONLY on native Windows')
@@ -153,7 +160,7 @@ def execute(a, evidence):
         raise AssertionError('target SHA mismatch')
     if c.run('target-tree', ['git', '-C', checkout, 'rev-parse', a.target_sha + '^{tree}']) != a.target_tree:
         raise AssertionError('target tree mismatch')
-    c.run('clone', ['git', 'clone', '--no-hardlinks', checkout, source])
+    clone_exact_source(c, checkout, source)
     start = a.old_sha if a.case == 'existing-upgrade' else a.target_sha
     c.run('starting-source', ['git', '-C', source, 'checkout', '-B', 'main', start])
     # A new private bare origin has ordinary immutable target objects. No git

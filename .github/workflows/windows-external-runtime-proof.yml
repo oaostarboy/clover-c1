@@ -35,19 +35,29 @@ jobs:
       matrix:
         case: [existing-upgrade, candidate-repair, holder-refusal, provision-failure, smoke-rollback]
     env:
-      TARGET_SHA: ${{ inputs.target_sha || 'c4338be28f3ad07f269f9b0090abdacee35cc979' }}
-      TARGET_TREE: ${{ inputs.target_tree || '51521e06f4150a375866c6148416aae2ac2ec68a' }}
+      TARGET_SHA: ${{ inputs.target_sha || '5ec233281f26490471d2e48ee3e5eb0e000d90f8' }}
+      TARGET_TREE: ${{ inputs.target_tree || '44ebcad08d367e63cdc89532fac05b6531d6917f' }}
       OLD_SHA: ${{ inputs.old_sha || '9535350bee1d57cf7e466672e6f416403886bec1' }}
       PROBE_CASE: ${{ matrix.case }}
       PYTHONUTF8: '1'
       PYTHONIOENCODING: utf-8
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        # Pin checkout bytes only; do not globally alter product Git behavior.
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
         with:
           ref: ${{ github.sha }}
           persist-credentials: false
           path: helpers
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        # Pin checkout bytes only; do not globally alter product Git behavior.
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
         with:
           ref: ${{ env.TARGET_SHA }}
           fetch-depth: 0

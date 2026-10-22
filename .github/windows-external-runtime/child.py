@@ -77,7 +77,10 @@ def state_read():
 
 def identity():
     from clover_cli.managed_uv import _default_live_venv, _PROJECT_ROOT
-    from clover_cli.update_cmd import _update_venv_dir
+    from clover_cli import update_cmd
+    # The genuine old update_cmd has no selector helper; record absence, not a
+    # fabricated selection. The post-upgrade verifier still requires its path.
+    updater_selector = getattr(update_cmd, '_update_venv_dir', None)
     from clover_cli.gateway import get_python_path
     from clover_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable
     conn = sqlite3.connect(':memory:')
@@ -91,7 +94,7 @@ def identity():
                 sqlite_source_id=source_id,
                 sqlite_unsafe=is_sqlite_wal_reset_vulnerable(sqlite3.sqlite_version_info),
                 source=str(_PROJECT_ROOT), selected_runtime=str(_default_live_venv(_PROJECT_ROOT)),
-                selected_updater_runtime=str(_update_venv_dir()),
+                selected_updater_runtime=(str(updater_selector()) if updater_selector is not None else None),
                 selected_gateway_python=get_python_path())
 
 

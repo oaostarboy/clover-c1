@@ -22,6 +22,42 @@ def load(name):
 
 
 class VerifierTests(unittest.TestCase):
+    def test_clone_preserves_blob_bytes_under_crlf_default(self):
+        probe = load('probe')
+        with tempfile.TemporaryDirectory(prefix='external-git-bytes-') as tmp:
+            root = Path(tmp)
+            source = root / 'original'
+            clone = root / 'clone'
+            config = root / 'global-config'
+            config.write_text('[core]\n    autocrlf = true\n', encoding='utf-8')
+            env = {k: v for k, v in os.environ.items() if not k.startswith('GIT_CONFIG_')}
+            env.update(GIT_CONFIG_GLOBAL=str(config), GIT_CONFIG_NOSYSTEM='1')
+            commands = probe.Commands(root, env, root)
+            commands.run('init', ['git', 'init', source], timeout=30)
+            (source / 'line-endings-proof.txt').write_bytes(b'test-only fixture\nsecond line\n')
+            commands.run('add', ['git', '-c', 'core.autocrlf=false', '-C', source, 'add', '.'], timeout=30)
+            commands.run('commit', ['git', '-c', 'user.name=Fixture', '-c', 'user.email=fixture@example.invalid', '-C', source, 'commit', '-m', 'fixture'], timeout=30)
+            if hasattr(probe, 'clone_exact_source'):
+                probe.clone_exact_source(commands, source, clone)
+            else:
+                commands.run('clone', ['git', 'clone', '--no-hardlinks', source, clone], timeout=30)
+            blob = subprocess.check_output(['git', '-C', str(clone), 'show', 'HEAD:line-endings-proof.txt'], env=env)
+            self.assertEqual((clone / 'line-endings-proof.txt').read_bytes(), blob)
+            self.assertEqual(commands.run('setting', ['git', '-C', clone, 'config', '--get', 'core.autocrlf'], timeout=30), 'false')
+
+    def test_legacy_identity_records_unavailable_selector_without_inventing_one(self):
+        import types
+        from unittest.mock import patch
+        import clover_cli
+        child = load('child')
+        before = child.identity()
+        legacy = types.ModuleType('clover_cli.update_cmd')
+        with patch.object(clover_cli, 'update_cmd', legacy), patch.dict(sys.modules, {'clover_cli.update_cmd': legacy}):
+            observed = child.identity()
+        self.assertIsNone(observed['selected_updater_runtime'])
+        self.assertEqual(observed['sqlite'], before['sqlite'])
+        self.assertEqual(observed['source'], before['source'])
+
     def test_literal_pins(self):
         probe = load('probe')
         self.assertEqual(probe.sha('a' * 40), 'a' * 40)
