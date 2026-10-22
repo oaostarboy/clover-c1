@@ -421,12 +421,18 @@ def main(a):
             assert current['state']['start_time'] == after['state']['start_time']
             samples.append(current)
             time.sleep(3)
+        final = call('observe', 'stable-final', '--expected', a.target)
+        assert final['state']['pid'] == after['state']['pid']
+        assert final['state']['start_time'] == after['state']['start_time']
+        assert final['observed'] - after['observed'] >= 90
+        samples.append(final)
         dump(evidence / 'gateway-window.json', samples)
         assert git('rev-parse', 'HEAD^{tree}') == a.tree and not git('diff', '--name-only', 'HEAD')
         run([live / 'bin/python', HELPERS / 'proof.py', 'identity', '--repo', source,
             '--sha', a.target, '--tree', a.tree, '--output', evidence / 'installed-after.json'], 'source-identity')
         call('sqlite', 'sqlite-after')
         call('verify', 'state-after', '--records', evidence / 'records.json')
+        dump(evidence / 'inflight-after-successor.json', witness.verify(pending, home, effect, receiver))
         receipt = home / 'logs/update_receipts/latest.json'
         shutil.copy2(receipt, evidence / 'update-receipt.json')
         import proof

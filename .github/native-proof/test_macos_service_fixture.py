@@ -57,6 +57,12 @@ class Contracts(unittest.TestCase):
         self.assertIn("[bin, 'gateway', 'install']", source)
         self.assertIn('proof.check_receipt(read_json(receipt), began, a.old, a.target)', source)
         self.assertIn('witness.verify(pending, home, effect, receiver)', source)
+        self.assertIn("'inflight-after-successor.json'", source)
+        self.assertIn("final['observed'] - after['observed'] >= 90", source)
+        self.assertIn("handle.seek(update_offsets[str(path)])", source)
+        self.assertIn("'draining in-flight'", source)
+        self.assertNotIn("'update started', 'updating clover'", source)
+        self.assertIn("'old-source-identity'", source)
 
 
 if __name__ == '__main__':
