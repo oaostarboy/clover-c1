@@ -75,7 +75,8 @@ def test_installer_repairs_stale_transitives(setup_module, monkeypatch):
         lambda argv, **kwargs: calls.append(argv),
     )
 
-    assert setup_module.install_deps() is True
+    # Explicit interpreter consent is now required; pins/repair remain tested.
+    assert setup_module.install_deps(python=setup_module.sys.executable) is True
     assert calls == [
         [
             setup_module.sys.executable,

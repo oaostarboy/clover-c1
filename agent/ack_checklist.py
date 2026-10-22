@@ -1304,7 +1304,7 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
                             e for e in early
                             if not (e[0] == "subagent.todo" and same_child(e[1]))
                         ]
-                    early.append((et, {k: kw.get(k) for k in ("todos", "status", "exit_reason", "outcome", "summary", "preview",
+                    early.append((et, {k: kw.get(k) for k in ("todos", "status", "exit_reason", "outcome", "task_outcome", "summary", "preview",
                                                              "task_index", "subagent_id", "title", "goal")}))
                     while len(_EARLY) > _MAX_PARTS:
                         _EARLY.pop(next(iter(_EARLY)))
@@ -1711,9 +1711,14 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
         # An outside job that exited 0 without a verdict line (parser "none"):
         # it ended cleanly, so it is done, not failed.
         state = DONE
-    if state == DONE and kw.get("outcome") == "not_done":
+    report = kw.get("task_outcome")
+    task_incomplete = isinstance(report, dict) and report.get("status") in {"partial", "blocked", "unknown"}
+    if state == DONE and (kw.get("outcome") == "not_done" or task_incomplete):
         # The run ended cleanly but the helper says the job is not done.
         state = FAILED
+        if task_incomplete and isinstance(report, dict):
+            from agent.task_outcome import outcome_reason
+            plain = outcome_reason(report)
     now = time.monotonic()
     if cl.kids:
         kid = _child_for(cl, kw, ending=True)

@@ -1363,6 +1363,14 @@ def _build_child_system_prompt(
         "points over paragraphs, and don't replay your whole process. Your "
         "response is returned to the parent agent as a summary, and overlong "
         "summaries crowd out the parent's context window.\n\n"
+        "Report the task outcome separately from whether this model turn ended. "
+        "Before the Result line, write exactly one single-line JSON report: "
+        "Task outcome: {\"status\":\"done|partial|blocked\",\"remaining\":[],"
+        "\"owner\":\"who owns the next step\",\"next_step\":\"what happens next\"}. "
+        "Choose one status, not the pipe-separated example. For partial or blocked, "
+        "list every unfinished acceptance criterion in remaining. An approval or "
+        "auth gate stays blocked; never bypass it or start automatic retries. "
+        "For done, remaining must be empty; the parent still reviews your claim.\n\n"
         "Just before that, write one line: 'Result: done' if you did what was "
         "asked, or 'Result: not done' if you could not (blocked, wrong input, "
         "only part of it). Never claim done for work you did not finish.\n\n"
@@ -3612,6 +3620,8 @@ def _run_single_child(
         duration = round(time.monotonic() - child_start, 2)
 
         summary = result.get("final_response") or ""
+        from agent.task_outcome import task_outcome
+        reported_outcome = task_outcome(result, summary)
         completed = result.get("completed", False)
         interrupted = result.get("interrupted", False)
         api_calls = result.get("api_calls", 0)
@@ -3697,6 +3707,7 @@ def _run_single_child(
         entry: Dict[str, Any] = {
             "task_index": task_index,
             "status": status,
+            "task_outcome": reported_outcome,
             "summary": summary,
             "api_calls": api_calls,
             "duration_seconds": duration,
@@ -3874,9 +3885,13 @@ def _run_single_child(
             "preview": summary[:160] if summary else entry.get("error", ""),
             "status": status,
             "exit_reason": entry.get("exit_reason", ""),
+            "task_outcome": reported_outcome,
             "duration_seconds": duration,
             "summary": summary[:500] if summary else entry.get("error", ""),
-            "outcome": _helper_outcome(summary),
+            "outcome": (
+                "not_done" if reported_outcome["status"] in {"partial", "blocked"}
+                else "done" if reported_outcome["status"] == "done" else ""
+            ),
             "input_tokens": (
                 int(_input_tokens) if isinstance(_input_tokens, (int, float)) else 0
             ),

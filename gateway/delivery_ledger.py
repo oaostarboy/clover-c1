@@ -484,7 +484,12 @@ def sweep_failed_for_runtime(
             # process-start matching prevents PID reuse from stealing work.
             if owner_pid != pid or owner_started_at != started:
                 continue
-            if str(last_error or "").strip().lower() not in _RUNTIME_RETRYABLE_ERRORS:
+            error = str(last_error or "").strip().lower()
+            # Telegram's send() returns this exact rejection before dispatch
+            # when adapter replacement outlasts its bounded reconnect wait.
+            # Other platforms' free-text errors have no equivalent guarantee.
+            telegram_not_connected = row_platform == "telegram" and error == "not connected"
+            if error not in _RUNTIME_RETRYABLE_ERRORS and not telegram_not_connected:
                 continue
             owner_guard = (oid, owner_pid, owner_started_at)
             if attempts >= MAX_ATTEMPTS or (now - created_at) > STALE_AFTER_SECONDS:
