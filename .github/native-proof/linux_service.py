@@ -145,8 +145,23 @@ def main():
             run(['sudo','cp',replacement,path],'runner-apt-mirror-'+path.name)
             changed.append(str(path))
         dump(E/'runner-package-prerequisite.json',dict(official_mirror='archive.ubuntu.com',changed_sources=changed,network_timeout_seconds=30,retries=1,product_installer_unchanged=True))
-    installer=scratch/'installer.sh';installer.write_text(subprocess.check_output(['git','-C',str(source),'show',old+':scripts/install.sh'],text=True))
-    run(['bash',installer,'--branch','fix/windows-installer-module-20261022','--commit',old,'--non-interactive','--skip-setup','--skip-browser','--skip-computer-use'],'installer',timeout=2100)
+    if os.environ.get('SEED_EDITABLE')=='true':
+        # Supported real editable dependency install, normal root/venv layout.
+        # Separate fresh row covers the full end-user shell installer.
+        home.mkdir();(home/'bin').mkdir()
+        uv_source=shutil.which('uv');assert uv_source
+        shutil.copy2(uv_source,home/'bin/uv');uv=home/'bin/uv'
+        run(['git','clone','--no-hardlinks',source,root],'editable-source-clone')
+        run(['git','-C',root,'checkout','--detach',old],'editable-source-pin')
+        run([uv,'python','install','3.11.14','--no-config'],'editable-historical-python')
+        run([uv,'venv',root/'venv','--python','3.11.14','--managed-python','--no-config'],'editable-normal-venv')
+        env['UV_PROJECT_ENVIRONMENT']=str(root/'venv')
+        run([uv,'sync','--locked','--extra','all','--python',root/'venv/bin/python'],'editable-normal-dependencies',cwd=root)
+        env.pop('UV_PROJECT_ENVIRONMENT')
+        dump(E/'bootstrap-method.json',dict(method='real uv editable normal-layout dependency seed',old_source=old,full_old_shell_installer=False,fresh_final_shell_install='separate native row'))
+    else:
+        installer=scratch/'installer.sh';installer.write_text(subprocess.check_output(['git','-C',str(source),'show',old+':scripts/install.sh'],text=True))
+        run(['bash',installer,'--branch','fix/windows-installer-module-20261022','--commit',old,'--non-interactive','--skip-setup','--skip-browser','--skip-computer-use'],'installer',timeout=2100)
     py=root/'venv/bin/python';uv=home/'bin/uv'
     if layout=='external':
         # Historical managed Python is a real vulnerable SQLite baseline.
