@@ -33,6 +33,7 @@ def wait(predicate,seconds=180):
         try:
             value=predicate()
             if value:return value
+        except AssertionError:raise
         except Exception as exc:last=exc
         time.sleep(1)
     raise TimeoutError(str(last or predicate))
@@ -56,7 +57,7 @@ def fixture():
             audit('provider-events.jsonl',dict(at=time.time(),pid=os.getpid(),path=self.path,target=target,tool_done=tool_done,stream=req.get('stream'),roles=[m.get('role') for m in messages]))
             if target and tool_done:
                 (E/'provider-barrier').touch()
-                wait(lambda:(E/'release').exists(),900)
+                wait(lambda:(E/'release').exists(),2400)
             if target and not tool_done:
                 command="/usr/bin/python3 -c "+__import__('shlex').quote("from pathlib import Path; p=Path("+repr(str(E/'effects.txt'))+"); f=p.open('a'); f.write("+repr(EFFECT+'\n')+"); f.close(); print('effect completed')")
                 msg={'role':'assistant','content':None,'tool_calls':[{'id':CALL,'type':'function','function':{'name':'terminal','arguments':json.dumps({'command':command,'timeout':30})}}]}
@@ -115,6 +116,7 @@ def main():
     mode=os.environ['MODE'];base=os.environ['BASE'];entry=os.environ['ENTRY'];layout=os.environ['LAYOUT']
     commands=[]
     def run(argv,name,check=True,timeout=1800,cwd=scratch):
+        print('START '+name,flush=True)
         with (E/(name+'.log')).open('w') as log:
             try:rc=subprocess.run(list(map(str,argv)),env=env,cwd=cwd,stdout=log,stderr=subprocess.STDOUT,timeout=timeout).returncode
             except subprocess.TimeoutExpired:rc=124
@@ -132,7 +134,7 @@ def main():
         live=scratch/'external-editable';run([uv,'venv',live,'--python',py],'external-venv')
         run([uv,'pip','install','--python',live/'bin/python','-e',str(root)+'[all]'],'external-editable-install')
         py=live/'bin/python'
-    cli=[py,'-m','clover_cli.main']
+    cli=[py.parent/'clover']
     run([py,HERE/'linux_proof.py','identity','--repo',root,'--sha',old,'--tree',git('rev-parse',old+'^{tree}'),'--output',E/'before-imports.json'],'before-identity')
     # Supported CLI config writes, never edit live config files.
     for key,value in [('model.provider','custom'),('model.base_url','http://127.0.0.1:18792/v1'),('model.default','native-test'),('agent.max_iterations','6'),('display.streaming','false')]:
@@ -191,8 +193,13 @@ def main():
             r=json.loads(p.read_text());return r.get('started_at') and p.stat().st_mtime>=began
         return (home/'.update_output.txt').exists() and (home/'.update_output.txt').stat().st_mtime>=began
     wait(started,90)
-    time.sleep(5)
-    dump(E/'during-update.json',dict(gateway_state=json.loads((home/'gateway_state.json').read_text()),barrier_released=False,effects=(E/'effects.txt').read_text().splitlines()))
+    def draining():
+        state=json.loads((home/'gateway_state.json').read_text())
+        assert state['pid']==before['pid'], 'original gateway exited before in-flight turn drained'
+        return state.get('restart_requested') is True
+    # Wait for actual product drain state, not merely updater spawn/build time.
+    wait(draining,1200)
+    dump(E/'during-update.json',dict(gateway_state=json.loads((home/'gateway_state.json').read_text()),barrier_released=False,observed_restart_requested=True,effects=(E/'effects.txt').read_text().splitlines()))
     (E/'release').touch()
     wait(lambda:(E/'received.txt').exists() and TOKEN in (E/'received.txt').read_text(),180)
     if updater:

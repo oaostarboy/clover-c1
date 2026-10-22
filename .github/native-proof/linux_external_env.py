@@ -1,9 +1,6 @@
-"""Disposable native macOS external-editable runtime proof; never run on fleet hosts.
-
-No product mocks. CLI repair is real. Rollback uses the real provisioner/stager
-and cutover, with a deliberate import failure installed in the candidate only.
-The plist is executed as argv by this harness, NOT registered with launchd.
-This is candidate-to-same-candidate runtime repair, not released-old-to-new proof.
+"""Native hosted Linux external-runtime failure proof.
+Real dependencies and provision/cutover paths; no service/update claims in this row.
+Intentional candidate-only import failure verifies rollback preserves new data.
 """
 from __future__ import annotations
 
