@@ -1,0 +1,27 @@
+name: Windows installer module causal diagnosis
+on:
+  push:
+    branches: ['ci/windows-installer-diagnose-20261022']
+permissions:
+  contents: read
+jobs:
+  module-boundary:
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.11.9'
+      - name: Native inherited environment differential
+        shell: pwsh
+        run: python .github/windows-external-runtime/module_diagnose.py
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: installer-module-diagnose
+          path: ${{ runner.temp }}/module-diagnose
+          if-no-files-found: error
+          retention-days: 14
