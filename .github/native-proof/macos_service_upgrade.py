@@ -351,9 +351,16 @@ def main(a):
         else:
             irc.update()
         # Hold a real outstanding model request through actual update activity.
-        # Do not release merely because a timer elapsed: require product drain,
-        # refusal, or pause evidence in the real logs while source is still old.
+        # Do not release merely because a timer elapsed: require the original
+        # gateway's real draining state or new product drain/refusal output.
         def update_activity():
+            state = read_json(home / 'gateway_state.json')
+            if state.get('pid') == before['state']['pid'] and state.get('gateway_state') == 'draining':
+                # The gateway publishes this from its real drain loop even
+                # when the --gateway updater does not print a drain banner.
+                dump(evidence / 'actual-drain-or-refusal.json', dict(time=time.time(),
+                    lines=[], observed_state=state, basis='live original gateway draining'))
+                return True
             chunks = []
             for path in update_paths:
                 if path.exists():
@@ -363,6 +370,7 @@ def main(a):
             text = '\n'.join(chunks)
             matches = [line for line in text.splitlines() if any(s in line.lower() for s in [
                 'draining in-flight', 'in-flight turn(s)', '/update refused by pre-check',
+                'deferring stop() until they finish', 'restart deferred: waiting on',
                 'update blocked', 'refusing to update'])]
             if matches:
                 dump(evidence / 'actual-drain-or-refusal.json', dict(time=time.time(), lines=matches))
