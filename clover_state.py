@@ -1105,18 +1105,20 @@ class WalUnsupportedError(sqlite3.OperationalError):
 
 
 def _owned_database_update_pending(conn: sqlite3.Connection) -> bool:
-    """Defer new WAL headers while this profile's update/restart is unfinished.
+    """Defer new WAL headers until this install's owner restart finishes.
 
-    Reuse the normal owner's lifecycle breadcrumbs; do not invent holder
-    heuristics or change an already-WAL database. Other profile homes and
-    explicitly external databases do not inherit this profile's obligation.
+    Every profile sharing the interpreter observes its owner's breadcrumb.
+    Explicitly external databases do not inherit the profile's obligation.
     """
     try:
         from clover_constants import get_clover_home
         from clover_cli.update_lock import read_live_update
+        from clover_cli.managed_uv import _runtime_restart_obligation_pending
 
         home = get_clover_home().resolve()
-        if not (home / "fleet_restart_pending").is_file() and read_live_update() is None:
+        if (not (home / "fleet_restart_pending").is_file()
+                and read_live_update() is None
+                and not _runtime_restart_obligation_pending(Path(__file__).resolve().parent)):
             return False
         cursor = conn.execute("PRAGMA database_list")
         try:
@@ -1138,7 +1140,9 @@ def apply_wal_with_fallback(
 ) -> str:
     """Set ``journal_mode=WAL`` on ``conn``, falling back to DELETE on failure.
 
-    Returns the journal mode actually set (``"wal"`` or ``"delete"``).
+    Returns the journal mode actually set (normally ``"wal"`` or ``"delete"``).
+    While an owner update/restart is pending, retain any verified non-WAL
+    mode unchanged rather than activating WAL under old-runtime openers.
 
     On WAL-incompatible filesystems (NFS, SMB, some FUSE, ZFS), SQLite either
     raises ``OperationalError("locking protocol")`` /
@@ -1234,15 +1238,15 @@ def apply_wal_with_fallback(
         return actual
 
     if _owned_database_update_pending(conn):
-        if current_mode != "delete":
+        if current_mode is None:
             raise sqlite3.OperationalError(
-                "cannot verify DELETE journal mode while owner update/restart is pending"
+                "cannot verify journal mode while owner update/restart is pending"
             )
         if require_wal:
             raise WalUnsupportedError(
                 "WAL activation deferred until the owner update and gateway restart finish"
             )
-        return "delete"
+        return current_mode
 
     # Decide BEFORE the flip whether it would silently overwrite a mode
     # somebody chose. Both inputs are only readable while the file is still
