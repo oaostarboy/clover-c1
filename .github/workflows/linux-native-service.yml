@@ -8,8 +8,8 @@ concurrency:
   group: linux-native-service-${{ github.run_id }}
   cancel-in-progress: false
 env:
-  TARGET_REF: 7e4430fb084ccc9fcbb1f8365d6c6aba9e2ee299
-  TARGET_TREE: 348a35834f87343e813831359d92d3aea37c605d
+  TARGET_REF: 86ba5907b80230d475e10726c0e5cfaebf84788e
+  TARGET_TREE: 60e020347efd18f3617e08fa8262c62d95b2394d
 jobs:
   linux:
     if: ${{ !contains(github.event.head_commit.message, '[runtime-only]') }}

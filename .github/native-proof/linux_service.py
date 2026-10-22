@@ -229,6 +229,13 @@ def main():
         return (home/'.update_output.txt').exists() and (home/'.update_output.txt').stat().st_mtime>=began
     wait(started,90)
     def draining():
+        # Keep progress before the gateway/watcher rotates or replaces its
+        # output with a final verdict. Diagnostics never change product state.
+        saved=E/'updater-progress-longest.log'
+        for raw in (home/'.update_output.txt',home/'logs/update-output.last.txt'):
+            if raw.exists():
+                data=raw.read_bytes()
+                if len(data)>(saved.stat().st_size if saved.exists() else 0):saved.write_bytes(data)
         state=json.loads((home/'gateway_state.json').read_text())
         telemetry=dict(at=time.time(),gateway=state)
         for name in ['.update_prompt.json','.update_refusal.json','.update_exit_code']:
