@@ -130,7 +130,7 @@ def main():
     assert git('rev-parse',TARGET+'^{tree}')==os.environ['TARGET_TREE']
     dump(E/'pins.json',dict(target=TARGET,tree=os.environ['TARGET_TREE'],old=old,workflow_sha=os.environ['GITHUB_SHA'],run_url='https://github.com/'+os.environ['GITHUB_REPOSITORY']+'/actions/runs/'+os.environ['GITHUB_RUN_ID'],native_os=platform.platform(),os_release=Path('/etc/os-release').read_text(),mode=mode,entry=entry,layout=layout))
     installer=scratch/'installer.sh';installer.write_text(subprocess.check_output(['git','-C',str(source),'show',old+':scripts/install.sh'],text=True))
-    run(['bash',installer,'--branch','fix/reliability-product-runtime-20261022','--commit',old,'--non-interactive','--skip-setup','--skip-browser','--skip-computer-use'],'installer',timeout=2100)
+    run(['bash',installer,'--branch','fix/windows-installer-module-20261022','--commit',old,'--non-interactive','--skip-setup','--skip-browser','--skip-computer-use'],'installer',timeout=2100)
     py=root/'venv/bin/python';uv=home/'bin/uv'
     if layout=='external':
         # Historical managed Python is a real vulnerable SQLite baseline.
@@ -160,7 +160,21 @@ def main():
         parsed=dict(line.split('=',1) for line in props.splitlines() if '=' in line)
         assert parsed['ActiveState']=='active' and int(parsed['MainPID'])==state['pid'],props
         return state
+    def runtime_observation(state,label,require_safe=False):
+        code="import sqlite3,_sqlite3,sys,json; c=sqlite3.connect(':memory:'); print(json.dumps(dict(sqlite=sqlite3.sqlite_version,source_id=c.execute('select sqlite_source_id()').fetchone()[0],module=_sqlite3.__file__,executable=sys.executable,base_executable=sys._base_executable,prefix=sys.prefix)))"
+        data=json.loads(subprocess.check_output([str(py),'-I','-c',code],env=env,cwd=scratch,text=True))
+        exe=os.readlink(f"/proc/{state['pid']}/exe")
+        maps=Path(f"/proc/{state['pid']}/maps").read_text()
+        data['gateway_pid']=state['pid'];data['gateway_executable']=exe
+        data['gateway_sqlite_extension_loaded']=data['module'] in maps
+        data['gateway_executable_matches_cli_base']=os.path.samefile(exe,data['base_executable'])
+        dump(E/(label+'-sqlite-runtime.json'),data)
+        assert data['gateway_executable_matches_cli_base'] and data['gateway_sqlite_extension_loaded'],data
+        if require_safe:
+            run([py,'-I','-c','import sqlite3;from clover_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable as bad;assert not bad(sqlite3.sqlite_version_info)'],label+'-sqlite-safe')
+        return data
     before=observe('before',old)
+    runtime_observation(before,'before')
     run(['systemctl','--user','cat','clover-gateway.service'],'registered-unit')
     if mode=='fresh':
         observe('fresh-stable',TARGET,90)
@@ -199,6 +213,17 @@ def main():
     wait(started,90)
     def draining():
         state=json.loads((home/'gateway_state.json').read_text())
+        telemetry=dict(at=time.time(),gateway=state)
+        for name in ['.update_prompt.json','.update_refusal.json','.update_exit_code']:
+            path=home/name
+            if path.exists():telemetry[name]=path.read_text()[:5000]
+        dump(E/'waiting-for-drain.json',telemetry)
+        if updater is not None and updater.poll() is not None:
+            assert updater.returncode==0, 'updater exited before drain: '+str(updater.returncode)
+        exit_path=home/'.update_exit_code'
+        if exit_path.exists():
+            assert exit_path.read_text().strip()=='0','chat updater exited before drain: '+exit_path.read_text()
+
         assert state['pid']==before['pid'], 'original gateway exited before in-flight turn drained'
         return state.get('restart_requested') is True
     # Wait for actual product drain state, not merely updater spawn/build time.
@@ -214,7 +239,19 @@ def main():
     run([py,HERE/'linux_proof.py','identity','--repo',root,'--sha',TARGET,'--tree',os.environ['TARGET_TREE'],'--output',E/'after-imports.json'],'after-identity')
     receipt=json.loads((home/'logs/update_receipts/latest.json').read_text());dump(E/'update-receipt.json',receipt)
     loadmodule('proof').check_receipt(receipt,began,old,TARGET)
-    dump(E/'inflight-after.json',w.verify(snapshot,home,E/'effects.txt',E/'received.txt'))
+    runtime_observation(after,'after',require_safe=True)
+    try:
+        dump(E/'inflight-after.json',w.verify(snapshot,home,E/'effects.txt',E/'received.txt'))
+    except ValueError as exc:
+        transcript=w.rows(home,snapshot['session'])
+        dump(E/'witness-failure-counts.json',dict(error=str(exc),
+            prior_rows_unchanged=transcript[:len(snapshot['rows'])]==snapshot['rows'],
+            canonical_tool_calls=w.call_count(transcript,CALL),
+            canonical_tool_results=sum(x['role']=='tool' and x['tool_call_id']==CALL for x in transcript),
+            canonical_final_replies=sum(x['role']=='assistant' and x['content']==TOKEN for x in transcript),
+            external_tool_effects=w.line_count(E/'effects.txt',EFFECT),
+            received_final_replies=w.line_count(E/'received.txt',TOKEN)))
+        raise
     run([py,'-c','import sqlite3,sys,json;from clover_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable as bad;print(json.dumps(dict(executable=sys.executable,prefix=sys.prefix,sqlite=sqlite3.sqlite_version)));assert not bad(sqlite3.sqlite_version_info)'],'safe-sqlite')
     dump(E/'result.json',dict(status='PASS_NATIVE_OLD_TO_TARGET_SYSTEMD_INFLIGHT',tests=9,old=old,target=TARGET,before_pid=before['pid'],after_pid=after['pid'],service='real registered user systemd',automatic_restart=True,transport='local IRC, not Telegram',layout=layout))
 
