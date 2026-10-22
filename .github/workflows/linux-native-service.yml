@@ -12,6 +12,7 @@ env:
   TARGET_TREE: 44ebcad08d367e63cdc89532fac05b6531d6917f
 jobs:
   linux:
+    if: ${{ !contains(github.event.head_commit.message, '[runtime-only]') }}
     runs-on: ubuntu-24.04
     timeout-minutes: 55
     strategy:

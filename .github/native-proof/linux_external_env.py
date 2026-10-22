@@ -129,6 +129,18 @@ def child(args):
                                resolved_python=str((live / "bin/python").resolve()),
                                alias_status=result.status, foreign_status=result2.status,
                                directory_fsync=directory_fsync))
+    elif args.mode == "provision-failure":
+        before = identity()
+        assert before["vulnerable"]
+        inode = (live / "pyvenv.cfg").stat().st_ino
+        newest = write_state("newest-before-provision-failure")
+        # Real executable fails real provisioning commands; no monkeypatch.
+        failed = m.repair_vulnerable_runtime("/usr/bin/false", project_root=root, venv_dir=live)
+        assert failed.status == "failed", failed
+        assert (live / "pyvenv.cfg").stat().st_ino == inode
+        state = verify_state([newest])
+        dump(args.output, dict(status=failed.status, detail=failed.detail,
+                              preserved=state, before=before))
     elif args.mode == "rollback":
         before = identity()
         assert before["vulnerable"], "historical seed runtime is not vulnerable; do not fabricate this case"
@@ -193,6 +205,7 @@ def main(args):
         if proc.returncode and not allow:raise RuntimeError(name+" failed")
         return proc.returncode
     run(["git","clone","--no-hardlinks",str(Path(args.source).resolve()),root],"clone")
+    run(["git","-C",root,"fetch","https://github.com/oaostarboy/clover-c1.git",args.target_sha],"candidate-objects")
     run(["git","-C",root,"checkout","--detach",args.target_sha],"pin")
     assert subprocess.check_output(["git","-C",str(root),"rev-parse","HEAD^{tree}"],text=True).strip()==args.target_tree
     run([uv,"python","install","3.11.14"],"seed-python")
@@ -202,6 +215,7 @@ def main(args):
     env.pop("UV_PROJECT_ENVIRONMENT")
     def call(mode,name,extra=()):return run([live/"bin/python","-I",Path(__file__).resolve(),"--mode",mode,"--source",root,"--uv",uv,"--output",evidence/name,*extra],name)
     call("identity","before.json");call("ownership","ownership.json");call("state","seed.json",["--label","seed"])
+    call("provision-failure","provision-failure.json")
     call("rollback","rollback.json")
     records=[json.loads((evidence/"seed.json").read_text()),json.loads((evidence/"rollback.newest.json").read_text())]
     dump(evidence/"records.json",records)
