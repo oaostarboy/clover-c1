@@ -161,15 +161,16 @@ def main():
         assert parsed['ActiveState']=='active' and int(parsed['MainPID'])==state['pid'],props
         return state
     def runtime_observation(state,label,require_safe=False):
-        code="import sqlite3,_sqlite3,sys,json; c=sqlite3.connect(':memory:'); print(json.dumps(dict(sqlite=sqlite3.sqlite_version,source_id=c.execute('select sqlite_source_id()').fetchone()[0],module=_sqlite3.__file__,executable=sys.executable,base_executable=sys._base_executable,prefix=sys.prefix)))"
+        code="import sqlite3,_sqlite3,sys,json; c=sqlite3.connect(':memory:'); print(json.dumps(dict(sqlite=sqlite3.sqlite_version,source_id=c.execute('select sqlite_source_id()').fetchone()[0],module=getattr(_sqlite3,'__file__',None),module_origin=_sqlite3.__spec__.origin,executable=sys.executable,base_executable=sys._base_executable,prefix=sys.prefix)))"
         data=json.loads(subprocess.check_output([str(py),'-I','-c',code],env=env,cwd=scratch,text=True))
         exe=os.readlink(f"/proc/{state['pid']}/exe")
         maps=Path(f"/proc/{state['pid']}/maps").read_text()
         data['gateway_pid']=state['pid'];data['gateway_executable']=exe
-        data['gateway_sqlite_extension_loaded']=data['module'] in maps
+        data['gateway_sqlite_extension_loaded']=bool(data['module'] and data['module'] in maps)
+        data['sqlite_statically_built_in']=data['module_origin']=='built-in' and data['module'] is None
         data['gateway_executable_matches_cli_base']=os.path.samefile(exe,data['base_executable'])
         dump(E/(label+'-sqlite-runtime.json'),data)
-        assert data['gateway_executable_matches_cli_base'] and data['gateway_sqlite_extension_loaded'],data
+        assert data['gateway_executable_matches_cli_base'] and (data['gateway_sqlite_extension_loaded'] or data['sqlite_statically_built_in']),data
         if require_safe:
             run([py,'-I','-c','import sqlite3;from clover_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable as bad;assert not bad(sqlite3.sqlite_version_info)'],label+'-sqlite-safe')
         return data
