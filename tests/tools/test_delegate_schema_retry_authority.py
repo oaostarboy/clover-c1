@@ -243,4 +243,3 @@ def test_bounded_continuation_then_schema_retry_uses_only_final_evidence(monkeyp
     assert tracker.snapshot("continued-schema")[0]["state"] == expected
     assert entry["task_outcome"] == ({"status": "unknown"} if boundary == "error"
                                        else BLOCKED if boundary == "blocked" else DONE)
-
