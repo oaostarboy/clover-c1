@@ -1,0 +1,89 @@
+name: macOS actual old-source launchd upgrade and in-flight witness
+on:
+  push:
+    branches: ['ci/macos-service-acceptance-20261022']
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: macos-service-upgrade-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  upgrade:
+    name: macOS launchd / ${{ matrix.base }} / ${{ matrix.entry }}
+    runs-on: macos-15
+    timeout-minutes: 65
+    strategy:
+      fail-fast: false
+      matrix:
+        base: [release, main]
+        entry: [terminal, gateway]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 5ec233281f26490471d2e48ee3e5eb0e000d90f8
+          fetch-depth: 0
+          path: source
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          enable-cache: false
+      - name: Actual old install, launchd registration, tool barrier and supported update
+        shell: bash
+        env:
+          BASE: ${{ matrix.base }}
+          ENTRY: ${{ matrix.entry }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/evidence"
+          old=32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+          if [[ $BASE == main ]]; then old=9535350bee1d57cf7e466672e6f416403886bec1; fi
+          python3 helpers/.github/native-proof/macos_service_upgrade.py \
+            --source "$GITHUB_WORKSPACE/source" --old "$old" --entry "$ENTRY" \
+            --target 5ec233281f26490471d2e48ee3e5eb0e000d90f8 \
+            --tree 44ebcad08d367e63cdc89532fac05b6531d6917f \
+            --evidence "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: macos-service-${{ matrix.base }}-${{ matrix.entry }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+  rollback:
+    name: Separate native runtime failed-promotion newest-write rollback
+    runs-on: macos-15
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: ${{ github.sha }}
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 5ec233281f26490471d2e48ee3e5eb0e000d90f8
+          fetch-depth: 0
+          path: source
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          enable-cache: false
+      - name: Real provision, failed promoted import and newest-write rollback
+        shell: bash
+        run: |
+          python3 helpers/.github/native-proof/macos_external_env.py \
+            --source "$GITHUB_WORKSPACE/source" \
+            --target-sha 5ec233281f26490471d2e48ee3e5eb0e000d90f8 \
+            --target-tree 44ebcad08d367e63cdc89532fac05b6531d6917f \
+            --evidence "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: macos-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
