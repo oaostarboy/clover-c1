@@ -3564,7 +3564,6 @@ def _run_single_child(
                 # verbatim (no schema re-paste — the child already holds
                 # the contract in its context).
                 _schema_retries = 1
-                _retry_result = None
                 try:
                     _retry_result = child.run_conversation(
                         user_message=build_retry_message(_schema_errors),
@@ -3577,24 +3576,62 @@ def _run_single_child(
                         task_index,
                         _retry_exc,
                     )
-                if isinstance(_retry_result, dict):
-                    _retry_text = _retry_result.get("final_response") or ""
-                    if _retry_text.strip():
-                        result["final_response"] = _retry_text
+                    _retry_result = {"failed": True, "error": str(_retry_exc)}
+
+                # The final leg owns outcome/termination evidence, including
+                # absent fields. Never overlay it on an earlier success:
+                # that would retain stale task_outcome/completed/Stop flags.
+                _prior_result = result
+                result = dict(_retry_result) if isinstance(_retry_result, dict) else {
+                    "failed": True,
+                    "error": "Subagent schema-retry returned an invalid result.",
+                }
+                _retry_text = result.get("final_response")
+                if _retry_text is None:
+                    _retry_text = ""
+                from agent.task_outcome import task_outcome
+                _retry_obligation = task_outcome(result, "")["status"] in {"partial", "blocked"}
+                if not isinstance(_retry_text, str) or (not _retry_text.strip() and not _retry_obligation):
+                    # No current response is not evidence for the old verdict.
+                    # A valid current obligation is evidence even without prose;
+                    # malformed output or a real failure still takes precedence.
+                    result["failed"] = True
+                    if not result.get("error"):
+                        result["error"] = (result.get("failure_reason")
+                                           or "Subagent schema-retry did not produce a response.")
+                    _retry_text = ""
+                result["final_response"] = _retry_text
+                for _key in ("auto_continuations", "continuation_kinds", "storage_recovery"):
+                    if _key not in result and _key in _prior_result:
+                        result[_key] = _prior_result[_key]
+                _pending = [_leg.get("pending_steer") for _leg in (_prior_result, result)]
+                _pending = [text for text in _pending if isinstance(text, str) and text.strip()]
+                if _pending:
+                    result["pending_steer"] = "\n".join(_pending)
+                _api_total = 0
+                for _leg in (_prior_result, result):
                     try:
-                        result["api_calls"] = int(
-                            result.get("api_calls", 0) or 0
-                        ) + int(_retry_result.get("api_calls", 0) or 0)
-                    except (TypeError, ValueError):
-                        pass
-                    _retry_messages = _retry_result.get("messages")
-                    if isinstance(_retry_messages, list) and isinstance(
-                        result.get("messages"), list
-                    ):
-                        result["messages"] = result["messages"] + _retry_messages
-                    _schema_valid, _schema_errors = validate_output(
-                        _retry_text, _output_schema
+                        _api_total += int(_leg.get("api_calls", 0) or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        pass  # retain known accounting from the other leg
+                result["api_calls"] = _api_total
+                _retry_messages = result.get("messages")
+                if isinstance(_prior_result.get("messages"), list):
+                    result["messages"] = _prior_result["messages"] + (
+                        _retry_messages if isinstance(_retry_messages, list) else []
                     )
+                # Stop may arrive during the repair even if the provider returns
+                # success. It still wins over task/schema evidence at assembly.
+                _hard_stop = getattr(child, "_hard_interrupt_requested", None)
+                if (getattr(child, "_interrupt_requested", False) is True or (
+                    _hard_stop is not None
+                    and callable(getattr(_hard_stop, "is_set", None))
+                    and _hard_stop.is_set() is True
+                )):
+                    result["interrupted"] = True
+                _schema_valid, _schema_errors = validate_output(
+                    _retry_text, _output_schema
+                )
 
         # Linearization boundary for registry steering. From this point on the
         # child cannot consume another steer. Closing under the registry lock
@@ -3643,6 +3680,11 @@ def _run_single_child(
             status = "interrupted"
         elif _turn_failed:
             status = "failed"
+        elif (_schema_retries and not summary.strip()
+              and reported_outcome["status"] in {"partial", "blocked"}):
+            # Structured retry evidence can carry the obligation without prose.
+            # Turn completion is not task completion; activity renders incomplete.
+            status = "completed"
         elif summary and not _empty_sentinel:
             # A summary means the subagent produced usable output.
             # exit_reason ("completed" vs "max_iterations") already
