@@ -1,0 +1,71 @@
+name: Linux isolated service and install acceptance
+on:
+  push:
+    branches: [ci/linux-native-service-20261022]
+permissions:
+  contents: read
+concurrency:
+  group: linux-native-service-${{ github.run_id }}
+  cancel-in-progress: false
+env:
+  TARGET_REF: 5ec233281f26490471d2e48ee3e5eb0e000d90f8
+  TARGET_TREE: 44ebcad08d367e63cdc89532fac05b6531d6917f
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - {mode: fresh, base: target, entry: cli, layout: normal}
+          - {mode: update, base: v1.5.6, entry: cli, layout: normal}
+          - {mode: update, base: v1.5.6, entry: chat, layout: external}
+          - {mode: update, base: '9535350bee1d57cf7e466672e6f416403886bec1', entry: cli, layout: external}
+          - {mode: update, base: '9535350bee1d57cf7e466672e6f416403886bec1', entry: chat, layout: normal}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Real native installer and installed systemd user service
+        env:
+          MODE: ${{ matrix.mode }}
+          BASE: ${{ matrix.base }}
+          ENTRY: ${{ matrix.entry }}
+          LAYOUT: ${{ matrix.layout }}
+        run: python helpers/.github/native-proof/linux_service.py
+      - name: Service diagnostics even on failure
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          systemctl --user show clover-gateway.service > "$RUNNER_TEMP/evidence/unit-final.txt" 2>&1 || true
+          journalctl --user -u clover-gateway.service --no-pager -n 300 > "$RUNNER_TEMP/evidence/journal.log" 2>&1 || true
+          if test -d "$HOME/.clover/logs/update_receipts"; then cp -r "$HOME/.clover/logs/update_receipts" "$RUNNER_TEMP/evidence/"; fi
+          for f in gateway_state.json .update_output.txt .update_exit_code .update_refusal.json; do
+            if test -f "$HOME/.clover/$f"; then cp "$HOME/.clover/$f" "$RUNNER_TEMP/evidence/"; fi
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: linux-${{ matrix.mode }}-${{ matrix.base }}-${{ matrix.entry }}-${{ matrix.layout }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@v6
+      - name: Real external runtime provisioning and rollback preserves new data
+        run: python helpers/.github/native-proof/linux_external_env.py --source helpers --target-sha "$TARGET_REF" --target-tree "$TARGET_TREE" --evidence "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: linux-external-runtime-failure-rollback
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
