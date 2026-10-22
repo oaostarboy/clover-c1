@@ -16,7 +16,7 @@ pytestmark = pytest.mark.skipif(
 )
 
 
-@pytest.mark.parametrize('obligation', ['live-update', 'fleet-restart'])
+@pytest.mark.parametrize('obligation', ['live-update', 'fleet-restart', 'shared-runtime'])
 @pytest.mark.parametrize('require_wal', [False, True])
 def test_update_boundary_defers_delete_to_wal_until_old_holder_exits(
     tmp_path, monkeypatch, request, obligation, require_wal
@@ -36,6 +36,18 @@ def test_update_boundary_defers_delete_to_wal_until_old_holder_exits(
         stdin=subprocess.PIPE,stdout=subprocess.PIPE,stderr=subprocess.PIPE,text=True)
     marker=home/('.clover-update-in-progress' if obligation=='live-update' else 'fleet_restart_pending')
     try:
+        if obligation == 'shared-runtime':
+            from clover_cli import managed_uv
+            root = tmp_path / 'shared-checkout'
+            root.mkdir()
+            owner = tmp_path / 'updating-profile'
+            owner.mkdir()
+            monkeypatch.setenv('CLOVER_HOME', str(owner))
+            monkeypatch.setattr(managed_uv, '_PROJECT_ROOT', root)
+            assert managed_uv._arm_runtime_restart_obligation()
+            monkeypatch.setenv('CLOVER_HOME', str(home))
+            monkeypatch.setattr(state, '__file__', str(root / 'clover_state.py'))
+            marker = owner / 'fleet_restart_pending'
         version=json.loads(old.stdout.readline())
         request.node.user_properties.append(('holding_sqlite_version',version['sqlite']))
         request.node.user_properties.append(('new_sqlite_version',sqlite3.sqlite_version))

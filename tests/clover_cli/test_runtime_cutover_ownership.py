@@ -23,7 +23,8 @@ def test_explicit_foreign_external_environment_is_refused_before_probe(tmp_path,
     assert python.read_text(encoding='utf-8') == 'must remain untouched'
 
 
-def test_runtime_cutover_arms_existing_restart_obligation_before_swap(tmp_path):
+@pytest.mark.parametrize('preexisting', [False, True])
+def test_runtime_cutover_arms_existing_restart_obligation_before_swap(tmp_path, preexisting):
     from clover_constants import get_clover_home
     from tests.clover_cli.test_managed_uv import _make_runtime_install, _runtime_info
     root,live,sentinel=_make_runtime_install(tmp_path)
@@ -33,11 +34,15 @@ def test_runtime_cutover_arms_existing_restart_obligation_before_swap(tmp_path):
     safe=_runtime_info(tmp_path/'safe-python',sqlite_version=(3,53,4))
     marker=get_clover_home()/'fleet_restart_pending'
     assert not marker.exists()
+    original = b'prior pull still needs its own restart\n' if preexisting else None
+    if original is not None:
+        marker.write_bytes(original)
     def cutover(*args,**kwargs):
         assert marker.is_file(), 'restart obligation must exist BEFORE replacing the live runtime'
         return False,None,None,'deliberate pre-swap hold'
     generation=m.managed_python_install_dir(root)/'test-generation';generation.mkdir(parents=True)
-    with (patch.object(m,'probe_sqlite_runtime',return_value=old),
+    with (patch.object(m,'_PROJECT_ROOT',root),
+          patch.object(m,'probe_sqlite_runtime',return_value=old),
           patch.object(m,'_refresh_managed_uv_catalog',return_value=False),
           patch.object(m,'_install_safe_python_generation',return_value=(generation,safe.executable,safe)),
           patch.object(m,'_stage_candidate_venv',return_value=candidate),
@@ -45,7 +50,8 @@ def test_runtime_cutover_arms_existing_restart_obligation_before_swap(tmp_path):
         result=m.repair_vulnerable_runtime('uv',project_root=root)
     assert result.status == 'failed'
     assert sentinel.read_bytes() == before
-    assert marker.is_file()
+    assert (marker.read_bytes() if marker.exists() else None) == original
+    assert not m._runtime_restart_pending_path(root).exists()
 
 
 @pytest.mark.linux_only

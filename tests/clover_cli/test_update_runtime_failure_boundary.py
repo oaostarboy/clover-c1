@@ -70,7 +70,9 @@ def test_failed_bootstrap_reports_runtime_failure_once(tmp_path, capsys):
     assert capsys.readouterr().out.count('Managed Python runtime was not replaced') == 1
 
 
-def test_unproved_runtime_ownership_refuses_update_without_executing_foreign_python(tmp_path):
+def test_unproved_runtime_ownership_refuses_update_without_executing_foreign_python(tmp_path, monkeypatch):
+    import sqlite3
+    monkeypatch.setattr(sqlite3, 'sqlite_version', '3.50.4')
     uv=tmp_path/'uv';uv.write_text('fixture',encoding='utf-8')
     repair=m.RuntimeRepairResult('refused','virtual environment ownership could not be established')
     with (patch.object(m,'resolve_uv',return_value=str(uv)),
