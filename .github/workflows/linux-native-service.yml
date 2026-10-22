@@ -8,8 +8,8 @@ concurrency:
   group: linux-native-service-${{ github.run_id }}
   cancel-in-progress: false
 env:
-  TARGET_REF: 1788e8cd2b587edc195e3e17117e21bb0a1d9b7d
-  TARGET_TREE: 1753fbec085c83cfe3f854bff05209c266c30978
+  TARGET_REF: 7e4430fb084ccc9fcbb1f8365d6c6aba9e2ee299
+  TARGET_TREE: 348a35834f87343e813831359d92d3aea37c605d
 jobs:
   linux:
     if: ${{ !contains(github.event.head_commit.message, '[runtime-only]') }}
@@ -20,6 +20,7 @@ jobs:
       matrix:
         include:
           - {mode: update, base: v1.5.6, entry: chat, layout: external}
+          - {mode: update, base: v1.5.6, entry: cli, layout: external}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
