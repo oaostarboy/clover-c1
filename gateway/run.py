@@ -9241,10 +9241,33 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
     def _running_agent_count(self) -> int:
         return len(self._running_agents)
 
+    def _active_chat_work_count(self) -> int:
+        """Count chat turns through the outer send and durable delivery ACK.
+
+        The runner releases its agent slot before the adapter sends the returned
+        final answer. That carrier can still be awaiting the transport, the
+        subclass's post-send hooks, or the ledger commit. Restart must keep the
+        transport alive until it finishes; otherwise a received answer remains
+        ``attempting`` and the successor correctly replays it as uncertain.
+        Adapter session tasks also cover the handler-to-send handoff, with no
+        untracked gap. Union session keys so an executing agent is counted once.
+        """
+        active = set(self._running_agents)
+        adapters = list(getattr(self, "adapters", {}).values())
+        for profile_adapters in getattr(self, "_profile_adapters", {}).values():
+            adapters.extend(profile_adapters.values())
+        for adapter in adapters:
+            if not isinstance(adapter, BasePlatformAdapter):
+                continue
+            for key, task in adapter._session_tasks.items():
+                if isinstance(task, asyncio.Task) and not task.done():
+                    active.add(key)
+        return len(active)
+
     def _active_work_count(self) -> int:
-        """All agent work the gateway must expose and drain as one total."""
+        """All agent and reply work the gateway must expose and drain."""
         return (
-            self._running_agent_count()
+            self._active_chat_work_count()
             + self._active_cron_job_count()
             + self._active_api_run_count()
         )
@@ -11898,7 +11921,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         self, timeout: float, cron_timeout: Optional[float] = None
     ) -> tuple[Dict[str, Any], bool]:
         snapshot = self._snapshot_running_agents()
-        last_active_count = self._running_agent_count()
+        last_active_count = self._active_chat_work_count()
         last_cron_count = self._active_cron_job_count()
         last_api_count = self._active_api_run_count()
         last_status_at = 0.0
@@ -11906,7 +11929,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         def _maybe_update_status(force: bool = False) -> None:
             nonlocal last_active_count, last_cron_count, last_api_count, last_status_at
             now = asyncio.get_running_loop().time()
-            active_count = self._running_agent_count()
+            active_count = self._active_chat_work_count()
             cron_count = self._active_cron_job_count()
             api_count = self._active_api_run_count()
             if (
@@ -11928,7 +11951,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         # or a cron job's tool work gets killed with zero warning the
         # instant it's the only active thing running (#60432).
         # API-server / desk sessions have the same structural gap (#63529).
-        if not self._running_agents and last_cron_count == 0 and last_api_count == 0:
+        # Chat work includes the adapter's final-send/ACK carrier after its
+        # agent slot was released. Keep the transport alive through that ACK.
+        if last_active_count == 0 and last_cron_count == 0 and last_api_count == 0:
             _maybe_update_status(force=True)
             return snapshot, False
 
@@ -11949,7 +11974,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
         def _still_draining() -> bool:
             now = loop.time()
             if (
-                len(self._running_agents) or self._active_api_run_count()
+                self._active_chat_work_count() or self._active_api_run_count()
             ) and now < deadline:
                 return True
             return bool(self._active_cron_job_count()) and now < cron_deadline
@@ -11962,7 +11987,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
             _maybe_update_status()
             await asyncio.sleep(0.1)
         timed_out = (
-            bool(len(self._running_agents))
+            bool(self._active_chat_work_count())
             or bool(self._active_cron_job_count())
             or bool(self._active_api_run_count())
         )
