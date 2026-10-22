@@ -90,6 +90,7 @@ def fixture():
                     if parts[0]=='NICK':c['nick']=parts[1]
                     elif parts[0]=='USER':send(c,f":native 001 {c['nick']} :Welcome");c['ready']=True;(E/'irc-ready').touch()
                     elif parts[0]=='PING':send(c,':native PONG native :'+parts[-1].lstrip(':'))
+                    elif parts[0]=='JOIN':send(c,f":{c['nick']}!bot@localhost JOIN {parts[1]}")
                     elif parts[0]=='PRIVMSG' and TOKEN in line:
                         with (E/'received.txt').open('a') as f:f.write(TOKEN+'\n')
         finally:
@@ -139,7 +140,7 @@ def main():
     # Supported CLI config writes, never edit live config files.
     for key,value in [('model.provider','custom'),('model.base_url','http://127.0.0.1:18792/v1'),('model.default','native-test'),('agent.max_iterations','6'),('display.streaming','false')]:
         run([*cli,'config','set',key,value],'config-'+key)
-    with (home/'.env').open('a') as f:f.write('\nAPI_SERVER_ENABLED=true\nAPI_SERVER_KEY=native-test-key-not-secret\nAPI_SERVER_PORT=18791\nAPI_SERVER_HOST=127.0.0.1\nOPENAI_API_KEY=native-fixture-dummy\nOPENROUTER_API_KEY=native-fixture-dummy\nIRC_SERVER=127.0.0.1\nIRC_PORT=16667\nIRC_USE_TLS=false\nIRC_NICKNAME=cloverbot\nIRC_ALLOWED_USERS=ant\nGATEWAY_ALLOW_ALL_USERS=true\n')
+    with (home/'.env').open('a') as f:f.write('\nAPI_SERVER_ENABLED=true\nAPI_SERVER_KEY=native-test-key-not-secret\nAPI_SERVER_PORT=18791\nAPI_SERVER_HOST=127.0.0.1\nOPENAI_API_KEY=native-fixture-dummy\nOPENROUTER_API_KEY=native-fixture-dummy\nIRC_SERVER=127.0.0.1\nIRC_PORT=16667\nIRC_USE_TLS=false\nIRC_CHANNEL=#clover\nIRC_NICKNAME=cloverbot\nIRC_ALLOWED_USERS=ant\nGATEWAY_ALLOW_ALL_USERS=true\n')
     fixture_log=(E/'fixture.log').open('w');fixture_proc=subprocess.Popen([sys.executable,__file__,'fixture'],env=env,stdout=fixture_log,stderr=subprocess.STDOUT)
     wait(lambda:(E/'fixture-ready').exists(),15)
     uid=os.getuid();env['XDG_RUNTIME_DIR']=f'/run/user/{uid}';env['DBUS_SESSION_BUS_ADDRESS']=f'unix:path=/run/user/{uid}/bus'
