@@ -36,6 +36,8 @@ def test_discovery_only_selects_same_install_including_custom_name_and_profile(m
         if "list-units" in cmd:
             return SimpleNamespace(returncode=0, stdout="".join(f"{u} loaded active running\n" for u in units))
         if "show" in cmd:
+            if "--property=MainPID" in cmd:
+                return SimpleNamespace(returncode=0, stdout="0\n")
             return SimpleNamespace(returncode=0, stdout=units[cmd[cmd.index("show") + 1]])
         raise AssertionError(f"unexpected command: {cmd}")
     monkeypatch.setattr(update_cmd.subprocess, "run", run)
@@ -90,6 +92,8 @@ def test_pending_restart_uses_owned_custom_unit(monkeypatch):
         if "list-units" in cmd:
             return SimpleNamespace(returncode=0, stdout="" if "--user" not in cmd else "".join(f"{u} loaded active running\n" for u in units))
         if "show" in cmd:
+            if "--property=MainPID" in cmd:
+                return SimpleNamespace(returncode=0, stdout="0\n")
             return SimpleNamespace(returncode=0, stdout=units[cmd[cmd.index("show") + 1]])
         return SimpleNamespace(returncode=0, stdout="")
     monkeypatch.setattr(update_cmd.subprocess, "run", run)
@@ -115,6 +119,8 @@ def test_pending_restart_excludes_shared_python_foreign_home_end_to_end(monkeypa
         if "list-units" in cmd:
             return SimpleNamespace(returncode=0, stdout="".join(f"{unit} loaded active running\n" for unit in units))
         if "show" in cmd:
+            if "--property=MainPID" in cmd:
+                return SimpleNamespace(returncode=0, stdout="0\n")
             return SimpleNamespace(returncode=0, stdout=units[cmd[cmd.index("show") + 1]])
         return SimpleNamespace(returncode=0, stdout="")
     monkeypatch.setattr(update_cmd.subprocess, "run", run)
