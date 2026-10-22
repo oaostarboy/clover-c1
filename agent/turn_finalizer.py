@@ -787,6 +787,15 @@ def finalize_turn(
         ).get("service_tier"),
         "session_id": agent.session_id,
     }
+    # Evidence for owner reconciliation, never a capability to replay tools.
+    # Do not leak a checkpoint from a previous turn into a later receipt.
+    _checkpoint = getattr(agent, "_storage_recovery_checkpoint", None)
+    if (isinstance(_checkpoint, str) and _checkpoint
+            and getattr(agent, "_storage_recovery_turn", None)
+            == getattr(agent, "_current_turn_id", None)):
+        result["storage_recovery"] = {
+            "path": _checkpoint, "automatic_replay_allowed": False,
+        }
     if agent._tool_guardrail_halt_decision is not None:
         result["guardrail"] = agent._tool_guardrail_halt_decision.to_metadata()
     # ``completed`` is whether the TURN finished; ``work_status`` is what the

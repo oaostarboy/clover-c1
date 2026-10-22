@@ -5019,15 +5019,22 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             try:
                 yield conn
             finally:
+                # A caller's explicit read transaction must not outlive its
+                # checkout. Reusing it returns stale snapshots and pins WAL
+                # history indefinitely. Close rather than just ROLLBACK: live
+                # cursors can retain a snapshot after a rollback.
+                if conn.in_transaction:
+                    self._close_read_conn(conn)
+                    conn = None
                 returned = False
                 with self._read_conns_lock:
-                    if not self._read_conns_closed:
+                    if conn is not None and not self._read_conns_closed:
                         try:
                             self._read_pool.put_nowait(conn)
                             returned = True
                         except queue.Full:
                             pass
-                if not returned:
+                if conn is not None and not returned:
                     # close() has already drained the pool, so this connection
                     # is surplus. Close it here — dropping it on the floor is
                     # what leaked the fd.
@@ -5328,11 +5335,14 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             return "no more rows available" in str(exc).lower()
 
         while True:
+            phase = "begin"
             try:
                 with self._lock:
                     self._conn.execute("BEGIN IMMEDIATE")
                     try:
+                        phase = "body"
                         result = fn(self._conn)
+                        phase = "commit"
                         self._conn.commit()
                     except BaseException:
                         try:
@@ -5380,11 +5390,12 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     # (e.g. a worktree named fix-corrupt-db) would flip it.
                     log_write_lock_holders(self.db_path, patience_s)
                     raise sqlite3.OperationalError(
-                        f"database is locked (another Clover process held the "
-                        f"state.db write lock for over {patience_s:.0f}s — "
-                        "likely a long maintenance operation such as VACUUM, "
-                        "a large WAL checkpoint, or an older pre-update "
-                        "process; the database itself is healthy)"
+                        f"database is locked (state.db persistence retry budget "
+                        f"{patience_s:g}s exhausted; phase={phase}; "
+                        f"sqlite_errorname={getattr(exc, 'sqlite_errorname', 'unknown')}; "
+                        f"sqlite_errorcode={getattr(exc, 'sqlite_errorcode', 'unknown')}; "
+                        "a reader or writer may be blocking this operation; "
+                        "holder and database health are not established)"
                     ) from exc
                 if _is_no_more_rows(exc) and self._sleep_before_write_retry(deadline, patience_s):
                     continue
@@ -11377,6 +11388,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         turn_lease_holder: Optional[str] = None,
         chunk_rows: Optional[int] = None,
         turn_lease_ttl_seconds: float = 300.0,
+        patience_s: Optional[float] = None,
     ) -> int:
         """Append multiple messages atomically in ONE write transaction.
 
@@ -11417,6 +11429,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     compression_lock_holder=compression_lock_holder,
                     turn_lease_holder=turn_lease_holder,
                     turn_lease_ttl_seconds=turn_lease_ttl_seconds,
+                    patience_s=patience_s,
                 )
             return inserted_total
 
@@ -11461,7 +11474,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         # Same criticality as append_message: this IS the turn's transcript.
         return self._execute_write(
-            _do, patience_s=self._TRANSCRIPT_WRITE_PATIENCE_S
+            _do, patience_s=(self._TRANSCRIPT_WRITE_PATIENCE_S if patience_s is None else patience_s)
         )
 
     # ── trusted human-origin receipts ──────────────────────────────────────

@@ -3756,6 +3756,11 @@ def _run_single_child(
         # only feeds the parent session rollup).
         # Inspired by: Perplexity Agent API result shape (idea-level).
         entry["cost_usd"] = round(entry["_child_cost_usd"], 6)
+        _storage_recovery = result.get("storage_recovery")
+        if isinstance(_storage_recovery, dict):
+            # Preserve the child's durable progress evidence without opening
+            # failed-turn auto-continuation or parent callback spawn rights.
+            entry["storage_recovery"] = dict(_storage_recovery)
         requested_route = getattr(child, '_delegate_requested_route', None)
         if isinstance(requested_route, dict):
             entry['route_provenance'] = {

@@ -134,3 +134,9 @@ def test_non_linux_fails_open_and_logs_nothing(tmp_path, monkeypatch, caplog):
         clover_state_lockowners.log_write_lock_holders(tmp_path / "state.db", 1.0)
     assert state_db_write_lock_holders(tmp_path / "state.db") == []
     assert not caplog.records
+
+
+def test_reader_lock_is_included_when_requested():
+    inodes = {(os.makedev(0x103, 2), 42): ""}
+    text = "1: POSIX ADVISORY READ 123 103:02:42 1073741826 1073742335"
+    assert parse_proc_locks(text, inodes, include_readers=True) == [(123, "READ SHARED range", "")]
