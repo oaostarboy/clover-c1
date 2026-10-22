@@ -23,19 +23,19 @@ def main():
     allowed={'PATH','HOME','USERPROFILE','HOMEDRIVE','HOMEPATH','LOCALAPPDATA','APPDATA','SYSTEMROOT','TEMP','TMP','PYTHONUTF8','PYTHONIOENCODING'}
     narrow={k:v for k,v in wide.items() if k.upper() in allowed}
     rows=[]
-    variants=[('wide',wide,[]),('canonical-locations',narrow,['-ExecutionPolicy','Bypass'])]
+    variants=[('wide',wide,['-ExecutionPolicy','Bypass']),('canonical-locations',narrow,['-ExecutionPolicy','Bypass']),('canonical-no-profile',narrow,['-NoProfile','-ExecutionPolicy','Bypass'])]
     groups = {
-        'shell-locations': {'COMSPEC','OS','SYSTEMDRIVE','PROGRAMDATA','ALLUSERSPROFILE','PUBLIC','COMMONPROGRAMFILES','COMMONPROGRAMFILES(X86)','COMMONPROGRAMW6432','PROGRAMFILES','PROGRAMFILES(X86)','PROGRAMW6432','WINDIR'},
-        'machine-identity': {'USERNAME','USERDOMAIN','USERDNSDOMAIN','LOGONSERVER','COMPUTERNAME','NUMBER_OF_PROCESSORS','PROCESSOR_ARCHITECTURE','PROCESSOR_ARCHITEW6432','PROCESSOR_LEVEL','PROCESSOR_REVISION'},
+        'module-cache': {'PSMODULEANALYSISCACHEPATH'},
+        'powershell-host': {'POWERSHELL_DISTRIBUTION_CHANNEL','POWERSHELL_UPDATECHECK'},
+        'dotnet-host': {'DOTNET_MULTILEVEL_LOOKUP','DOTNET_NOLOGO','DOTNET_SKIP_FIRST_TIME_EXPERIENCE'},
+        'executable-extensions': {'PATHEXT'},
     }
     for label, keys in groups.items():
         env = dict(narrow)
         env.update({k:v for k,v in wide.items() if k.upper() in keys})
         variants.append(('canonical-plus-' + label, env, ['-ExecutionPolicy','Bypass']))
-    for key in ['COMSPEC','SYSTEMDRIVE','OS','USERNAME','USERDOMAIN','COMPUTERNAME','NUMBER_OF_PROCESSORS','PROCESSOR_ARCHITECTURE']:
-        env=dict(narrow)
-        env.update({k:v for k,v in wide.items() if k.upper()==key})
-        variants.append(('canonical-plus-'+key,env,['-ExecutionPolicy','Bypass']))
+    fresh=dict(narrow, PSMODULEANALYSISCACHEPATH=str(out / 'private-module-cache'))
+    variants.append(('canonical-private-cache',fresh,['-ExecutionPolicy','Bypass']))
     for label,env,flags in variants:
         row={'label':label,'keys':sorted(env)}
         try:
