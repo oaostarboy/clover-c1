@@ -57,7 +57,7 @@ def runtime_layout(tmp_path, monkeypatch):
             launches.append((argv, kwargs))
         def wait(self):
             directory=home/'logs/update_receipts';directory.mkdir(parents=True,exist_ok=True)
-            (directory/'latest.json').write_text(json.dumps(dict(pid=self.pid,outcome='success',post_update={'sha':'b'*40},gateway_restart={'restarted_services':['user:clover-gateway.service']},fleet=[{'state':'current'}],steps=[{'name':'child_actual_restart','ok':True}],skips=[])))
+            (directory/'latest.json').write_text(json.dumps(dict(pid=self.pid,outcome='success',post_update={'sha':'b'*40},gateway_restart={'restarted_services':['user:clover-gateway.service']},linux_systemd_catchup={'version':1,'targets':[{'profile':'default','pid':56789}],'verified':True},fleet=[{'state':'current'}],steps=[{'name':'child_actual_restart','ok':True}],skips=[])))
             return 0
     monkeypatch.setattr(m.subprocess,'Popen',Child)
     return SimpleNamespace(root=root,local=local,external=external,home=home,identity=identity,proc_env=proc_env,process=process,live=live,parent=parent,repair=repair,launches=launches)
@@ -80,6 +80,7 @@ def test_legacy_public_uv_hook_continues_under_proved_requesting_gateway_runtime
     assert f.parent.data['plan']=={'original':'old release plan'}
     assert f.parent.data['gateway_restart']['restarted_services']==['user:clover-gateway.service']
     assert f.parent.data['linux_gateway_runtime_handoff']['child_pid']==67890
+    assert f.parent.data['linux_systemd_catchup']['targets']==[{'profile':'default','pid':56789}]
     f.repair.assert_not_called()
 
 
@@ -102,3 +103,25 @@ def test_bootstrap_does_not_adopt_unproved_or_nonrequesting_runtime(runtime_layo
     m.update_managed_uv()
     assert f.launches==[]
     f.repair.assert_called_once()
+
+
+@pytest.mark.parametrize('outcome,exit_code,receipt_pid,expected', [
+    ('missing',0,67890,1), ('partial',0,67890,1),
+    ('refused',0,67890,1), ('success',0,11111,1), ('failed',7,67890,7),
+])
+def test_child_result_cannot_turn_missing_or_failed_proof_green(runtime_layout,monkeypatch,outcome,exit_code,receipt_pid,expected):
+    f=runtime_layout
+    class Child:
+        pid=67890
+        def __init__(self,*a,**kw):pass
+        def wait(self):
+            if outcome!='missing':
+                directory=f.home/'logs/update_receipts';directory.mkdir(parents=True,exist_ok=True)
+                (directory/'latest.json').write_text(json.dumps(dict(pid=receipt_pid,outcome=outcome)))
+            return exit_code
+    monkeypatch.setattr(m.subprocess,'Popen',Child)
+    with pytest.raises(SystemExit) as error:m.update_managed_uv()
+    assert error.value.code==expected
+    assert f.parent.data['pre_update']=={'sha':'a'*40}
+    assert f.parent.data['linux_gateway_runtime_handoff']['exit_code']==expected
+    f.repair.assert_not_called()
