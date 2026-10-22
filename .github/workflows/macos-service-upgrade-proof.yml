@@ -26,7 +26,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 5ec233281f26490471d2e48ee3e5eb0e000d90f8
+          ref: 1788e8cd2b587edc195e3e17117e21bb0a1d9b7d
           fetch-depth: 0
           path: source
           persist-credentials: false
@@ -45,8 +45,8 @@ jobs:
           if [[ $BASE == main ]]; then old=9535350bee1d57cf7e466672e6f416403886bec1; fi
           python3 helpers/.github/native-proof/macos_service_upgrade.py \
             --source "$GITHUB_WORKSPACE/source" --old "$old" --entry "$ENTRY" \
-            --target 5ec233281f26490471d2e48ee3e5eb0e000d90f8 \
-            --tree 44ebcad08d367e63cdc89532fac05b6531d6917f \
+            --target 1788e8cd2b587edc195e3e17117e21bb0a1d9b7d \
+            --tree 1753fbec085c83cfe3f854bff05209c266c30978 \
             --evidence "$RUNNER_TEMP/evidence"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -66,7 +66,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 5ec233281f26490471d2e48ee3e5eb0e000d90f8
+          ref: 1788e8cd2b587edc195e3e17117e21bb0a1d9b7d
           fetch-depth: 0
           path: source
           persist-credentials: false
@@ -79,8 +79,8 @@ jobs:
           python3 helpers/.github/native-proof/macos_external_env.py \
             --rollback-only \
             --source "$GITHUB_WORKSPACE/source" \
-            --target-sha 5ec233281f26490471d2e48ee3e5eb0e000d90f8 \
-            --target-tree 44ebcad08d367e63cdc89532fac05b6531d6917f \
+            --target-sha 1788e8cd2b587edc195e3e17117e21bb0a1d9b7d \
+            --target-tree 1753fbec085c83cfe3f854bff05209c266c30978 \
             --evidence "$RUNNER_TEMP/evidence"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
