@@ -3210,7 +3210,11 @@ _REDUNDANT_NOTICE_SILENCE = (
 NOT_DONE_REPLY_NOTE = (
     "At least one task above is NOT done (failed, not done, incomplete or cut "
     "off). Do not reply [SILENT]: tell the user plainly, in a line or two, what "
-    "did not get done and what happens next."
+    "did not get done and what happens next. Continue the concrete, safe, "
+    "already-authorized next step within the original scope when possible; "
+    "do not ask a generic 'want me to continue?'. An auth/approval gate requires "
+    "one specific question, not a bypass. Escalate an exhausted retry budget "
+    "with its owner and next step; never replay side effects or spawn endless retries."
 )
 
 _DONE_STATUSES = frozenset({"completed", "success", "ok", ""})
@@ -3233,6 +3237,10 @@ def _one_not_done(r: dict) -> bool:
         return True
     if status in _STOPPED_STATUSES:
         return _said_not_done(r.get("summary"))
+    if isinstance(r.get("task_outcome"), dict):
+        from agent.task_outcome import task_outcome
+        if task_outcome(r, str(r.get("summary") or ""))["status"] != "done":
+            return True
     if status not in _DONE_STATUSES:
         return True  # failed / error / timeout / partial / incomplete
     return _said_not_done(r.get("summary"))
@@ -3377,7 +3385,8 @@ def _format_async_delegation(evt: dict) -> str:
                 lines.append("(no result recorded for this helper yet)")
                 continue
             r_truncated = r.get("truncated") or r.get("exit_reason") == "max_iterations"
-            icon = "⚠" if r_truncated else ("✓" if r_status in ("completed", "success") else "✗")
+            task_incomplete = r_status in ("completed", "success") and _one_not_done(r)
+            icon = "⚠" if r_truncated or task_incomplete else ("✓" if r_status in ("completed", "success") else "✗")
             lines.append("")
             header = f"--- {icon} TASK {idx + 1}/{n}"
             if r_goal:
@@ -3391,6 +3400,10 @@ def _format_async_delegation(evt: dict) -> str:
                 header += ", TRUNCATED: hit max_iterations — work may be incomplete"
             header += ") ---"
             lines.append(header)
+            if isinstance(r.get("task_outcome"), dict):
+                from agent.task_outcome import task_outcome
+                lines.append("Task outcome (self-reported, not lifecycle status): "
+                             + json.dumps(task_outcome(r, str(r_summary or "")), ensure_ascii=False))
             if r_status in ("completed", "success") and r_summary:
                 if r_truncated:
                     lines.append(
@@ -3457,6 +3470,10 @@ def _format_async_delegation(evt: dict) -> str:
     lines.append(f"Role: {role}   Model: {model}")
     _trunc = " [TRUNCATED: hit max_iterations — work may be incomplete]" if truncated else ""
     lines.append(f"Status: {status}   API calls: {api_calls}   Duration: {duration}s{_trunc}")
+    if isinstance(evt.get("task_outcome"), dict):
+        from agent.task_outcome import task_outcome
+        lines.append("Task outcome (self-reported, not lifecycle status): "
+                     + json.dumps(task_outcome(evt, str(summary or "")), ensure_ascii=False))
     lines.append("--- RESULT ---")
     if status in ("completed", "success") and summary:
         if truncated:

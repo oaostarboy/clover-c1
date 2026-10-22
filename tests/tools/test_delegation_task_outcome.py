@@ -106,3 +106,18 @@ def test_json_report_survives_callback_and_unified_card_without_completing_steps
 def test_malformed_or_inconsistent_reports_do_not_claim_task_success(raw):
     entry, _ = run_child('Plain summary: Work ended.', task_outcome=raw)
     assert entry['task_outcome']['status'] == 'unknown'
+
+
+@pytest.mark.parametrize('batch', [False, True])
+def test_completion_prompt_keeps_structured_blocker_and_never_marks_it_success(batch):
+    from tools.process_registry import _format_async_delegation, async_delegation_not_done
+    report = {'status': 'blocked', 'remaining': ['owner approval'],
+              'owner': 'human owner', 'next_step': 'Approve the bounded check?'}
+    item = {'status': 'completed', 'summary': 'Saved work.', 'task_outcome': report}
+    event = {'is_batch': True, 'results': [dict(task_index=0, **item)]} if batch else item
+    assert async_delegation_not_done(event)
+    prompt = _format_async_delegation(event)
+    assert '✓ TASK' not in prompt
+    for field in ['blocked', 'owner approval', 'human owner', 'Approve the bounded check?']:
+        assert field in prompt
+    assert 'already-authorized' in prompt

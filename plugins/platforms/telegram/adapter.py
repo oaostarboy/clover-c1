@@ -2033,6 +2033,19 @@ class TelegramAdapter(BasePlatformAdapter):
         return isinstance(error, OSError)
 
     @staticmethod
+    def _looks_like_connect_failure(error: Exception) -> bool:
+        """Typed causal proof that no connection was established, not prose."""
+        import httpx
+        seen = set()
+        current = error
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, (httpx.ConnectError, httpx.ConnectTimeout)):
+                return True
+            current = current.__cause__
+        return False
+
+    @staticmethod
     def _looks_like_connect_timeout(error: Exception) -> bool:
         """Return True when a Telegram TimedOut wraps a connect-timeout.
 
@@ -5709,6 +5722,7 @@ class TelegramAdapter(BasePlatformAdapter):
         if not content or not content.strip():
             return SendResult(success=True, message_id=None)
         
+        delivery_uncertain = False
         try:
             # Bot API 10.1 rich fast-path: send the raw agent markdown via
             # sendRichMessage so tables/task lists/etc. render natively. Falls
@@ -5834,7 +5848,8 @@ class TelegramAdapter(BasePlatformAdapter):
                             )
                         except Exception as md_error:
                             # Markdown parsing failed, try plain text
-                            if "parse" in str(md_error).lower() or "markdown" in str(md_error).lower():
+                            if (_BadReq and isinstance(md_error, _BadReq)
+                                    and ("parse" in str(md_error).lower() or "markdown" in str(md_error).lower())):
                                 logger.warning("[%s] MarkdownV2 parse failed, falling back to plain text: %s", self.name, md_error)
                                 plain_chunk = _strip_mdv2(chunk)
                                 msg = await self._bot.send_message(
@@ -5934,12 +5949,16 @@ class TelegramAdapter(BasePlatformAdapter):
                         # Telegram" -- retrying through the loop is safe and
                         # prevents silent drops when the pool frees up.
                         is_pool_timeout = self._looks_like_pool_timeout(send_err)
-                        if (
-                            _TimedOut
-                            and isinstance(send_err, _TimedOut)
-                            and not self._looks_like_connect_timeout(send_err)
-                            and not is_pool_timeout
-                        ):
+                        definitely_unsent = (
+                            self._looks_like_connect_failure(send_err)
+                            or self._looks_like_connect_timeout(send_err)
+                            or is_pool_timeout
+                        )
+                        if not definitely_unsent:
+                            # Read/write/reset/protocol failures can lose only
+                            # the ACK after Telegram accepted the request. No
+                            # silent retry here or in the outer send wrapper.
+                            delivery_uncertain = True
                             raise
                         if is_pool_timeout:
                             await self._drain_general_connections_after_pool_timeout()
@@ -6035,11 +6054,17 @@ class TelegramAdapter(BasePlatformAdapter):
             is_timeout = (_to and isinstance(e, _to)) or "timed out" in err_str
             is_connect_timeout = self._looks_like_connect_timeout(e)
             is_pool_timeout = self._looks_like_pool_timeout(e)
+            sent_ids = locals().get("message_ids", [])
             return SendResult(
                 success=False,
                 error=safe_error,
-                retryable=(is_connect_timeout or is_pool_timeout or not is_timeout),
+                retryable=(not delivery_uncertain and not sent_ids
+                           and (is_connect_timeout or is_pool_timeout or not is_timeout)),
                 error_kind=error_kind,
+                raw_response=(
+                    {"delivery_uncertain": delivery_uncertain, "message_ids": list(sent_ids)}
+                    if delivery_uncertain or sent_ids else None
+                ),
             )
 
     async def send_or_update_status(
