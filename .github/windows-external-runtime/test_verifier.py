@@ -58,6 +58,56 @@ class VerifierTests(unittest.TestCase):
         self.assertEqual(observed['sqlite'], before['sqlite'])
         self.assertEqual(observed['source'], before['source'])
 
+    def test_installer_diagnostic_preserves_real_failure_and_redacts(self):
+        import types
+        from unittest.mock import patch
+        child = load('child')
+        error = subprocess.CalledProcessError(1, ['powershell'], output=b'installer failed', stderr=b'secret')
+        def installer(env):
+            raise error
+        runtime = types.SimpleNamespace(_install_uv_windows=installer)
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / 'installer.json'
+            with patch('agent.redact.redact_sensitive_text', return_value='[REDACTED]'):
+                child.observe_installer_error(runtime, dest)
+                with self.assertRaises(subprocess.CalledProcessError) as raised:
+                    runtime._install_uv_windows({})
+            self.assertIs(raised.exception, error)
+            recorded = json.loads(dest.read_text())
+            self.assertEqual(recorded['returncode'], 1)
+            self.assertEqual(recorded['stderr'], '[REDACTED]')
+
+    def test_installer_diagnostic_never_masks_original_on_write_error(self):
+        import types
+        from unittest.mock import patch
+        child = load('child')
+        error = subprocess.CalledProcessError(1, ['powershell'], stderr=b'failed')
+        def installer(env):
+            raise error
+        runtime = types.SimpleNamespace(_install_uv_windows=installer)
+        child.observe_installer_error(runtime, Path('/not-writable/installer.json'))
+        with patch.object(child, 'save', side_effect=OSError('test-only unwritable evidence')):
+            with self.assertRaises(subprocess.CalledProcessError) as raised:
+                runtime._install_uv_windows({})
+        self.assertIs(raised.exception, error)
+
+    def test_installer_diagnostic_uses_real_forced_secret_redaction(self):
+        import types
+        from unittest.mock import patch
+        child = load('child')
+        token = 'sk-' + 'a' * 48
+        error = subprocess.CalledProcessError(1, ['powershell'], stderr=('OPENAI_API_KEY=' + token).encode())
+        def installer(env):
+            raise error
+        runtime = types.SimpleNamespace(_install_uv_windows=installer)
+        with tempfile.TemporaryDirectory() as tmp:
+            dest = Path(tmp) / 'installer.json'
+            child.observe_installer_error(runtime, dest)
+            with patch('agent.redact._REDACT_ENABLED', False):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    runtime._install_uv_windows({})
+            self.assertNotIn(token, dest.read_text())
+
     def test_literal_pins(self):
         probe = load('probe')
         self.assertEqual(probe.sha('a' * 40), 'a' * 40)

@@ -98,11 +98,36 @@ def identity():
                 selected_gateway_python=get_python_path())
 
 
+def observe_installer_error(runtime, output):
+    """Transparent test-only observer: retain the real installer's failure."""
+    import subprocess
+    from agent.redact import redact_sensitive_text
+    original = runtime._install_uv_windows
+    def observed(env):
+        try:
+            return original(env)
+        except subprocess.CalledProcessError as exc:
+            def text(value):
+                if isinstance(value, bytes):
+                    value = value.decode('utf-8', errors='replace')
+                return redact_sensitive_text(value or '', force=True, file_read=True, redact_url_credentials=True)
+            try:
+                save(output, {'returncode': exc.returncode,
+                              'stdout': text(exc.stdout), 'stderr': text(exc.stderr)})
+            except Exception:
+                # Diagnostic I/O/redaction failure must not replace the real
+                # installer failure or turn a refused update into success.
+                pass
+            raise
+    runtime._install_uv_windows = observed
+
+
 def update(fault, output):
     # Import the real CLI under its canonical module name. All lifecycle guards
     # remain active. Faults execute only in explicitly named negative rows.
     from clover_cli import main
     from clover_cli import managed_uv as runtime
+    observe_installer_error(runtime, Path(output).with_name('uv-installer-error.json'))
     if fault == 'provision':
         def fail(*args, **kwargs):
             save(output, {'reached': 'provision', 'identity': identity()})
