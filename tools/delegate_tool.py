@@ -2844,6 +2844,7 @@ from agent.step_continuation import (  # noqa: E402
     continue_until_done as _continue_until_done,
     stopped_on_step_budget as _stopped_on_step_budget,
     needs_continuation as _needs_continuation,
+    continuation_forbidden as _continuation_forbidden,
 )
 
 
@@ -3557,7 +3558,7 @@ def _run_single_child(
             if (
                 not _schema_valid
                 and _first_text.strip()
-                and not result.get("interrupted", False)
+                and not _continuation_forbidden(result, child)
             ):
                 # Exactly one retry turn, carrying the validation errors
                 # verbatim (no schema re-paste — the child already holds

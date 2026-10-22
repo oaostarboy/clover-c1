@@ -6087,6 +6087,20 @@ class BasePlatformAdapter(ABC):
             return self
         return live_adapter
 
+    @staticmethod
+    def _send_may_have_delivered(result: "SendResult") -> bool:
+        """Accepted chunks or a lost acknowledgement forbid whole-send replay.
+
+        Producer evidence outranks retry hints and error-string classification.
+        The original result must survive so the ledger/owner can reconcile it.
+        """
+        raw = result.raw_response
+        return bool(
+            result.message_id or result.continuation_message_ids
+            or (isinstance(raw, dict)
+                and (raw.get("delivery_uncertain") or raw.get("message_ids")))
+        )
+
     async def _send_with_retry(
         self,
         chat_id: str,
@@ -6112,7 +6126,7 @@ class BasePlatformAdapter(ABC):
             metadata=metadata,
         )
 
-        if result.success:
+        if result.success or self._send_may_have_delivered(result):
             return result
 
         error_str = result.error or ""
@@ -6148,7 +6162,11 @@ class BasePlatformAdapter(ABC):
                 if result.success:
                     logger.info("[%s] Send succeeded on retry %d", self.name, attempt)
                     return result
+                if self._send_may_have_delivered(result):
+                    return result
                 error_str = result.error or ""
+                if not result.retryable and self._is_timeout_error(error_str):
+                    return result
                 if result.retry_after is not None:
                     server_retry_after = result.retry_after
                 if not (result.retryable or self._is_retryable_error(error_str)):

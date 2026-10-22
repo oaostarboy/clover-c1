@@ -10,13 +10,34 @@ import re
 from typing import Any
 
 _RESULT = re.compile(r'^Result: (done|not done)$', re.MULTILINE)
-_REPORT = re.compile(r'^Task outcome: (\{[^\n]*\})$', re.MULTILINE)
+_REPORT = re.compile(r'^Task outcome: ([^\n]*)$', re.MULTILINE)
+_FENCE = re.compile(r'^ {0,3}(`{3,}|~{3,})(.*)$')
+
+
+def _authoritative_lines(summary: str) -> str:
+    """Exclude Markdown examples; never promote quoted verdicts to evidence."""
+    lines = []
+    fence = None
+    for line in summary.splitlines():
+        match = _FENCE.match(line)
+        if fence is not None:
+            if (match and match[1][0] == fence[0]
+                    and len(match[1]) >= len(fence) and not match[2].strip()):
+                fence = None
+            continue
+        if match:
+            fence = match[1]
+            continue
+        # Exact protocol anchors already exclude block quotes and indented code.
+        lines.append(line)
+    return '\n'.join(lines)
 
 
 def task_outcome(result: dict[str, Any], summary: str) -> dict[str, Any]:
     unknown: dict[str, Any] = {'status': 'unknown'}
     if result.get('failed') or result.get('error') or result.get('interrupted'):
         return unknown
+    summary = _authoritative_lines(summary)
     raw = result.get('task_outcome')
     if raw is None:
         reports = _REPORT.findall(summary)
@@ -25,10 +46,13 @@ def task_outcome(result: dict[str, Any], summary: str) -> dict[str, Any]:
                 raw = json.loads(reports[0])
             except ValueError:
                 return unknown
+            if raw is None:
+                return unknown
         elif reports:
             return unknown  # competing reports are not a reliable verdict
     if raw is not None:
-        if not isinstance(raw, dict) or raw.get('status') not in {'done', 'partial', 'blocked'}:
+        if (not isinstance(raw, dict) or not isinstance(raw.get('status'), str)
+                or raw['status'] not in {'done', 'partial', 'blocked'}):
             return unknown
         remaining = raw.get('remaining')
         owner, next_step = raw.get('owner'), raw.get('next_step')
