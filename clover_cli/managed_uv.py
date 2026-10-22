@@ -499,6 +499,13 @@ def update_managed_uv(
     vulnerable-runtime repair probe below ALWAYS runs — CVE-driven runtime
     repair must never be gated behind the freshness stamp.
     """
+    # This long-standing post-pull API also runs inside released gateways'
+    # PATH-selected updater. Continue under the proved requesting runtime before
+    # repairing the wrong venv or applying its unrelated restart ownership.
+    if sys.platform.startswith("linux") and "--gateway" in sys.argv[1:]:
+        from clover_cli.linux_gateway_update_bootstrap import continue_requesting_gateway_update
+        continue_requesting_gateway_update(_PROJECT_ROOT, _running_editable_venv(_PROJECT_ROOT))
+
     existing = resolve_uv()
     if not existing:
         # The legacy update API owns this attempt, including a fresh bootstrap.
