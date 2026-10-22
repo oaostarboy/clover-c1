@@ -468,6 +468,8 @@ def _(rid, params: dict) -> dict:
 
 @method("command.dispatch")
 def _(rid, params: dict) -> dict:
+    if not isinstance(params.get("name", ""), str) or not isinstance(params.get("arg", ""), str):
+        return _err(rid, -32602, "literal command name and argument required")
     name, arg = params.get("name", "").lstrip("/"), params.get("arg", "")
     resolved = _resolve_name(name)
     if resolved != name:

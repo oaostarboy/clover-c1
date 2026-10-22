@@ -10,6 +10,7 @@ scripted; the process refuses every socket / DNS attempt.
 
 import asyncio
 import json
+import os
 import socket
 import sqlite3
 import subprocess
@@ -49,6 +50,10 @@ def network_guard(monkeypatch):
     stdlib socketpair may connect its own private loopback pair on Windows;
     that unaddressable event-loop IPC is not application network access.
     """
+    # Desktop server imports prefetch the unrelated release status. Keep that
+    # background network edge out of this offline presence/ingress fixture;
+    # every application socket/DNS refusal below remains unchanged.
+    monkeypatch.setattr('clover_cli.banner.prefetch_update_check', lambda: None)
     attempts = []
 
     def _refuse(kind):
@@ -354,7 +359,11 @@ def test_receipt_reads_back_in_a_fresh_process(enabled):
         "print(json.dumps(None if r is None else [r.profile, r.session_id,"
         " r.message_row_id, r.ingress_event_id, r.origin, r.consumed]))\n"
     )
-    env = {"PATH": "/usr/bin", "CLOVER_HOME": str(enabled.home), "HOME": str(enabled.home)}
+    env = {"PATH": "/usr/bin", "CLOVER_HOME": str(enabled.home), "HOME": str(enabled.home),
+           "CLOVER_TEST_ISOLATION": str(enabled.home)}
+    if os.name == 'nt':
+        # Keep the home private while retaining Windows' stdlib DLL location.
+        env.update(USERPROFILE=str(enabled.home), SYSTEMROOT=os.environ['SYSTEMROOT'])
     out = subprocess.run(
         [sys.executable, "-c", code, str(enabled.db_path), enabled.session_id(), str(row["id"])],
         cwd=REPO, env=env, capture_output=True, text=True, timeout=120,

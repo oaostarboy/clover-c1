@@ -8006,6 +8006,9 @@ class BasePlatformAdapter(ABC):
         content: str,
         max_length: int = 4096,
         len_fn: Optional["Callable[[str], int]"] = None,
+        *,
+        add_indicators: bool = True,
+        close_tail: bool = True,
     ) -> List[str]:
         """
         Split a long message into chunks, preserving code block boundaries.
@@ -8022,6 +8025,10 @@ class BasePlatformAdapter(ABC):
                      Defaults to ``len`` (Unicode code-points).  Pass
                      ``utf16_len`` for platforms that measure message
                      length in UTF-16 code units (e.g. Telegram).
+            add_indicators: Add per-message numbering for completed batches.
+            close_tail: Close an unterminated final block. Streaming callers
+                        disable this and numbering so future deltas append to
+                        the literal code body, not to synthetic wrapper text.
 
         Returns:
             List of message chunks
@@ -8030,7 +8037,25 @@ class BasePlatformAdapter(ABC):
         if _len(content) <= max_length:
             return [content]
 
-        INDICATOR_RESERVE = 10   # room for " (XX/XX)"
+        from gateway.platforms.helpers import fenced_code_regions
+
+        # Source offsets, rather than a partially sliced fence/escape sequence,
+        # determine code context. Never infer context from an isolated tail.
+        regions = list(fenced_code_regions(content))
+        # Normalize only recognized closing-line indentation before slicing.
+        # If a chunk ends on that fence, it becomes a terminal delimiter; its
+        # syntax spaces must not then be mistaken for literal code-body spaces.
+        # Terminal inline closings keep all preceding body whitespace intact.
+        for _start, _body_start, body_end, end, _lang, closed in reversed(regions):
+            if closed and content[body_end:end].startswith(" "):
+                content = content[:body_end] + content[body_end:end].lstrip(" ") + content[end:]
+        regions = list(fenced_code_regions(content))
+
+        def code_at(pos):
+            return next((r for r in regions if r[1] <= pos <= r[2]
+                         and (pos < r[3] or not r[5])), None)
+
+        INDICATOR_RESERVE = max(10, 2 * len(str(len(content))) + 6) if add_indicators else 0
         FENCE_CLOSE = "\n```"
 
         chunks: List[str] = []
@@ -8054,26 +8079,12 @@ class BasePlatformAdapter(ABC):
                 headroom = max(1, max_length // 2)
 
             # Everything remaining fits in one final chunk
-            if _len(prefix) + _len(remaining) <= max_length - INDICATOR_RESERVE:
+            if _len(prefix + remaining) + _len(FENCE_CLOSE) <= max_length - INDICATOR_RESERVE:
                 final_chunk = prefix + remaining
-                # Check fence balance: if carry_lang was set, the chunk
-                # starts with an opening fence.  Walk the remaining text
-                # to see if the code block was closed; if not, close it.
-                _final_in_code = carry_lang is not None
-                _final_lang = carry_lang or ""
-                if _final_in_code:
-                    for _line in remaining.split("\n"):
-                        _stripped = _line.strip()
-                        if _stripped.startswith("```"):
-                            if _final_in_code:
-                                _final_in_code = False
-                                _final_lang = ""
-                            else:
-                                _final_in_code = True
-                                _tag = _stripped[3:].strip()
-                                _final_lang = _tag.split()[0] if _tag else ""
-                    if _final_in_code:
-                        final_chunk += FENCE_CLOSE
+                # The completed source, not the reopened wrapper, decides
+                # whether a closing delimiter is missing on this final tail.
+                if close_tail and code_at(len(content)) is not None:
+                    final_chunk += FENCE_CLOSE
                 chunks.append(final_chunk)
                 break
 
@@ -8085,8 +8096,13 @@ class BasePlatformAdapter(ABC):
             # _safe_slice_pos() maps a custom-unit budget to the largest
             # codepoint offset whose custom length ≤ budget.
             if _len is not len:
-                # Map headroom (custom units) → codepoint slice length
-                _cp_limit = _custom_unit_to_cp(remaining, headroom, _len)
+                # Measure the slice in its actual fenced context. Formatting
+                # a bare continuation interprets literal backticks as inline
+                # markup and undercounts its MarkdownV2 escape expansion.
+                _cp_limit = _custom_unit_to_cp(
+                    remaining, max_length - INDICATOR_RESERVE,
+                    lambda body: _len(prefix + body + FENCE_CLOSE),
+                )
             else:
                 _cp_limit = headroom
             region = remaining[:_cp_limit]
@@ -8119,9 +8135,10 @@ class BasePlatformAdapter(ABC):
             # chunk would have an unpaired backtick and any special characters
             # (like parentheses) inside the broken span would be unescaped,
             # causing MarkdownV2 parse errors on Telegram.
+            offset = len(content) - len(remaining)
             candidate = remaining[:split_at]
             backtick_count = candidate.count("`") - candidate.count("\\`")
-            if backtick_count % 2 == 1:
+            if code_at(offset + split_at) is None and backtick_count % 2 == 1:
                 # Find the last unescaped backtick and split before it
                 last_bt = candidate.rfind("`")
                 while last_bt > 0 and candidate[last_bt - 1] == "\\":
@@ -8134,26 +8151,38 @@ class BasePlatformAdapter(ABC):
                     if safe_split > _cp_limit // 4:
                         split_at = safe_split
 
+            # A formatted Telegram chunk may end at an escape boundary.
+            # Keep an odd trailing backslash with its escaped character. This
+            # only moves the partition; raw code characters are never removed.
+            backslashes = len(remaining[:split_at]) - len(remaining[:split_at].rstrip("\\"))
+            if backslashes % 2 and split_at > 1:
+                split_at -= 1
+
+            # Fence syntax is atomic. In particular, the opening newline is
+            # syntax, not a code-body newline to repeat on the next chunk.
+            for start, body_start, body_end, end, _lang, closed in regions:
+                absolute = offset + split_at
+                if start < absolute < body_start or absolute == body_start - 1:
+                    split_at = start - offset if start > offset else body_start - offset
+                elif closed and body_end < absolute < end:
+                    split_at = end - offset
+
+            # Do not leave a source CR at the end of a numbered chunk while
+            # its LF moves to the next one. On a closing-fence line that would
+            # put the synthetic indicator after CR and hide the delimiter.
+            if split_at > 1 and remaining[split_at - 1:split_at + 1] == "\r\n":
+                split_at -= 1
+
             chunk_body = remaining[:split_at]
-            remaining = remaining[split_at:].lstrip()
+            tail = remaining[split_at:]
 
             full_chunk = prefix + chunk_body
+            state = code_at(offset + split_at)
+            in_code = state is not None
+            lang = state[4] if state is not None else ""
 
-            # Walk only the chunk_body (not the prefix we prepended) to
-            # determine whether we end inside an open code block.
-            in_code = carry_lang is not None
-            lang = carry_lang or ""
-            for line in chunk_body.split("\n"):
-                stripped = line.strip()
-                if stripped.startswith("```"):
-                    if in_code:
-                        in_code = False
-                        lang = ""
-                    else:
-                        in_code = True
-                        tag = stripped[3:].strip()
-                        lang = tag.split()[0] if tag else ""
-
+            # Whitespace inside code is data, not a paragraph separator.
+            remaining = tail if in_code else tail.lstrip()
             if in_code:
                 # Close the orphaned fence so the chunk is valid on its own
                 full_chunk += FENCE_CLOSE
@@ -8164,7 +8193,7 @@ class BasePlatformAdapter(ABC):
             chunks.append(full_chunk)
 
         # Append chunk indicators when the response spans multiple messages
-        if len(chunks) > 1:
+        if add_indicators and len(chunks) > 1:
             total = len(chunks)
             chunks = [
                 f"{chunk} ({i + 1}/{total})" for i, chunk in enumerate(chunks)

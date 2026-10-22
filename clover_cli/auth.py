@@ -707,7 +707,7 @@ def _warn_malformed_secret(provider_id: str, source: str) -> None:
 
 
 def _resolve_api_key_provider_secret(
-    provider_id: str, pconfig: ProviderConfig
+    provider_id: str, pconfig: ProviderConfig, *, allow_fallback: bool = True
 ) -> tuple[str, str]:
     """Resolve an API-key provider's token and indicate where it came from."""
     if provider_id == "copilot":
@@ -752,7 +752,7 @@ def _resolve_api_key_provider_secret(
             if entry is not None:
                 candidates.append(entry)
             try:
-                for extra in pool.entries():
+                for extra in (pool.entries() if allow_fallback else ()):
                     if extra is not None and all(extra is not c for c in candidates):
                         candidates.append(extra)
             except Exception:
@@ -1537,6 +1537,24 @@ def is_runtime_provider_routable(provider_id: str) -> bool:
     except AuthError:
         return False
     return True
+
+
+def _credential_pool_source(provider_id: str):
+    """Non-secret provenance for the main pool's already-loaded owner.
+
+    Bounded callers re-read and reconcile this source themselves; this helper
+    does not select, refresh, probe or change ordinary main auth policy.
+    """
+    local = _load_auth_store()
+    rows = local.get('credential_pool', {}).get(provider_id, [])
+    if isinstance(rows, list) and rows:
+        return (str(_auth_file_path().resolve()), local.get('version'), local.get('authority_version'))
+    path = _global_auth_file_path()
+    global_store = _load_global_auth_store()
+    rows = global_store.get('credential_pool', {}).get(provider_id, [])
+    if path is not None and isinstance(rows, list) and rows:
+        return (str(path.resolve()), global_store.get('version'), global_store.get('authority_version'))
+    return None
 
 
 def read_credential_pool(provider_id: Optional[str] = None) -> Dict[str, Any]:
@@ -5285,7 +5303,7 @@ def _get_azure_foundry_auth_status() -> Dict[str, Any]:
     return info
 
 
-def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
+def resolve_api_key_provider_credentials(provider_id: str, *, allow_fallback: bool = True, explicit_api_key: Optional[str] = None, explicit_base_url: Optional[str] = None) -> Dict[str, Any]:
     """Resolve API key and base URL for an API-key provider.
 
     Returns dict with: provider, api_key, base_url, source.
@@ -5298,9 +5316,23 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
             code="invalid_provider",
         )
 
+    selected_base = ""
+    if not allow_fallback:
+        selected_base = explicit_base_url or (os.getenv(pconfig.base_url_env_var, "").strip()
+                                               if pconfig.base_url_env_var else "")
+        if provider_id == "copilot" and explicit_api_key is None:
+            raise AuthError("Bounded completion requires an already-owned API token; token exchange is unverified.",
+                            provider=provider_id, code="credential_owner_unverified")
+        if provider_id in {"zai", "kimi-coding", "kimi-coding-cn", "copilot"} and not selected_base:
+            raise AuthError("Bounded completion requires an explicit owned endpoint; endpoint discovery is disabled.",
+                            provider=provider_id, code="endpoint_selection_unverified")
     api_key = ""
     key_source = ""
-    api_key, key_source = _resolve_api_key_provider_secret(provider_id, pconfig)
+    if explicit_api_key is not None:
+        api_key, key_source = explicit_api_key, "explicit"
+    else:
+        api_key, key_source = (_resolve_api_key_provider_secret(provider_id, pconfig) if allow_fallback else
+                               _resolve_api_key_provider_secret(provider_id, pconfig, allow_fallback=False))
 
     # No-auth LM Studio: substitute a placeholder so runtime / auxiliary_client
     # see the local server as configured. doctor still reports unconfigured
@@ -5309,11 +5341,13 @@ def resolve_api_key_provider_credentials(provider_id: str) -> Dict[str, Any]:
         api_key = LMSTUDIO_NOAUTH_PLACEHOLDER
         key_source = key_source or "default"
 
-    env_url = ""
-    if pconfig.base_url_env_var:
+    env_url = selected_base if not allow_fallback else ""
+    if allow_fallback and pconfig.base_url_env_var:
         env_url = os.getenv(pconfig.base_url_env_var, "").strip()
 
-    if provider_id in {"kimi-coding", "kimi-coding-cn"}:
+    if explicit_base_url or (not allow_fallback and env_url):
+        base_url = explicit_base_url or env_url
+    elif provider_id in {"kimi-coding", "kimi-coding-cn"}:
         base_url = _resolve_kimi_base_url(api_key, pconfig.inference_base_url, env_url)
     elif provider_id == "zai":
         base_url = _resolve_zai_base_url(api_key, pconfig.inference_base_url, env_url)
