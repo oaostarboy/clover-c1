@@ -129,6 +129,22 @@ def main():
     old=TARGET if base=='target' else git('rev-parse',base+'^{commit}')
     assert git('rev-parse',TARGET+'^{tree}')==os.environ['TARGET_TREE']
     dump(E/'pins.json',dict(target=TARGET,tree=os.environ['TARGET_TREE'],old=old,workflow_sha=os.environ['GITHUB_SHA'],run_url='https://github.com/'+os.environ['GITHUB_REPOSITORY']+'/actions/runs/'+os.environ['GITHUB_RUN_ID'],native_os=platform.platform(),os_release=Path('/etc/os-release').read_text(),mode=mode,entry=entry,layout=layout))
+    if os.environ.get('PREPARE_RUNNER_APT')=='true':
+        # Real official Ubuntu packages, bounded downloads on disposable CI only.
+        # The Azure mirror stalled earlier trials before product installation.
+        aptconf=E/'apt-acquire.conf'
+        aptconf.write_text('Acquire::http::Timeout "30";\nAcquire::https::Timeout "30";\nAcquire::Retries "1";\n')
+        run(['sudo','cp',aptconf,'/etc/apt/apt.conf.d/99-native-proof-acquire'],'runner-apt-timeout')
+        changed=[]
+        for path in [Path('/etc/apt/sources.list'),*Path('/etc/apt/sources.list.d').glob('*.sources')]:
+            if not path.exists():continue
+            text=path.read_text()
+            if 'azure.archive.ubuntu.com' not in text:continue
+            replacement=E/('apt-'+path.name)
+            replacement.write_text(text.replace('azure.archive.ubuntu.com','archive.ubuntu.com'))
+            run(['sudo','cp',replacement,path],'runner-apt-mirror-'+path.name)
+            changed.append(str(path))
+        dump(E/'runner-package-prerequisite.json',dict(official_mirror='archive.ubuntu.com',changed_sources=changed,network_timeout_seconds=30,retries=1,product_installer_unchanged=True))
     installer=scratch/'installer.sh';installer.write_text(subprocess.check_output(['git','-C',str(source),'show',old+':scripts/install.sh'],text=True))
     run(['bash',installer,'--branch','fix/windows-installer-module-20261022','--commit',old,'--non-interactive','--skip-setup','--skip-browser','--skip-computer-use'],'installer',timeout=2100)
     py=root/'venv/bin/python';uv=home/'bin/uv'
