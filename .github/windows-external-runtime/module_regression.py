@@ -31,6 +31,8 @@ def main():
         return subprocess.check_output(['git', '-C', str(source), *args], env=env, text=True).strip()
     assert git('rev-parse', 'HEAD') == target
     assert git('rev-parse', 'HEAD^{tree}') == os.environ['TARGET_TREE']
+    check('local-byte-policy', ['git', 'config', 'core.autocrlf', 'false'])
+    assert not git('replace', '-l')
     test_bytes = (source / TEST).read_bytes()
     test_hash = hashlib.sha256(test_bytes).hexdigest()
     check('venv', ['uv', 'venv', '.venv', '--python', sys.executable, '--seed'])
@@ -44,6 +46,9 @@ def main():
         if label == 'baseline':
             (source / TEST).write_bytes(test_bytes)  # Explicit exact candidate test overlay only.
         assert hashlib.sha256((source / TEST).read_bytes()).hexdigest() == test_hash
+        for rel in ['clover_cli/managed_uv.py', 'scripts/run_tests.sh']:
+            blob = subprocess.check_output(['git', '-C', str(source), 'show', sha + ':' + rel], env=env)
+            assert (source / rel).read_bytes() == blob, rel
         xml = evidence / (label + '.xml')
         code = command(label + '-regression', [bash, 'scripts/run_tests.sh', '-j', '1', '--file-retries', '0', TEST,
                                              '-p', 'no:randomly', '-o', 'addopts=', '-q', '--tb=short', '--junitxml=' + xml.as_posix()])
@@ -62,8 +67,17 @@ def main():
             (source / TEST).unlink()
         else:
             assert code == 0 and all(c['outcome'] == 'passed' for c in cases), rows[-1]
+    contract_xml = evidence / 'runner-contract.xml'
+    check('runner-contract', [bash, 'scripts/run_tests.sh', '-j', '1', '--file-retries', '0',
+                              'tests/test_runner_windows_environment.py', '-p', 'no:randomly', '-o', 'addopts=',
+                              '-q', '--tb=short', '--junitxml=' + contract_xml.as_posix()])
+    contract_cases = list(ET.parse(contract_xml).iter('testcase'))
+    assert len(contract_cases) == 4
+    assert all(all(c.find(tag) is None for tag in ['failure','error','skipped']) for c in contract_cases)
     assert not git('status', '--porcelain', '--untracked-files=no')
     assert git('rev-parse', 'HEAD') == target
+    (evidence / 'final-source.json').write_text(json.dumps(dict(sha=target, tree=git('rev-parse','HEAD^{tree}'),
+        tracked_status=git('status','--porcelain','--untracked-files=no'), runner_contract_cases=4), indent=2))
     print(json.dumps(rows))
 
 if __name__ == '__main__': main()

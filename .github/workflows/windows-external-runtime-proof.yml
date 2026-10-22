@@ -31,8 +31,8 @@ jobs:
     runs-on: windows-latest
     timeout-minutes: 25
     env:
-      TARGET_SHA: ${{ inputs.target_sha || '8a2c6a1b3d95bf4bd339adc6815ebc1074e68665' }}
-      TARGET_TREE: ${{ inputs.target_tree || 'ecbf62d5548127468c6bcb9bcfbf6842092a0c72' }}
+      TARGET_SHA: ${{ inputs.target_sha || '1788e8cd2b587edc195e3e17117e21bb0a1d9b7d' }}
+      TARGET_TREE: ${{ inputs.target_tree || '1753fbec085c83cfe3f854bff05209c266c30978' }}
       PYTHONUTF8: '1'
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
@@ -80,8 +80,8 @@ jobs:
       matrix:
         case: [existing-upgrade, candidate-repair, holder-refusal, provision-failure, smoke-rollback]
     env:
-      TARGET_SHA: ${{ inputs.target_sha || '8a2c6a1b3d95bf4bd339adc6815ebc1074e68665' }}
-      TARGET_TREE: ${{ inputs.target_tree || 'ecbf62d5548127468c6bcb9bcfbf6842092a0c72' }}
+      TARGET_SHA: ${{ inputs.target_sha || '1788e8cd2b587edc195e3e17117e21bb0a1d9b7d' }}
+      TARGET_TREE: ${{ inputs.target_tree || '1753fbec085c83cfe3f854bff05209c266c30978' }}
       OLD_SHA: ${{ inputs.old_sha || '9535350bee1d57cf7e466672e6f416403886bec1' }}
       PROBE_CASE: ${{ matrix.case }}
       PYTHONUTF8: '1'
