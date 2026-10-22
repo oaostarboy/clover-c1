@@ -129,6 +129,13 @@ done
 if [ -n "${PSModulePath:-${PSMODULEPATH:-}}" ]; then
   WIN_ENV+=("PSModulePath=${PSModulePath:-${PSMODULEPATH}}")
 fi
+# Hosted Windows images provide a prebuilt native module-analysis cache.
+# Dropping its location can stall Desktop PowerShell startup before even a
+# read-only command executes. Retain only this OS-provided cache location,
+# not arbitrary PowerShell/credential vars.
+if [ -n "${PSModuleAnalysisCachePath:-${PSMODULEANALYSISCACHEPATH:-}}" ]; then
+  WIN_ENV+=("PSModuleAnalysisCachePath=${PSModuleAnalysisCachePath:-${PSMODULEANALYSISCACHEPATH}}")
+fi
 
 # ── Test-runner knobs (computed before we drop env) ────────────────────────
 # The runner's own documented environment knobs must survive the hermetic
