@@ -1,0 +1,62 @@
+name: macOS external editable runtime proof (bounded)
+on:
+  # A new workflow may not dispatch until registered on the default branch.
+  # This narrowly-scoped test-branch trigger is for the SOLE CI publisher.
+  push:
+    branches: ['ci/macos-external-runtime-proof/**']
+  workflow_dispatch:
+    inputs:
+      target_sha:
+        description: Immutable product commit, published by integration owner
+        required: true
+        type: string
+      target_tree:
+        description: Immutable reviewed product tree
+        required: true
+        type: string
+permissions:
+  contents: read
+concurrency:
+  group: macos-external-runtime-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  native:
+    name: Native macOS external editable venv and rollback
+    runs-on: macos-latest
+    timeout-minutes: 75
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ github.sha }}
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ inputs.target_sha || 'c4338be28f3ad07f269f9b0090abdacee35cc979' }}
+          fetch-depth: 0
+          path: source
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39 # 8.2.0
+        with:
+          enable-cache: false
+      - name: Real CLI repair and injected post-promotion import failure rollback
+        shell: bash
+        env:
+          TARGET_SHA: ${{ inputs.target_sha || 'c4338be28f3ad07f269f9b0090abdacee35cc979' }}
+          TARGET_TREE: ${{ inputs.target_tree || '51521e06f4150a375866c6148416aae2ac2ec68a' }}
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/evidence"
+          uv --version > "$RUNNER_TEMP/evidence/uv-version.txt"
+          sw_vers > "$RUNNER_TEMP/evidence/sw-vers.txt"
+          python3 helpers/.github/native-proof/macos_external_env.py \
+            --source "$GITHUB_WORKSPACE/source" \
+            --target-sha "$TARGET_SHA" --target-tree "$TARGET_TREE" \
+            --evidence "$RUNNER_TEMP/evidence"
+      - name: Preserve actual results, including failures
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: macos-external-runtime-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
