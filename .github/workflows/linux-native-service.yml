@@ -18,19 +18,16 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        include: ${{ fromJSON(contains(github.event.head_commit.message, '[seed-main]') && '[{"mode":"update","base":"9535350bee1d57cf7e466672e6f416403886bec1","entry":"chat","layout":"normal"}]' || contains(github.event.head_commit.message, '[remaining]') && '[{"mode":"fresh","base":"target","entry":"cli","layout":"normal"},{"mode":"update","base":"9535350bee1d57cf7e466672e6f416403886bec1","entry":"chat","layout":"normal"}]' || '[{"mode":"fresh","base":"target","entry":"cli","layout":"normal"},{"mode":"update","base":"v1.5.6","entry":"cli","layout":"normal"},{"mode":"update","base":"v1.5.6","entry":"chat","layout":"external"},{"mode":"update","base":"9535350bee1d57cf7e466672e6f416403886bec1","entry":"cli","layout":"external"},{"mode":"update","base":"9535350bee1d57cf7e466672e6f416403886bec1","entry":"chat","layout":"normal"}]') }}
+        include: ${{ fromJSON(contains(github.event.head_commit.message, '[remaining]') && '[{"mode":"fresh","base":"target","entry":"cli","layout":"normal"},{"mode":"update","base":"9535350bee1d57cf7e466672e6f416403886bec1","entry":"chat","layout":"normal"}]' || '[{"mode":"fresh","base":"target","entry":"cli","layout":"normal"},{"mode":"update","base":"v1.5.6","entry":"cli","layout":"normal"},{"mode":"update","base":"v1.5.6","entry":"chat","layout":"external"},{"mode":"update","base":"9535350bee1d57cf7e466672e6f416403886bec1","entry":"cli","layout":"external"},{"mode":"update","base":"9535350bee1d57cf7e466672e6f416403886bec1","entry":"chat","layout":"normal"}]') }}
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           path: helpers
           persist-credentials: false
           fetch-depth: 0
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
-        if: contains(github.event.head_commit.message, '[seed-main]')
       - name: Real native installer and installed systemd user service
         env:
           PREPARE_RUNNER_APT: ${{ contains(github.event.head_commit.message, '[remaining]') && 'true' || 'false' }}
-          SEED_EDITABLE: ${{ contains(github.event.head_commit.message, '[seed-main]') && 'true' || 'false' }}
           MODE: ${{ matrix.mode }}
           BASE: ${{ matrix.base }}
           ENTRY: ${{ matrix.entry }}
