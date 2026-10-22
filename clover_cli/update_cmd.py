@@ -3408,6 +3408,47 @@ def _restart_systemd_gateway_units_best_effort(failed: list) -> None:
             continue
 
         def process_unit(svc_name: str, _scope=scope, _cmd=scope_cmd) -> None:
+            # The already-current path is also used by a released updater's
+            # runtime continuation. Do not amputate a live turn with systemctl
+            # restart after the first half correctly preserved that gateway.
+            shown = subprocess.run(
+                _cmd + ["show", svc_name, "--property=MainPID", "--value"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
+            )
+            try:
+                main_pid = int(shown.stdout.strip()) if shown.returncode == 0 else -1
+            except (TypeError, ValueError):
+                main_pid = -1
+            if main_pid < 0:
+                failed.append(svc_name)
+                return
+            if main_pid > 0:
+                from gateway.status import looks_like_gateway_command_line
+                try:
+                    argv = [os.fsdecode(arg) for arg in
+                            _gateway_pid_cmdline_path(main_pid).read_bytes().split(b"\0") if arg]
+                except OSError:
+                    failed.append(svc_name)
+                    return
+                if looks_like_gateway_command_line(shlex.join(argv)):
+                    from clover_cli.gateway import (
+                        _graceful_restart_via_sigusr1, _get_restart_exit_wait_budget,
+                    )
+                    if _gateway_pid_install_verdict(main_pid) != "own":
+                        failed.append(svc_name)
+                        return
+                    budget = _get_restart_exit_wait_budget()
+                    print(f"  → {svc_name}: draining (up to {int(budget)}s)...")
+                    if not _graceful_restart_via_sigusr1(main_pid, drain_timeout=budget):
+                        # Leave the durable intent pending. An unproved drain
+                        # is not authority to hard-stop accepted work.
+                        failed.append(svc_name)
+                        return
+                    timeout = max(10.0, _service_restart_sec(_cmd, svc_name) + 10.0)
+                    if not _wait_for_service_active(_cmd, svc_name, timeout=timeout):
+                        failed.append(svc_name)
+                    return
             restart_cmd = list(_cmd) + ["--no-ask-password", "restart", svc_name]
             if (
                 _scope == "system"
@@ -3596,6 +3637,11 @@ def _run_pending_fleet_restart() -> bool:
             except Exception as exc:
                 logger.debug("Pending fleet restart: Windows failed: %s", exc)
                 failed.append("windows-gateway")
+        if failed and sys.platform.startswith("linux") and not is_windows() and not is_macos():
+            # Failed drain/ownership verification must not be undone by the
+            # later manual survivor sweep. Retain all pending restart intent.
+            _warn_incomplete_gateway_fleet_restart(failed)
+            return False
         leftover: list = []
         try:
             live = _own_install_gateway_pids(find_gateway_pids(all_profiles=True))

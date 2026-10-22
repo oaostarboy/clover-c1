@@ -116,7 +116,7 @@ def continue_requesting_gateway_update(root: Path, invoking: Path | None) -> Non
     if result is not None:
         parent.data.setdefault('steps', []).extend(result.get('steps', []))
         parent.data.setdefault('skips', []).extend(result.get('skips', []))
-        for key in ('gateway_restart', 'fleet', 'runtime_outcomes', 'post_update'):
+        for key in ('gateway_restart', 'fleet', 'runtime_outcomes', 'post_update', 'linux_systemd_catchup'):
             if key in result:
                 parent.data[key] = result[key]
     # Exit 0 alone is not verification. Missing/partial/refused child receipts
