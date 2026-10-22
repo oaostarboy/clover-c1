@@ -190,9 +190,7 @@ def execute(a, evidence):
     c.cwd = neutral
     for key in ('UV_PROJECT_ENVIRONMENT', 'VIRTUAL_ENV', 'UV_PYTHON', 'UV_PYTHON_DOWNLOADS'):
         c.env.pop(key, None)
-    # Keep this row focused on runtime repair. The product may independently
-    # refresh an old catalog if provisioning cannot find a fixed generation.
-    stamp = home / 'cache' / '.uv_self_update_stamp'; stamp.parent.mkdir(); stamp.touch()
+    # Leave the real catalog refresh policy intact; never mark an old uv fresh.
     def call(label, mode, *extra, **kwargs):
         dest = evidence / (label + '.json')
         c.run(label, [python, '-I', child, mode, '--output', dest, *extra], **kwargs)
@@ -289,6 +287,14 @@ def main():
         result = {'case': a.case, 'status': 'FAIL', 'error_type': type(exc).__name__, 'error': str(exc)}
         ET.SubElement(case, 'failure', message=str(exc)).text = traceback.format_exc()
         suite.set('failures', '1')
+    finally:
+        # Keep the product's redacted diagnostics and receipt on failed rows too.
+        # This home exists only inside the disposable GitHub-hosted fixture.
+        home = Path(os.environ.get('RUNNER_TEMP', '')) / 'windows-external-runtime' / 'home'
+        for relative in ['logs/agent.log', 'logs/errors.log', 'logs/update_receipts/latest.json']:
+            source = home / relative
+            if source.is_file():
+                shutil.copy2(source, evidence / ('product-' + source.name))
     case.set('time', str(time.monotonic() - started))
     save(evidence / 'result.json', result)
     ET.ElementTree(suite).write(evidence / 'native-results.xml', encoding='utf-8', xml_declaration=True)
