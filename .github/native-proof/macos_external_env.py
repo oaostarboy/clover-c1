@@ -176,6 +176,10 @@ def child(args):
         raise ValueError(args.mode)
 
 
+def proof_support():
+    return Path(__file__).with_name("proof.py")
+
+
 def main(args):
     native_guard()
     for pin in (args.target_sha, args.target_tree):
@@ -222,7 +226,7 @@ def main(args):
     dump(evidence / "pins.json", dict(target_sha=observed[0], target_tree=observed[1],
          workflow_sha=os.environ.get("GITHUB_SHA"), helper_sha256=sha(script),
          run_id=os.environ["GITHUB_RUN_ID"], native_os=platform.platform()))
-    proof = Path(args.source) / ".github/native-proof/proof.py"
+    proof = proof_support()
     run([sys.executable, proof, "origin", "--repo", root, "--mirror", scratch / "origin.git",
          "--target", args.target_sha], "local-origin")
     (home / ".skip_upstream_prompt").touch()

@@ -253,6 +253,26 @@ def installed(repo, sha, tree):
                 metadata_path=str(metadata[0]), origin=git(repo, 'remote', 'get-url', 'origin'))
 
 
+def gateway_launch_matches(argv, repo, runtime=None):
+    """Bind argv to one install without resolving shared Python symlinks."""
+    if '-c' in argv:
+        return False
+    if runtime is None:
+        return ('gateway' in argv and 'run' in argv and str(repo) in ' '.join(argv))
+    bin_dir = Path(runtime) / 'bin'
+    if not argv:
+        return False
+    first = Path(argv[0])
+    if first == bin_dir / 'clover':
+        return argv[1:3] == ['gateway', 'run']
+    if first.parent != bin_dir or first.name not in (
+            'python', 'python3', 'python3.11', 'python3.12', 'python3.13'):
+        return False
+    if len(argv) > 1 and Path(argv[1]) == bin_dir / 'clover':
+        return argv[2:4] == ['gateway', 'run']
+    return argv[1:5] == ['-m', 'clover_cli.main', 'gateway', 'run']
+
+
 def observe_gateway(repo, home, sha, port):
     import psutil
     import sys
@@ -265,8 +285,8 @@ def observe_gateway(repo, home, sha, port):
         candidate = False
         try:
             argv = proc.info['cmdline'] or []
-            candidate = ('gateway' in argv and 'run' in argv and '-c' not in argv
-                         and str(repo) in ' '.join(argv))
+            candidate = gateway_launch_matches(
+                argv, repo, Path(sys.prefix) if sys.prefix != sys.base_prefix else None)
             if candidate and proc.environ().get('CLOVER_HOME') == str(home):
                 processes.append(proc.pid)
         except psutil.NoSuchProcess:
