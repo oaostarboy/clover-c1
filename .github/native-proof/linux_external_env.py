@@ -192,7 +192,7 @@ def main(args):
     scratch=Path(os.environ["RUNNER_TEMP"])/"runtime-failure"
     scratch.mkdir(); home=scratch/"home";home.mkdir()
     root=scratch/"source";live=scratch/"external"
-    env=dict(os.environ,CLOVER_HOME=str(home),UV_PYTHON_INSTALL_DIR=str(scratch/"python"),UV_NO_CONFIG="1")
+    env=dict(os.environ,CLOVER_HOME=str(home),UV_PYTHON_INSTALL_DIR=str(scratch/"python"))
     env.pop("PYTHONPATH",None);env.pop("VIRTUAL_ENV",None)
     uv=shutil.which("uv");commands=[]
     def run(argv,name,cwd=scratch,allow=False):

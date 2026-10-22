@@ -62,7 +62,7 @@ jobs:
         with:
           path: helpers
           persist-credentials: false
-      - uses: astral-sh/setup-uv@v6
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
       - name: Real external runtime provisioning and rollback preserves new data
         run: python helpers/.github/native-proof/linux_external_env.py --source helpers --target-sha "$TARGET_REF" --target-tree "$TARGET_TREE" --evidence "$RUNNER_TEMP/evidence"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
