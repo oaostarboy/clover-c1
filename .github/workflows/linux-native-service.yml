@@ -1,0 +1,62 @@
+name: Linux final reply exact-source investigation
+on:
+  push:
+    branches: [ci/linux-final-replies-20261022]
+permissions:
+  contents: read
+concurrency:
+  group: linux-final-replies-${{ github.run_id }}
+  cancel-in-progress: false
+env:
+  TARGET_REF: d54477adeccddba40c412dec6898519878ea708e
+  TARGET_TREE: 52cdc7602f2b014db122d834c7e5b116e58a8968
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: old-main-chat-normal
+            base: 9535350bee1d57cf7e466672e6f416403886bec1
+            entry: chat
+            layout: normal
+          - name: fixed-base-chat-normal
+            base: cc6c1a30913004b83fa549b42a4731ebf3d27b61
+            entry: chat
+            layout: normal
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Existing native service fixture, unchanged one-reply assertion
+        env:
+          PREPARE_RUNNER_APT: 'true'
+          MODE: update
+          BASE: ${{ matrix.base }}
+          ENTRY: ${{ matrix.entry }}
+          LAYOUT: ${{ matrix.layout }}
+        run: |
+          python helpers/.github/native-proof/reply_observer.py &
+          observer=$!
+          trap 'kill "$observer" 2>/dev/null || true' EXIT
+          python helpers/.github/native-proof/linux_service.py
+      - name: Preserve actual product logs and service diagnostics
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          systemctl --user show clover-gateway.service > "$RUNNER_TEMP/evidence/unit-final.txt" 2>&1 || true
+          journalctl --user -u clover-gateway.service --no-pager -n 400 > "$RUNNER_TEMP/evidence/journal.log" 2>&1 || true
+          if test -d "$HOME/.clover/logs"; then cp -r "$HOME/.clover/logs" "$RUNNER_TEMP/evidence/product-logs"; fi
+          for f in gateway_state.json .update_output.txt .update_exit_code .update_refusal.json; do
+            if test -f "$HOME/.clover/$f"; then cp "$HOME/.clover/$f" "$RUNNER_TEMP/evidence/"; fi
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: linux-replies-${{ matrix.name }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
