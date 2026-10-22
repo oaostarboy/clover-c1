@@ -1717,7 +1717,14 @@ def _install_uv_posix(env: dict[str, str]) -> None:
 
 
 def _install_uv_windows(env: dict[str, str]) -> None:
-    """Invoke the PowerShell installer."""
+    """Invoke the Windows PowerShell installer with its own module search path."""
+    # A pwsh -> Python -> powershell launch preserves Core's PSModulePath.
+    # Desktop PowerShell can then autoload Core's incompatible Security module
+    # and fail at Get-ExecutionPolicy before the official installer runs.
+    # Let the child reconstruct its native defaults; leave the caller, install
+    # destination and execution-policy settings untouched. Windows env keys are
+    # case-insensitive, including dictionaries copied from os.environ.
+    env = {key: value for key, value in env.items() if key.upper() != "PSMODULEPATH"}
     cmd = "irm https://astral.sh/uv/install.ps1 | iex"
     subprocess.run(
         ["powershell", "-ExecutionPolicy", "Bypass", "-c", cmd],
