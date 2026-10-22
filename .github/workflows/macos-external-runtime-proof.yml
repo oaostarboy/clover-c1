@@ -32,7 +32,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: ${{ inputs.target_sha || '5ec233281f26490471d2e48ee3e5eb0e000d90f8' }}
+          ref: ${{ inputs.target_sha || '8a2c6a1b3d95bf4bd339adc6815ebc1074e68665' }}
           fetch-depth: 0
           path: source
           persist-credentials: false
@@ -42,8 +42,8 @@ jobs:
       - name: Real CLI repair and injected post-promotion import failure rollback
         shell: bash
         env:
-          TARGET_SHA: ${{ inputs.target_sha || '5ec233281f26490471d2e48ee3e5eb0e000d90f8' }}
-          TARGET_TREE: ${{ inputs.target_tree || '44ebcad08d367e63cdc89532fac05b6531d6917f' }}
+          TARGET_SHA: ${{ inputs.target_sha || '8a2c6a1b3d95bf4bd339adc6815ebc1074e68665' }}
+          TARGET_TREE: ${{ inputs.target_tree || 'ecbf62d5548127468c6bcb9bcfbf6842092a0c72' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/evidence"
