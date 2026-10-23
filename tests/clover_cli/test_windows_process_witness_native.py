@@ -25,6 +25,8 @@ def test_real_current_process_witness_matches_independent_psutil(record_property
     assert measured['parent_pid'] == current.ppid()
     assert Path(measured['executable']).resolve() == Path(current.exe()).resolve()
     assert abs(datetime.fromisoformat(measured['created_utc']).timestamp() - current.create_time()) <= .001
+    assert measured['created_unix'] == current.create_time()
+    assert bridge._birth(measured) == current.create_time()
     assert not ({'_ctypes'} - before) & set(sys.modules)
     record_property('native_query_seconds', elapsed)
     record_property('actual_pid', current.pid)
@@ -42,6 +44,8 @@ def test_real_live_child_has_exact_parent_and_creation_time(record_property):
         assert chain[0]['parent_pid'] == os.getpid()
         assert Path(chain[0]['executable']).resolve() == Path(actual.exe()).resolve()
         assert abs(datetime.fromisoformat(chain[0]['created_utc']).timestamp() - actual.create_time()) <= .001
+        assert chain[0]['created_unix'] == actual.create_time()
+        assert bridge._birth(chain[0]) == actual.create_time()
         record_property('actual_child_pid', child.pid)
         record_property('actual_child_birth', actual.create_time())
     finally:

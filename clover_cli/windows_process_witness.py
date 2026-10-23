@@ -7,6 +7,12 @@ creation-time, executable and source predicates independently.
 from __future__ import annotations
 
 
+def filetime_to_unix(ticks):
+    # Remove the 1601 epoch in integer space before rounding to float. Doing
+    # the division first loses native sub-microsecond birth precision.
+    return (ticks - 116_444_736_000_000_000) / 10_000_000
+
+
 def chain_from_snapshot(pid, parents, observe):
     if pid not in parents:
         raise ValueError('missing current process in snapshot')
@@ -92,8 +98,9 @@ def native_chain(pid):
             if not kernel.QueryFullProcessImageNameW(handle, 0, buffer, ctypes.byref(size)):
                 raise ctypes.WinError(ctypes.get_last_error())
             ticks = (created.dwHighDateTime << 32) | created.dwLowDateTime
-            stamp = datetime.fromtimestamp(ticks / 10_000_000 - 11_644_473_600, timezone.utc).isoformat()
-            return dict(executable=buffer.value, created_utc=stamp)
+            born = filetime_to_unix(ticks)
+            stamp = datetime.fromtimestamp(born, timezone.utc).isoformat()
+            return dict(executable=buffer.value, created_utc=stamp, created_unix=born)
         finally:
             kernel.CloseHandle(handle)
 
