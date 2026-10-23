@@ -187,9 +187,10 @@ def legacy_install(tmp_path):
     # 1. origin: bare repo whose main is a commit with THIS tree on top of v1.5.6.
     origin = tmp_path / "origin.git"
     _git("init", "--bare", "-q", str(origin))
-    _git("fetch", "--no-tags", "-q", str(REPO), V156_SHA, cwd=origin)
-    _git("fetch", "--no-tags", "-q", str(REPO), "HEAD", cwd=origin)
-    head_tree = _git("rev-parse", "FETCH_HEAD^{tree}", cwd=origin)
+    # Explicit refs (not FETCH_HEAD): the CI checkout is shallow and detached.
+    _git("fetch", "--no-tags", "-q", str(REPO), f"{V156_SHA}:refs/heads/base156", cwd=origin)
+    _git("fetch", "--no-tags", "-q", str(REPO), "HEAD:refs/heads/under-test", cwd=origin)
+    head_tree = _git("rev-parse", "refs/heads/under-test^{tree}", cwd=origin)
     ident = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
              "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
     candidate = _git("commit-tree", head_tree, "-p", V156_SHA, "-m", "candidate tree", cwd=origin, env=ident)
