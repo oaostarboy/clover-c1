@@ -75,7 +75,7 @@ def _write_checkpoint(path, payload):
     info = directory.lstat()
     if not stat.S_ISDIR(info.st_mode):
         raise OSError("storage recovery directory is not a real directory")
-    if os.name == "posix" and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077):
+    if os.name == "posix" and (info.st_uid != os.getuid() or stat.S_IMODE(info.st_mode) & 0o077):  # windows-footgun: ok — short-circuit POSIX gate
         raise OSError("storage recovery directory is not private")
     directory_fd = parent_fd = None
     temporary = None
@@ -86,7 +86,7 @@ def _write_checkpoint(path, payload):
             directory_fd = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             pinned = os.fstat(directory_fd)
             if ((info.st_dev, info.st_ino) != (pinned.st_dev, pinned.st_ino)
-                    or pinned.st_uid != os.getuid() or stat.S_IMODE(pinned.st_mode) & 0o077):
+                    or pinned.st_uid != os.getuid() or stat.S_IMODE(pinned.st_mode) & 0o077):  # windows-footgun: ok — inside POSIX-only branch
                 raise OSError("storage recovery directory changed or is not private")
             parent_fd = os.open(directory.parent, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
             linked = os.stat(directory.name, dir_fd=parent_fd, follow_symlinks=False)

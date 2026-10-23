@@ -1348,7 +1348,7 @@ def _running_editable_venv(root: Path) -> Path | None:
         for dist in metadata.distributions(path=[str(site)]):
             if (dist.metadata.get("Name") or "").lower().replace("_", "-") != "clover-c1":
                 continue
-            source = editable_dir_from_direct_url(dist.read_text("direct_url.json") or "")
+            source = editable_dir_from_direct_url(dist.read_text("direct_url.json") or "")  # windows-footgun: ok — Distribution.read_text decodes UTF-8
             # Ambiguous duplicate installation metadata is not ownership proof.
             owned.append(source is not None and source.samefile(root))
         return live if owned == [True] else None

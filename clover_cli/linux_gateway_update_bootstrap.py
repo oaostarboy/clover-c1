@@ -26,7 +26,7 @@ def _editable_source_matches(live: Path, root: Path) -> bool:
         for dist in metadata.distributions(path=[str(site)]):
             name = (dist.metadata.get('Name') or '').lower().replace('_', '-')
             if name == 'clover-c1':
-                source = editable_dir_from_direct_url(dist.read_text('direct_url.json') or '')
+                source = editable_dir_from_direct_url(dist.read_text('direct_url.json') or '')  # windows-footgun: ok — Distribution.read_text decodes UTF-8
                 owned.append(source is not None and source.samefile(root))
     return owned == [True]
 
