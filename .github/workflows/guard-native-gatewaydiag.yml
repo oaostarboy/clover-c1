@@ -1,0 +1,62 @@
+name: Native Windows gateway updater boundary diagnostics
+on:
+  push:
+    branches: ['ci/guard-native-gatewaydiag-20261022']
+permissions:
+  contents: read
+concurrency:
+  group: guard-native-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  updater:
+    name: guard / ${{ matrix.os }} / ${{ matrix.base }} / ${{ matrix.entry }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2025]
+        base: [release, main, fixed]
+        entry: [gateway]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 5be4eab28f3906d7d67dcac37a28ccbc01e67f12
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          enable-cache: false
+      - name: Execute normal updater with real held work and no driver restart
+        shell: bash
+        env:
+          BASE: ${{ matrix.base }}
+          ENTRY: ${{ matrix.entry }}
+          PYTHONIOENCODING: utf-8
+          PYTHONUTF8: '1'
+        run: |
+          set -euo pipefail
+          old=32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+          if [[ $BASE == main ]]; then old=9535350bee1d57cf7e466672e6f416403886bec1; fi
+          target=5be4eab28f3906d7d67dcac37a28ccbc01e67f12
+          tree=e41ff16f866ff1e01cd561183f49a0a82cd3a59a
+          if [[ $BASE == fixed ]]; then
+            old=5be4eab28f3906d7d67dcac37a28ccbc01e67f12
+            target=5ee2d1d55823d99b6c6b505be11273bb3d41ceff
+            tree=bf6ee25964847e1cfbc513a2569e2097c72c8637
+          fi
+          uv run --no-project --with psutil python helpers/.github/native-proof/guard_native_upgrade.py \
+            --source "$GITHUB_WORKSPACE/source" --old "$old" --entry "$ENTRY" \
+            --target "$target" --tree "$tree" \
+            --evidence "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: diag-${{ matrix.os }}-${{ matrix.base }}-${{ matrix.entry }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error

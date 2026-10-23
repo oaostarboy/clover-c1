@@ -339,6 +339,19 @@ def main(a):
                 alive=psutil.pid_exists(state['pid'])
                 trace.append(dict(at=time.time(),monotonic=time.monotonic(),state=state,pid_alive=alive,
                     disk_sha=git('rev-parse','HEAD'),beacon=(home/'.clover-update-heartbeat.json').exists()))
+                beacon=home/'.clover-update-heartbeat.json'
+                if beacon.exists():
+                    trace[-1]['beacon_data']=read_json(beacon)
+                    updater=trace[-1]['beacon_data'].get('updater_pid')
+                    if updater:
+                        trace[-1]['updater_alive']=psutil.pid_exists(updater)
+                        if psutil.pid_exists(updater):
+                            u=psutil.Process(updater)
+                            trace[-1]['updater_process']=dict(pid=u.pid,ppid=u.ppid(),status=u.status(),argv=u.cmdline())
+                for src,dst in [(home/'.update_output.txt',evidence/'live-product-update.log'),(home/'logs/gateway.log',evidence/'live-product-gateway.log'),(home/'logs/update_receipts/latest.json',evidence/'live-product-receipt.json')]:
+                    if src.exists():
+                        try: shutil.copy2(src,dst)
+                        except OSError: pass
                 dump(evidence/'raw-observer.json',trace)
             except Exception as exc:
                 trace.append(dict(at=time.time(),error=repr(exc)))
@@ -440,7 +453,7 @@ def main(a):
             rc=update.wait(timeout=1800)
             dump(evidence/'terminal-update-exit.json',dict(exit=rc,pid=update.pid))
         else:
-            wait_for(lambda:(home/'.update_exit_code').exists(),1800)
+            wait_for(lambda:(home/'.update_exit_code').exists(),180)
             rc=int((home/'.update_exit_code').read_text().strip())
             dump(evidence/'gateway-update-exit.json',dict(exit=rc))
         update_log.close()
