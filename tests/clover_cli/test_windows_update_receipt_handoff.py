@@ -182,10 +182,13 @@ def test_base_python_alias_binds_only_to_its_actual_file(handoff, tmp_path, owne
     foreign.write_bytes(b'other-base-identity')
     alias_directory = tmp_path / 'python-current'
     if sys.platform == 'win32':
-        import os
+        import shutil
         import subprocess
-        # Directory junctions need no symlink privilege and match uv's alias.
-        subprocess.run([os.environ['COMSPEC'], '/c', 'mklink', '/J',
+        # The canonical runner does not promise COMSPEC. Resolve the real
+        # application instead; junctions need no symlink privilege.
+        command = shutil.which('cmd.exe')
+        assert command is not None, 'native command interpreter unavailable'
+        subprocess.run([command, '/c', 'mklink', '/J',
                         str(alias_directory), str(real.parent)], check=True, capture_output=True)
     else:
         alias_directory.symlink_to(real.parent, target_is_directory=True)
