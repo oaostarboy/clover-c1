@@ -1410,20 +1410,57 @@ class TestSendVoiceReplyCleanup:
 class TestAutoTtsTempFileCleanup:
     """Base adapter auto-TTS must clean up generated audio file."""
 
-    def test_source_has_finally_remove(self):
-        """play_tts call is wrapped in try/finally with os.remove."""
-        import inspect
-        from gateway.platforms.base import BasePlatformAdapter
-        source = inspect.getsource(BasePlatformAdapter._process_message_background)
-        # Find the play_tts section and verify cleanup
-        play_tts_idx = source.find("play_tts")
-        assert play_tts_idx > 0
-        after_play = source[play_tts_idx:]
-        finally_idx = after_play.find("finally")
-        remove_idx = after_play.find("os.remove")
-        assert finally_idx > 0, "play_tts must be in a try/finally block"
-        assert remove_idx > 0, "finally block must call os.remove on _tts_path"
-        assert remove_idx > finally_idx, "os.remove must be inside the finally block"
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize("outcome", ["success", "error", "cancelled"])
+    async def test_auto_tts_removes_file_after_playback(self, tmp_path, monkeypatch, outcome):
+        """Execute the public processing path, including playback failure/cancel."""
+        from gateway.config import Platform, PlatformConfig
+        from gateway.platforms.base import BasePlatformAdapter, SendResult
+        from gateway.session import build_session_key
+
+        class Adapter(BasePlatformAdapter):
+            connect = AsyncMock(return_value=True)
+            disconnect = AsyncMock()
+            send = AsyncMock(return_value=SendResult(success=True, message_id="text"))
+            send_typing = AsyncMock()
+            stop_typing = AsyncMock()
+            get_chat_info = AsyncMock(return_value={})
+
+        adapter = Adapter(PlatformConfig(enabled=True, token="fake"), Platform.TELEGRAM)
+        monkeypatch.setattr(adapter, "_should_auto_tts_for_chat", lambda chat_id: True)
+        adapter.config.typing_indicator = False
+        adapter.set_message_handler(AsyncMock(return_value="Spoken reply"))
+        audio = tmp_path / "reply.ogg"
+
+        def synthesize(**_kwargs):
+            audio.write_bytes(b"generated audio")
+            return json.dumps({"success": True, "file_path": str(audio)})
+
+        async def playback(**kwargs):
+            assert kwargs["audio_path"] == str(audio)
+            assert audio.read_bytes() == b"generated audio"
+            if outcome == "error":
+                raise RuntimeError("transport failed")
+            if outcome == "cancelled":
+                raise asyncio.CancelledError()
+            return SendResult(success=True, message_id="audio")
+
+        adapter.play_tts = AsyncMock(side_effect=playback)
+        monkeypatch.setattr("tools.tts_tool.check_tts_requirements", lambda: True)
+        monkeypatch.setattr("tools.tts_tool.text_to_speech_tool", synthesize)
+        monkeypatch.setattr("gateway.platforms.base.build_auto_tts_output_path", lambda _p: str(audio))
+        event = MessageEvent(
+            text="voice input", message_type=MessageType.VOICE,
+            source=SessionSource(platform=Platform.TELEGRAM, chat_id="123", user_id="u1"),
+            message_id="voice-1",
+        )
+        if outcome == "cancelled":
+            with pytest.raises(asyncio.CancelledError):
+                await adapter._process_message_background(event, build_session_key(event.source))
+        else:
+            await adapter._process_message_background(event, build_session_key(event.source))
+        adapter.play_tts.assert_awaited_once()
+        assert not audio.exists(), "generated audio must be removed even when playback fails"
 
 
 # =====================================================================

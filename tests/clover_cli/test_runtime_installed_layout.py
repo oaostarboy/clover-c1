@@ -2,6 +2,7 @@
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import venv
@@ -11,8 +12,21 @@ from clover_constants import venv_python_path
 
 
 @pytest.mark.parametrize('metadata_mode', ['owned', 'owned-shadowed', 'foreign', 'missing', 'malformed'])
-def test_running_external_venv_is_selected_only_with_own_installed_metadata(tmp_path, metadata_mode):
-    source = Path(__file__).resolve().parents[2]
+@pytest.mark.parametrize('layout', ['venv', '.venv', 'both', 'neither'])
+def test_running_external_venv_is_selected_only_with_own_installed_metadata(tmp_path, metadata_mode, layout):
+    checkout = Path(__file__).resolve().parents[2]
+    source = tmp_path / 'checkout'
+    (source / 'clover_cli').mkdir(parents=True)
+    # Import unmodified product modules from a disposable checkout. The real
+    # checkout may have .venv, venv, both, or an owned external test runtime.
+    for name in ('__init__.py', 'managed_uv.py', 'sqlite_runtime.py', 'update_preflight.py'):
+        shutil.copy2(checkout / 'clover_cli' / name, source / 'clover_cli' / name)
+    shutil.copy2(checkout / 'clover_constants.py', source / 'clover_constants.py')
+    for local in ('venv', '.venv'):
+        if layout in (local, 'both'):
+            local_python = venv_python_path(source / local, windows=os.name == 'nt')
+            local_python.parent.mkdir(parents=True)
+            local_python.write_bytes(b'local interpreter placeholder')
     live = tmp_path/'external environment'
     venv.EnvBuilder(with_pip=False, symlinks=os.name != 'nt').create(live)
     python = venv_python_path(live, windows=os.name == 'nt')
@@ -51,6 +65,7 @@ print(json.dumps({'prefix':sys.prefix,'selected':str(_default_live_venv(Path(sys
     assert child.returncode == 0, child.stderr
     result = json.loads(child.stdout)
     assert Path(result['prefix']) == live
-    expected = live if metadata_mode.startswith('owned') else source/'venv'
+    fallback = '.venv' if layout == '.venv' else 'venv'
+    expected = live if metadata_mode.startswith('owned') else source / fallback
     assert Path(result['selected']) == expected
     assert python.is_file()  # discovery is read-only
