@@ -251,38 +251,41 @@ def _print_pulled_not_restarted() -> None:
     except Exception:
         logger.debug("could not stand down the restart watcher", exc_info=True)
     print("    The new files were already downloaded, but the running version was NOT restarted and keeps")
-    print("    running the version it had. Your data was not changed. Run `clover update` again to finish:")
+    print("    running the version it had. Dependencies may already have changed. Run `clover update` again to finish:")
     print("    the restart that is still owed is kept and will be completed then.")
 
 
 def _clover_databases_in_wal_mode() -> list[str]:
-    """Names of Clover SQLite files whose on-disk header says WAL. Read-only.
+    """Read-only WAL inventory; missing evidence raises instead of implying DELETE.
 
-    Reads bytes 18/19 of the 100-byte header (file-format versions: 1 = rollback
-    journal, 2 = WAL). The updater holds no connection to these files, so the
-    byte read cannot cancel a lock of its own. A running gateway's locks are in
-    another process and unaffected. Unreadable or non-SQLite files are ignored.
+    Include nested cron, memory, plugin and profile stores, not just state.db.
+    A bounded inventory must fail closed at its limit, never return a prefix as
+    if it proved the rest of the files safe. Both SQLite format-version bytes
+    must positively identify rollback mode to permit offline continuation.
     """
     from clover_constants import get_clover_home
     from clover_cli.sqlite_safe_read import read_header_bytes_preopen
 
     home = Path(get_clover_home())
-    patterns = ("*.db", "kanban/**/*.db", "plugin-data/*/*.db", "profiles/*/*.db", "profiles/*/kanban/**/*.db")
     seen: set[Path] = set()
     wal: list[str] = []
-    for pattern in patterns:
+    for pattern in ("**/*.db", "**/*.sqlite", "**/*.sqlite3"):
         for path in home.glob(pattern):
-            if path in seen or not path.is_file():
+            if path in seen:
                 continue
             seen.add(path)
             if len(seen) > 200:
-                return wal
-            try:
-                header = read_header_bytes_preopen(path, length=100)
-            except OSError:
-                continue
-            if header and header[:16] == b"SQLite format 3\x00" and len(header) >= 20 and header[18] == 2:
+                raise RuntimeError('Database inventory limit reached; journal modes unverified')
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError('Database inventory contains an unverified target')
+            header = read_header_bytes_preopen(path, length=100)
+            if not header or len(header) < 100 or header[:16] != b"SQLite format 3\x00":
+                raise RuntimeError('Database journal header is unreadable or invalid')
+            versions = header[18:20]
+            if versions == b"\x02\x02":
                 wal.append(str(path.relative_to(home)))
+            elif versions != b"\x01\x01":
+                raise RuntimeError('Database journal mode is unverified')
     return wal
 
 
@@ -345,8 +348,6 @@ def _finish_update_runtime_attempt(
             vulnerable = False
         if not vulnerable:
             print("  ⚠ Runtime repair skipped: the target is not a proved owned virtual environment.")
-            return
-        if _repair_failure_is_safe_to_continue(repair):
             return
         print("  ✗ Update stopped: the runtime target is not a proved owned virtual environment.")
         _print_pulled_not_restarted()

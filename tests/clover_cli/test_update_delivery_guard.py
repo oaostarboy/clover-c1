@@ -20,6 +20,7 @@ def test_post_pull_api_proceeds_for_legacy_gateway_and_records_receipt(monkeypat
     monkeypatch.setattr(gateway, 'find_gateway_pids', lambda **kw: [123])
     monkeypatch.setattr(update_cmd, '_gateway_pid_install_verdict', lambda pid: 'own')
     monkeypatch.setattr(status, 'runtime_status_pid_is_live', lambda row: True)
+    monkeypatch.setattr(status, '_get_process_start_time', lambda pid: 42)
     (tmp_path/'gateway_state.json').write_text(json.dumps({
         'pid':123, 'start_time':42, 'kind':'clover-gateway', 'active_agents':0,
         'gateway_state':'running', 'clover_home':str(tmp_path)}))
@@ -143,7 +144,7 @@ def test_legacy_proceed_preserves_pending_state_and_snapshot(monkeypatch, tmp_pa
     pending=tmp_path/'pending'; pending.write_bytes(b'original restart intent')
     db=tmp_path/'state.db'; db.write_bytes(b'uncertain delivery evidence')
     snapshot=tmp_path/'snapshot'; snapshot.write_bytes(b'original rollback evidence')
-    monkeypatch.setattr(guard, '_unsafe_gateways', lambda: ['legacy'])
+    monkeypatch.setattr(guard, '_unsafe_gateways', lambda: ['legacy: default (PID 123): identified legacy runtime'])
     record = guard.require_delivery_safe_update()
     assert record['status'] == 'legacy-proceed'
     assert pending.read_bytes() == b'original restart intent'
@@ -159,7 +160,7 @@ def test_legacy_proceed_leaves_the_restart_watcher_armed(monkeypatch, tmp_path):
     from clover_cli import update_restart_watcher as watcher
     monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
     monkeypatch.setattr(receipt, '_current', None)
-    monkeypatch.setattr(guard, '_unsafe_gateways', lambda: ['legacy'])
+    monkeypatch.setattr(guard, '_unsafe_gateways', lambda: ['legacy: default (PID 123): identified legacy runtime'])
     beacon=watcher.beacon_path(tmp_path)
     beacon.write_text(json.dumps({'updater_pid':os.getpid(),
         'updater_create_time':watcher._process_create_time(os.getpid()),
@@ -176,19 +177,21 @@ def test_capable_gateway_is_recorded_as_capable_and_silent(monkeypatch, tmp_path
     assert capsys.readouterr().out == ''
 
 
-def test_discovery_failure_proceeds_as_unverified(monkeypatch, tmp_path):
+def test_discovery_failure_defers_as_unverified(monkeypatch, tmp_path):
     from clover_cli import update_delivery_guard as guard, update_receipt as receipt
     monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
     monkeypatch.setattr(receipt, '_current', None)
     monkeypatch.setattr(guard, '_unsafe_gateways', lambda: (_ for _ in ()).throw(RuntimeError('x')))
-    assert guard.require_delivery_safe_update()['status'] == 'unverified-proceed'
+    with pytest.raises(SystemExit) as exc:
+        guard.require_delivery_safe_update()
+    assert exc.value.code == 1
 
 
 def test_legacy_message_is_truthful_and_never_says_nothing_changed(monkeypatch, tmp_path, capsys):
     from clover_cli import update_delivery_guard as guard, update_receipt as receipt
     monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
     monkeypatch.setattr(receipt, '_current', None)
-    monkeypatch.setattr(guard, '_unsafe_gateways', lambda: ['default (PID 1): delivery-aware restart is not established'])
+    monkeypatch.setattr(guard, '_unsafe_gateways', lambda: ['legacy: default (PID 1): identified legacy runtime'])
     guard.require_delivery_safe_update()
     out = capsys.readouterr().out.lower()
     assert 'nothing was changed' not in out and 'deferred' not in out and 'maintenance' not in out

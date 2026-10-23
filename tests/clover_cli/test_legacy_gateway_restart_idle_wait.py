@@ -38,7 +38,7 @@ class Clock:
 def _write_state(home, *, active=0, capability=None, pid=PID, **extra):
     row = {"pid": pid, "kind": "clover-gateway", "gateway_state": "running",
            "restart_requested": False, "active_agents": active,
-           "clover_home": str(home), **extra}
+           "clover_home": str(home), "start_time": 42, **extra}
     if capability is not None:
         row["update_restart_capability"] = capability
     (home / "gateway_state.json").write_text(json.dumps(row), encoding="utf-8")
@@ -65,6 +65,10 @@ def _ledger(home, rows):
 def home(tmp_path, monkeypatch):
     monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
     monkeypatch.setattr(gateway, "find_profile_gateway_processes", lambda **kw: [])
+    import gateway.status as status
+    monkeypatch.setattr(status, '_get_process_start_time', lambda pid: 42)
+    monkeypatch.setattr(status, 'runtime_status_pid_is_live', lambda row: True)
+    _ledger(tmp_path, [])
     return tmp_path
 
 
@@ -80,7 +84,7 @@ def test_capable_gateway_is_not_delayed(home):
 def test_unknown_pid_is_not_delayed(home):
     clock = Clock()
     assert gateway.wait_for_legacy_gateway_idle(
-        PID + 1, max_wait=120, sleep=clock.sleep, clock=clock.monotonic) == "not-legacy"
+        PID + 1, max_wait=120, sleep=clock.sleep, clock=clock.monotonic) == "unverified"
     assert clock.slept == 0
 
 
@@ -154,20 +158,20 @@ def test_default_budget_is_bounded_between_one_and_three_minutes():
     assert 60 <= gateway.LEGACY_GATEWAY_IDLE_WAIT_SECONDS <= 180
 
 
-def test_unreadable_ledger_does_not_extend_the_wait(home):
+def test_unreadable_ledger_defers_without_waiting(home):
     _write_state(home, active=0)
     (home / "state.db").write_bytes(b"not a database")
     clock = Clock()
     assert gateway.wait_for_legacy_gateway_idle(
         PID, max_wait=120, poll=1, stable_seconds=3, sleep=clock.sleep,
-        clock=clock.monotonic) == "idle"
+        clock=clock.monotonic) == "unverified"
 
 
 def test_already_draining_gateway_is_not_delayed(home):
     _write_state(home, active=4, restart_requested=True, gateway_state="draining")
     clock = Clock()
     assert gateway.wait_for_legacy_gateway_idle(
-        PID, max_wait=120, sleep=clock.sleep, clock=clock.monotonic) == "not-legacy"
+        PID, max_wait=0, sleep=clock.sleep, clock=clock.monotonic) == "timeout"
 
 
 def test_wait_does_not_modify_the_database(home):
@@ -184,7 +188,7 @@ def test_sigusr1_restart_waits_before_signalling_and_still_signals(home, monkeyp
     order = []
     monkeypatch.setattr(
         gateway, "wait_for_legacy_gateway_idle",
-        lambda pid, **kw: order.append(("wait", pid)) or "timeout")
+        lambda pid, **kw: order.append(("wait", pid)) or "idle")
     monkeypatch.setattr(os, "kill", lambda pid, sig: order.append(("kill", pid, sig)))
     monkeypatch.setattr(gateway, "_wait_for_pid_exit", lambda pid, timeout: True)
     assert gateway._graceful_restart_via_sigusr1(PID, 5.0) is True
@@ -199,5 +203,6 @@ def test_idle_wait_failure_never_blocks_the_restart(home, monkeypatch):
     monkeypatch.setattr(gateway, "wait_for_legacy_gateway_idle", boom)
     monkeypatch.setattr(os, "kill", lambda pid, sig: killed.append(pid))
     monkeypatch.setattr(gateway, "_wait_for_pid_exit", lambda pid, timeout: True)
-    assert gateway._graceful_restart_via_sigusr1(PID, 5.0) is True
-    assert killed == [PID]
+    with pytest.raises(SystemExit):
+        gateway._graceful_restart_via_sigusr1(PID, 5.0)
+    assert killed == []
