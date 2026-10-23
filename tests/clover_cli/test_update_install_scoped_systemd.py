@@ -105,6 +105,9 @@ def test_pending_restart_uses_owned_custom_unit(monkeypatch):
 
 
 def test_pending_restart_excludes_shared_python_foreign_home_end_to_end(monkeypatch):
+    # These synthetic service PIDs model delivery-capable gateways. Preserve
+    # the original service-isolation assertions after the compatibility gate.
+    monkeypatch.setattr("clover_cli.update_delivery_guard._unsafe_gateways", lambda: [])
     own_home = "/home/example/.clover"
     foreign_home = "/home/example/.clover-tentacle"
     monkeypatch.setattr(update_cmd, "get_clover_home", lambda: Path(own_home))
