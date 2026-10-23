@@ -1,0 +1,67 @@
+name: Reply cleanup and old-release boundary native proof
+on:
+  push:
+    branches: [ci/reply-followup-boundary-20261022]
+permissions:
+  contents: read
+concurrency:
+  group: reply-followup-boundary-${{ github.run_id }}
+  cancel-in-progress: false
+env:
+  TARGET_REF: 705b2ab92a5534080591ff4c66cb9281dd1bc2bf
+  TARGET_TREE: c1a2686f00a39f946573378af6362b2be3231e60
+jobs:
+  linux:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: released-automatic-chat-external
+            base: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+            entry: chat
+            layout: external
+          - name: released-acknowledged-quiet-external
+            base: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+            entry: quiet-cli
+            layout: external
+          - name: fixed-reply-base-automatic-normal
+            base: 30d3adc9
+            entry: chat
+            layout: normal
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Actual registered service and unchanged one-reply witness
+        env:
+          PREPARE_RUNNER_APT: 'true'
+          MODE: update
+          BASE: ${{ matrix.base }}
+          ENTRY: ${{ matrix.entry }}
+          LAYOUT: ${{ matrix.layout }}
+        run: |
+          python helpers/.github/native-proof/reply_observer.py &
+          observer=$!
+          trap 'kill "$observer" 2>/dev/null || true' EXIT
+          python helpers/.github/native-proof/linux_service.py
+      - name: Retain product and service evidence on every result
+        if: always()
+        run: |
+          mkdir -p "$RUNNER_TEMP/evidence"
+          systemctl --user show clover-gateway.service > "$RUNNER_TEMP/evidence/unit-final.txt" 2>&1 || true
+          journalctl --user -u clover-gateway.service --no-pager -n 400 > "$RUNNER_TEMP/evidence/journal.log" 2>&1 || true
+          if test -d "$HOME/.clover/logs"; then cp -r "$HOME/.clover/logs" "$RUNNER_TEMP/evidence/product-logs"; fi
+          for f in gateway_state.json .update_output.txt .update_exit_code .update_refusal.json; do
+            if test -f "$HOME/.clover/$f"; then cp "$HOME/.clover/$f" "$RUNNER_TEMP/evidence/"; fi
+          done
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: replies-followup-${{ matrix.name }}
+          include-hidden-files: true
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
