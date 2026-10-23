@@ -8,9 +8,10 @@ from __future__ import annotations
 
 
 def filetime_to_unix(ticks):
-    # Remove the 1601 epoch in integer space before rounding to float. Doing
-    # the division first loses native sub-microsecond birth precision.
-    return (ticks - 116_444_736_000_000_000) / 10_000_000
+    # Remove the 1601 epoch in integer space, then use the Windows C double
+    # conversion used by psutil's beacon producer. Python int true division
+    # can round to an adjacent float even though it describes the same birth.
+    return float(ticks - 116_444_736_000_000_000) / 10_000_000
 
 
 def chain_from_snapshot(pid, parents, observe):
