@@ -12,9 +12,9 @@ concurrency:
   cancel-in-progress: false
 env:
   OLD_REF: v1.5.6
-  TARGET_REF: 5be4eab28f3906d7d67dcac37a28ccbc01e67f12
-  TARGET_TREE: e41ff16f866ff1e01cd561183f49a0a82cd3a59a
-  NEXT_REF: ci/native-next/guard-reviewed-final-20261022
+  TARGET_REF: 5817449d88e5ada1edb74f7c95e862bb2d8ecc43
+  TARGET_TREE: a3963b1828770a760c06383bf4439d8bf43bdeaf
+  NEXT_REF: ci/native-next/guard-reviewed-5817449d-20261022
 jobs:
   pins:
     runs-on: ubuntu-latest
@@ -31,7 +31,7 @@ jobs:
           path: helpers
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: 5be4eab28f3906d7d67dcac37a28ccbc01e67f12
+          ref: 5817449d88e5ada1edb74f7c95e862bb2d8ecc43
           fetch-depth: 0
           persist-credentials: false
           path: source
@@ -74,7 +74,7 @@ jobs:
           path: helpers
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
         with:
-          ref: 5be4eab28f3906d7d67dcac37a28ccbc01e67f12
+          ref: 5817449d88e5ada1edb74f7c95e862bb2d8ecc43
           fetch-depth: 0
           persist-credentials: false
           path: source
