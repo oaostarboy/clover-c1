@@ -1,0 +1,243 @@
+name: Exact final integrated macOS and Windows acceptance
+permissions:
+  contents: read
+concurrency:
+  group: overnight-native-final-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  updater:
+    name: exact / ${{ matrix.os }} / ${{ matrix.entry }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - macos-15
+        - windows-2025
+        entry:
+        - terminal
+        - gateway
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        path: helpers
+        persist-credentials: false
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        path: source
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+      with:
+        enable-cache: false
+    - name: Exact final fixed-base automatic update with held work; no driver restart
+      shell: bash
+      env:
+        ENTRY: ${{ matrix.entry }}
+      run: "set -euo pipefail\nuv run --no-project --with psutil python helpers/.github/native-proof/guard_native_upgrade.py\
+        \ \\\n  --source \"$GITHUB_WORKSPACE/source\" --old dc4054a10cfa3372e3f75bea9985b2da74523ecf\
+        \ --entry \"$ENTRY\" \\\n  --target a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b\
+        \ --tree e7fa69f31d788ab81d08b0b717e0bd1b25eda958 --fixed-base dc4054a10cfa3372e3f75bea9985b2da74523ecf\
+        \ \\\n  --evidence \"$RUNNER_TEMP/evidence\""
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: exact-${{ matrix.os }}-${{ matrix.entry }}-${{ github.run_id }}
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
+  windows-rollback:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        path: helpers
+        persist-credentials: false
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        path: source
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+      with:
+        python-version: 3.11.9
+    - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+      with:
+        version: 0.9.28
+        enable-cache: false
+    - name: Actual failed promotion preserves newest state
+      shell: pwsh
+      run: 'python helpers/.github/windows-external-runtime/probe.py --source source
+        --target-sha dc4054a10cfa3372e3f75bea9985b2da74523ecf --target-tree 85751aedbef129f31ea943307846a48844b53d2d
+        --old-sha 9535350bee1d57cf7e466672e6f416403886bec1 --case smoke-rollback --evidence
+        "$env:RUNNER_TEMP/evidence"
+
+        if ($LASTEXITCODE -ne 0) { throw ''Native rollback probe failed'' }
+
+        '
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: windows-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
+  macos-rollback:
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        path: helpers
+        persist-credentials: false
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        path: source
+        fetch-depth: 0
+        persist-credentials: false
+    - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+      with:
+        enable-cache: false
+    - name: Actual failed promotion preserves newest state
+      shell: bash
+      run: "python3 helpers/.github/native-proof/macos_external_env.py --rollback-only\
+        \ \\\n  --source \"$GITHUB_WORKSPACE/source\" \\\n  --target-sha dc4054a10cfa3372e3f75bea9985b2da74523ecf\
+        \ \\\n  --target-tree 85751aedbef129f31ea943307846a48844b53d2d \\\n  --evidence\
+        \ \"$RUNNER_TEMP/evidence\"\n"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: guard-macos-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
+  macos-fresh:
+    name: macOS-15 full fresh installer, installed health and contracts
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+        path: helpers
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        persist-credentials: false
+        fetch-depth: 0
+        path: source
+    - name: Bounded native Electron network cause probe
+      shell: bash
+      run: node helpers/.github/native-proof/electron_network_probe.mjs "$RUNNER_TEMP/evidence/electron-network-before.json"
+    - name: Clean normal full installer, actual health and native feature contracts
+      shell: bash
+      run: bash helpers/.github/native-proof/posix.sh fresh
+    - name: Read installed components and packaged desktop identity
+      shell: bash
+      run: 'set -euo pipefail
+
+        export CLOVER_HOME="$HOME/.clover"
+
+        "$HOME/.clover/clover-c1/venv/bin/python" helpers/.github/native-proof/macos_components.py
+
+        '
+    - name: Preserve bounded network causes after failed install
+      if: failure()
+      shell: bash
+      run: node helpers/.github/native-proof/electron_network_probe.mjs "$RUNNER_TEMP/evidence/electron-network-after-failure.json"
+    - name: Preserve exact row outcome
+      if: always()
+      shell: bash
+      env:
+        ROW_STATUS: ${{ job.status }}
+      run: python helpers/.github/native-proof/row.py
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: macos-full-fresh-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
+    env:
+      OLD_REF: v1.5.6
+      TARGET_REF: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+      TARGET_TREE: 85751aedbef129f31ea943307846a48844b53d2d
+      NEXT_REF: ci/native-next/overnight-final-20261023
+      NEXT_SHA: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
+      NEXT_TREE: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+      OLD_SHA: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+      SETUP: zyra
+      UPDATE_PATH: cli
+  windows-fresh:
+    name: Exact final native Windows fresh install and feature contracts
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - windows-2025
+    env:
+      OLD_REF: v1.5.6
+      TARGET_REF: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+      TARGET_TREE: 85751aedbef129f31ea943307846a48844b53d2d
+      NEXT_REF: ci/native-next/overnight-final-20261023
+      NEXT_SHA: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
+      NEXT_TREE: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+      OLD_SHA: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+      SETUP: zyra
+      UPDATE_PATH: cli
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+        path: helpers
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        fetch-depth: 0
+        persist-credentials: false
+        path: source
+    - name: macOS/Linux fresh native installer and installed feature contracts
+      if: runner.os != 'Windows'
+      shell: bash
+      run: bash helpers/.github/native-proof/posix.sh fresh
+    - name: Windows fresh native installer and installed feature contracts
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./helpers/.github/native-proof/windows.ps1 -Mode fresh
+    - name: Preserve actual evidence and row outcome
+      if: always()
+      shell: bash
+      env:
+        ROW_STATUS: ${{ job.status }}
+      run: 'mkdir -p "$RUNNER_TEMP/evidence"
+
+        python helpers/.github/native-proof/row.py
+
+        '
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: fresh-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
+'on':
+  push:
+    branches:
+    - ci/overnight-native-final-20261023
