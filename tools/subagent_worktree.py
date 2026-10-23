@@ -126,6 +126,42 @@ def is_confirmed_non_git_workspace(path: Optional[str]) -> bool:
     return True
 
 
+NO_CHECKOUT_REASON = "workspace is not a git repository, so there is nothing to isolate"
+
+
+def default_terminal_folder() -> Optional[str]:
+    """Folder the gateway/CLI process itself sits in (the last-resort start folder).
+
+    Deliberately not ``TERMINAL_CWD``: cron rewrites that process-global for
+    the length of a job, so it is not evidence of where this chat works.
+    """
+    try:
+        return os.getcwd()
+    except OSError:
+        return None
+
+
+def format_isolation_refusal(reason: Optional[str], *, conflict: bool = False) -> str:
+    """Human-readable refusal: what failed and the exact key that changes it."""
+    what = str(reason or "unknown setup failure")
+    if conflict:
+        fix = (
+            "Set delegation.worktree_isolation to true "
+            "(clover config set delegation.worktree_isolation true) or set "
+            "delegation.worktree_isolation_required to false."
+        )
+    else:
+        fix = (
+            "To let helpers run in the shared workspace when isolation fails, run: "
+            "clover config set delegation.worktree_isolation_required false "
+            "(delegation.worktree_isolation false turns isolation off entirely)."
+        )
+    return (
+        "Required workspace isolation was not available; child was not started: "
+        f"{what}. {fix}"
+    )
+
+
 def _has_git_entry_above(start: str) -> Optional[bool]:
     """True/False if a ``.git`` entry exists at/above *start*; None if unreadable."""
     current = start
@@ -633,21 +669,26 @@ def prepare_subagent_worktree(
                 "reason": redirect,
             }, scratch
         parent_cwd = base
+    # A parent with no recorded folder (e.g. a chat restored after a gateway
+    # restart) runs its commands where the process started. If THAT is a
+    # confirmed non-git folder there is still nothing to isolate.
+    probe = parent_cwd or default_terminal_folder()
     if not resolve_repo_root(parent_cwd):
-        if is_confirmed_non_git_workspace(parent_cwd):
+        if is_confirmed_non_git_workspace(probe):
             # Isolation protects a git checkout from concurrent writers; with
             # no checkout there is nothing to protect, so even required
             # isolation lets the child run in the parent's workspace.
             return {
                 "status": "shared",
                 "required": required,
-                "reason": "workspace is not a git repository",
+                "reason": NO_CHECKOUT_REASON,
                 "no_checkout": True,
             }, None
         return {
             "status": "blocked" if required else "shared",
             "required": required,
-            "reason": "workspace is not a git repository",
+            "reason": "workspace is not a git repository"
+            if parent_cwd else "the parent's working folder is unknown",
         }, None
     try:
         info = create_subagent_worktree(parent_cwd, subagent_id)
