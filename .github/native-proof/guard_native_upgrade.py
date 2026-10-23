@@ -273,6 +273,11 @@ def child(a):
         result = verify_state(read_json(a.records))
     elif a.mode == 'sqlite':
         result = identity()
+        if WINDOWS:
+            base_executable = getattr(sys, '_base_executable', None)
+            assert isinstance(base_executable, str)
+            result['base_executable'] = base_executable
+            result['base_executable_resolved'] = str(Path(base_executable).resolve(strict=True))
         assert not result['vulnerable'], result
     elif a.mode == 'service':
         if WINDOWS:
