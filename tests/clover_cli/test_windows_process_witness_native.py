@@ -50,7 +50,9 @@ def test_real_live_child_has_exact_parent_and_creation_time(record_property):
 
 def test_missing_native_process_cannot_supply_an_ownership_witness():
     import psutil
-    pid = 0xFFFFFFFC
+    # psutil's Windows pid_exists accepts signed C long, unlike Win32 DWORD.
+    # Keep the missing-process control inside both APIs' supported range.
+    pid = 0x7FFFFFFC
     assert not psutil.pid_exists(pid)
     with pytest.raises(subprocess.CalledProcessError):
         bridge.process_chain(pid, timeout=5)
