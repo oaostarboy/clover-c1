@@ -18,8 +18,8 @@ Assertions: exit 0, no refusal and no "nothing was changed" text, a
 ``legacy-proceed`` receipt, the old gateway is replaced by one running the new
 code that advertises the capability, no stale restart markers, no rollback.
 
-Skipped when the v1.5.6 commit is unavailable (shallow clone without tags) --
-the dedicated CI step fetches it. POSIX only: the Windows first transition is
+Skipped locally when the v1.5.6 commit is unavailable; it FAILS on GitHub Actions
+(the test fetches the pinned commit itself) so CI can never go green by skipping. POSIX only: the Windows first transition is
 exercised by the native workflow, not here.
 """
 from __future__ import annotations
@@ -172,7 +172,10 @@ exit 0
 @pytest.fixture
 def legacy_install(tmp_path):
     if not _have_v156():
-        pytest.skip(f"{V156_TAG} ({V156_SHA[:8]}) is not available in this clone")
+        message = f"{V156_TAG} ({V156_SHA[:8]}) is not available in this clone"
+        if os.environ.get("GITHUB_ACTIONS") == "true":
+            pytest.fail(message + "; CI must be able to fetch the released commit")
+        pytest.skip(message)
 
     home = tmp_path / "home" / ".clover"
     (home / "bin").mkdir(parents=True)
