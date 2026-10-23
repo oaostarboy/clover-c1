@@ -469,6 +469,9 @@ def test_already_up_to_date_windows_resume_relaunch_satisfies_pending_restart(
 
 def test_pending_restart_on_windows_keeps_the_gateway_it_just_started(monkeypatch):
     """The leftover sweep kills only pre-restart survivors, never the new gateway."""
+    # Synthetic PIDs model a gateway whose compatibility gate already passed.
+    # Real legacy refusal is covered by test_update_delivery_guard and dev runs.
+    monkeypatch.setattr("clover_cli.update_delivery_guard._unsafe_gateways", lambda: [])
     import clover_cli.gateway as clover_gateway
     from clover_cli import gateway_windows
 
@@ -501,6 +504,7 @@ def test_pending_restart_on_windows_keeps_the_gateway_it_just_started(monkeypatc
 
 def test_pending_restart_on_windows_fails_when_no_gateway_comes_up(monkeypatch):
     """D1: never print "Pending fleet restart completed" over a dead gateway."""
+    monkeypatch.setattr("clover_cli.update_delivery_guard._unsafe_gateways", lambda: [])
     import clover_cli.gateway as clover_gateway
     from clover_cli import gateway_windows
 

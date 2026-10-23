@@ -83,5 +83,27 @@ def require_delivery_safe_update() -> None:
             'status': 'refused', 'required_capability': CAPABILITY,
             'reasons': reasons, 'maintenance_required': True,
         }
+    # An old detached watcher otherwise probes the intentionally still-old
+    # gateway and may roll back/relaunch after this refusal. Retire only OUR
+    # live updater's beacon before unwinding; retain the fleet restart marker
+    # and rollback snapshot. A missing beacon is the legacy watcher's supported
+    # stand-down signal, not a delivery acknowledgement.
+    from clover_cli import update_restart_watcher as watcher
+    import os
+    beacon = watcher.beacon_path()
+    try:
+        raw = beacon.read_bytes()
+    except FileNotFoundError:
+        raw = None
+    if raw is not None:
+        data = json.loads(raw)
+        if (data.get('updater_pid') == os.getpid()
+                and data.get('updater_create_time') is not None
+                and watcher._updater_identity_alive(data) is True):
+            if beacon.read_bytes() != raw:
+                raise RuntimeError('Update watcher ownership changed during refusal')
+            beacon.unlink()
+            if update_receipt._current is not None:
+                update_receipt._current.data['delivery_restart_guard']['owned_watcher_disarmed'] = True
     update_receipt.finalize_update_receipt('refused', stop_reason=detail)
     raise SystemExit(2)

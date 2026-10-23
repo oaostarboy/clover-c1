@@ -499,8 +499,12 @@ def update_managed_uv(
     vulnerable-runtime repair probe below ALWAYS runs — CVE-driven runtime
     repair must never be gated behind the freshness stamp.
     """
-    from clover_cli.update_delivery_guard import require_delivery_safe_update
-    require_delivery_safe_update()
+    # This API is also used outside updates (e.g. setup). Only a real updater
+    # invocation can owe a fleet restart; keep ordinary uv maintenance read-only
+    # with respect to gateway discovery.
+    if 'update' in sys.argv[1:]:
+        from clover_cli.update_delivery_guard import require_delivery_safe_update
+        require_delivery_safe_update()
 
     # This long-standing post-pull API also runs inside released gateways'
     # PATH-selected updater. Continue under the proved requesting runtime before

@@ -12,6 +12,7 @@ def test_post_pull_api_refuses_legacy_before_uv_mutation(monkeypatch, tmp_path):
     import gateway.status as status
 
     monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
+    monkeypatch.setattr('sys.argv', ['clover', 'update', '--yes'])
     monkeypatch.setattr(gateway, 'find_profile_gateway_processes', lambda **kw: [
         SimpleNamespace(profile='default', path=tmp_path, pid=123)])
     monkeypatch.setattr(gateway, 'find_gateway_pids', lambda **kw: [123])
@@ -123,3 +124,24 @@ def test_refusal_preserves_pending_state_and_snapshot(monkeypatch, tmp_path):
     latest=json.loads((tmp_path/'logs/update_receipts/latest.json').read_text())
     assert latest['outcome'] == 'refused'
     assert latest['delivery_restart_guard']['maintenance_required'] is True
+
+
+@pytest.mark.parametrize('owned', [True, False])
+def test_refusal_disarms_only_its_own_restart_watcher(monkeypatch, tmp_path, owned):
+    import os
+    from clover_cli import update_delivery_guard as guard, update_receipt as receipt
+    from clover_cli import update_restart_watcher as watcher
+    monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
+    monkeypatch.setattr(receipt, '_current', None)
+    monkeypatch.setattr(guard, '_unsafe_gateways', lambda: ['legacy'])
+    owner=os.getpid() if owned else os.getpid()+1
+    beacon=watcher.beacon_path(tmp_path)
+    beacon.write_text(json.dumps({'updater_pid':owner,
+        'updater_create_time':watcher._process_create_time(owner),
+        'pre_pull_sha':'old', 'repo':'staged-source'}))
+    original=beacon.read_bytes()
+    with pytest.raises(SystemExit): guard.require_delivery_safe_update()
+    if owned:
+        assert not beacon.exists(), 'old watcher must not probe/rollback/restart a refused update'
+    else:
+        assert beacon.read_bytes()==original
