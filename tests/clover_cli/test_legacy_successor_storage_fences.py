@@ -8,6 +8,13 @@ import pytest
 from clover_cli import managed_uv as m
 
 
+@pytest.fixture(autouse=True)
+def no_unrelated_live_gateways(monkeypatch):
+    from clover_cli import gateway
+    monkeypatch.setattr(gateway, 'find_profile_gateway_processes', lambda **kw: [])
+    monkeypatch.setattr(gateway, 'find_gateway_pids', lambda **kw: [])
+
+
 @pytest.mark.parametrize('relative', [
     'cron/executions.db', 'cron/notepad.db', 'memory/memory_store.db',
     'profiles/p/plugin-data/demo/data.db', 'cache/nested/metrics.sqlite3'])
@@ -127,6 +134,22 @@ def test_plugin_store_inventory_cannot_omit_valid_wal_files(monkeypatch, tmp_pat
     conn.execute('PRAGMA journal_mode=WAL')
     conn.execute('CREATE TABLE evidence(x)')
     conn.close()
+    assert m._repair_failure_is_safe_to_continue(
+        m.RuntimeRepairResult('failed','offline',sqlite_before='3.50.4')) is False
+
+
+def test_active_gateway_cannot_waive_old_cached_plugin_wal_openers(monkeypatch, tmp_path):
+    from types import SimpleNamespace
+    from clover_cli import gateway
+    monkeypatch.setenv('CLOVER_HOME',str(tmp_path))
+    conn=sqlite3.connect(tmp_path/'state.db')
+    conn.execute('CREATE TABLE saved(x)')
+    conn.close()
+    monkeypatch.setattr(gateway,'find_profile_gateway_processes',lambda **kw:[
+        SimpleNamespace(profile='default',path=tmp_path,pid=123)])
+    # A positively safe header NOW says nothing about code still cached by the
+    # old gateway: released plugin_db could enable WAL on its next invocation.
+    assert m._clover_databases_in_wal_mode()==[]
     assert m._repair_failure_is_safe_to_continue(
         m.RuntimeRepairResult('failed','offline',sqlite_before='3.50.4')) is False
 

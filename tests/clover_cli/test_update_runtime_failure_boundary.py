@@ -23,6 +23,11 @@ def wal_database_in_home(tmp_path, monkeypatch):
     Tests that expect SystemExit(1) run against a home whose state.db is WAL.
     DELETE-mode continuation is covered in test_failed_repair_in_delete_mode_*.
     """
+    from clover_cli import gateway
+    # These runtime-only cases deliberately model an installation with no
+    # active cached gateway openers; do not consult the host's live processes.
+    monkeypatch.setattr(gateway, 'find_profile_gateway_processes', lambda **kw: [])
+    monkeypatch.setattr(gateway, 'find_gateway_pids', lambda **kw: [])
     home = tmp_path / 'clover-home'
     monkeypatch.setenv('CLOVER_HOME', str(home))
     _make_db(home, 'state.db', 'WAL')

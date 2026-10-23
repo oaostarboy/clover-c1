@@ -30,9 +30,11 @@ leaving a restart pending. Retry `clover update` after resolving the condition;
 do not delete pending delivery records or restore an old database over new work.
 
 If an old SQLite runtime cannot be repaired, continuation is allowed only after
-a read-only inventory positively establishes rollback-journal mode. WAL files,
-unreadable headers, unknown ownership and incomplete inventories still stop the
-update. Built-in database openers retain their vulnerable-SQLite WAL fallback.
+a read-only inventory positively establishes rollback-journal mode and no gateway
+is still active. Older gateways may cache plugin openers that can turn WAL on
+after an inventory, so a clean header alone does not waive runtime repair during
+a running-gateway update. WAL files, unreadable headers, unknown ownership and
+incomplete inventories still stop the update. Built-in database openers retain their vulnerable-SQLite WAL fallback.
 An offline runtime repair is retried by a later update.
 
 ## Windows: the first update from 1.5.6

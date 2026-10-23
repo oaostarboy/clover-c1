@@ -314,13 +314,26 @@ def _repair_failure_is_safe_to_continue(repair: RuntimeRepairResult) -> bool:
     """True when a failed runtime repair cannot expose a WAL-reset corruption.
 
     The corruption needs a database in WAL mode on a vulnerable SQLite. Clover's
-    own openers (``clover_state.apply_wal_with_fallback``) keep every database
-    out of WAL on a vulnerable runtime, so when no database is in WAL mode right
-    now, continuing is safe and the repair is retried by the next update.
+    fresh target-side openers (``clover_state.apply_wal_with_fallback``) keep
+    databases out of WAL on a vulnerable runtime. A still-running gateway can
+    cache released plugin openers that did not honor that fallback, so require
+    no active gateway as well as a complete readable rollback-mode inventory.
+    The repair is retried by the next update.
     Failing the whole update here (after the new files were already pulled) only
     strands offline / no-uv users in a half-updated state.
     """
     try:
+        from clover_cli.gateway import find_gateway_pids, find_profile_gateway_processes
+        from clover_cli.update_cmd import _gateway_pid_install_verdict
+
+        # Fresh target-side openers honor DELETE fallback. Cached plugin_db in
+        # a still-running released gateway did not: it can turn WAL on AFTER a
+        # clean header inventory. A quiet agent count cannot repair loaded code.
+        if find_profile_gateway_processes(strict=True):
+            return False
+        if any(_gateway_pid_install_verdict(pid) != 'other'
+               for pid in find_gateway_pids(all_profiles=True)):
+            return False
         wal = _clover_databases_in_wal_mode()
     except Exception:
         return False
@@ -331,7 +344,7 @@ def _repair_failure_is_safe_to_continue(repair: RuntimeRepairResult) -> bool:
         f"replaced now ({repair.detail or repair.status})."
     )
     print(
-        "    Continuing: Clover keeps its databases out of WAL mode on this runtime, and "
+        "    Continuing with no active gateway: built-in database openers keep rollback-journal mode, and "
         "the next `clover update` will retry the repair."
     )
     try:
