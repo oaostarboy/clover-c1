@@ -23,107 +23,106 @@ jobs:
           entry: cli
           layout: normal
           expected: fresh
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: release-cli-normal
           mode: update
           base: v1.5.6
           entry: cli
           layout: normal
           expected: protected-refusal
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: release-cli-external
           mode: update
           base: v1.5.6
           entry: cli
           layout: external
           expected: protected-refusal
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: release-chat-normal
           mode: update
           base: v1.5.6
           entry: chat
           layout: normal
           expected: protected-refusal
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: release-chat-external
           mode: update
           base: v1.5.6
           entry: chat
           layout: external
           expected: protected-refusal
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: main-cli-normal
           mode: update
           base: 9535350bee1d57cf7e466672e6f416403886bec1
           entry: cli
           layout: normal
           expected: protected-refusal
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: main-cli-external
           mode: update
           base: 9535350bee1d57cf7e466672e6f416403886bec1
           entry: cli
           layout: external
           expected: protected-refusal
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: main-chat-normal
           mode: update
           base: 9535350bee1d57cf7e466672e6f416403886bec1
           entry: chat
           layout: normal
           expected: protected-refusal
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: main-chat-external
           mode: update
           base: 9535350bee1d57cf7e466672e6f416403886bec1
           entry: chat
           layout: external
           expected: protected-refusal
-          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-          tree: 85751aedbef129f31ea943307846a48844b53d2d
+          target: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: fixed-cli-normal
           mode: update
-          base: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          base: 6d44b1f1d5ca95594723aa49a85444cef95f0086
           entry: cli
           layout: normal
           expected: automatic-update
-          target: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
-          tree: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+          target: f8465d94fca96d97942aba6c12e73f442241b861
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: fixed-cli-external
           mode: update
-          base: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          base: 6d44b1f1d5ca95594723aa49a85444cef95f0086
           entry: cli
           layout: external
           expected: automatic-update
-          target: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
-          tree: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+          target: f8465d94fca96d97942aba6c12e73f442241b861
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: fixed-chat-normal
           mode: update
-          base: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          base: 6d44b1f1d5ca95594723aa49a85444cef95f0086
           entry: chat
           layout: normal
           expected: automatic-update
-          target: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
-          tree: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+          target: f8465d94fca96d97942aba6c12e73f442241b861
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
         - name: fixed-chat-external
           mode: update
-          base: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          base: 6d44b1f1d5ca95594723aa49a85444cef95f0086
           entry: chat
           layout: external
           expected: automatic-update
-          target: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
-          tree: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+          target: f8465d94fca96d97942aba6c12e73f442241b861
+          tree: 939de52a57b4cbe0937cd787d9822e25803c2257
     steps:
-    - &id001
-      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
         path: helpers
         persist-credentials: false
@@ -148,7 +147,7 @@ jobs:
         \ \"$RUNNER_TEMP/evidence/product-logs\"; fi\nfor f in gateway_state.json\
         \ .update_output.txt .update_exit_code .update_refusal.json fleet_restart_pending;\
         \ do\n  if test -f \"$HOME/.clover/$f\"; then cp \"$HOME/.clover/$f\" \"$RUNNER_TEMP/evidence/\"\
-        ; fi\ndone"
+        ; fi\ndone\n"
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
       with:
@@ -159,12 +158,16 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 60
     steps:
-    - *id001
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        path: helpers
+        persist-credentials: false
+        fetch-depth: 0
     - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
     - name: Native external runtime failure and newest-write rollback
       env:
-        TARGET_REF: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-        TARGET_TREE: 85751aedbef129f31ea943307846a48844b53d2d
+        TARGET_REF: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+        TARGET_TREE: 939de52a57b4cbe0937cd787d9822e25803c2257
       run: python helpers/.github/native-proof/linux_external_env.py --source helpers
         --target-sha "$TARGET_REF" --target-tree "$TARGET_TREE" --evidence "$RUNNER_TEMP/evidence"
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
