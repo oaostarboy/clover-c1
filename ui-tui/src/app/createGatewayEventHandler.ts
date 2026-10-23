@@ -1431,12 +1431,14 @@ export function createGatewayEventHandler(ctx: GatewayEventHandlerContext): (ev:
       case 'message.complete': {
         const { finalMessages, finalText, wasInterrupted } = turnController.recordMessageComplete(ev.payload ?? {})
 
-        if (!wasInterrupted) {
+        const storageFailure = String(ev.payload?.error_surface?.code ?? '').startsWith('session_persistence_')
+
+        if (!wasInterrupted || storageFailure) {
           const msgs: Msg[] = finalMessages.length ? finalMessages : [{ role: 'assistant', text: finalText }]
           msgs.forEach(appendMessage)
 
           // Pet beat: celebrate a finished plan, otherwise a clean-finish wave.
-          flashPet(isTodoDone(getTurnState().todos) ? 'jump' : 'wave')
+          flashPet(storageFailure ? 'failed' : isTodoDone(getTurnState().todos) ? 'jump' : 'wave')
 
           if (bellOnComplete && stdout?.isTTY) {
             stdout.write('\x07')

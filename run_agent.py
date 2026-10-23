@@ -2080,24 +2080,31 @@ class AIAgent:
 
         persist_lock = getattr(self, "_session_persist_lock", None)
 
-        def _persist_and_drain() -> None:
+        def _persist_and_drain():
             self._drop_trailing_empty_response_scaffolding(messages)
             self._session_messages = messages
+            self._last_session_persist_confirmed = False
             self._save_session_log(messages)
-            self._flush_messages_to_session_db(messages, conversation_history)
+            persisted = self._flush_messages_to_session_db(messages, conversation_history)
+            if persisted is True:
+                self._last_session_persist_confirmed = True
+            if persisted is False:
+                # Preserve the in-memory/JSON work, but never acknowledge a
+                # canonical save that failed or let the finalizer claim success.
+                return False
             # Drain async token-accounting deltas at every persist point (turn
             # finalize + error exits) so a crash after this line loses at most
             # the in-flight API call's delta. Cheap no-op when nothing queued.
             if self._session_db is not None:
                 self._session_db.flush_token_counts()
             note_turn_persisted(self)
+            return persisted
 
         if persist_lock is None:
-            _persist_and_drain()
-            return
+            return _persist_and_drain()
 
         with persist_lock:
-            _persist_and_drain()
+            return _persist_and_drain()
 
     def _drop_trailing_empty_response_scaffolding(self, messages: List[Dict]) -> None:
         """Remove private empty-response retry/failure scaffolding from transcript tails.
@@ -2167,8 +2174,10 @@ class AIAgent:
 
         persist_lock = getattr(self, "_session_persist_lock", None)
         if persist_lock is None:
+            self._last_session_persist_confirmed = False
             return flush_with_recovery(self, messages, conversation_history)
         with persist_lock:
+            self._last_session_persist_confirmed = False
             return flush_with_recovery(self, messages, conversation_history)
 
     def _flush_messages_to_session_db_unlocked(
@@ -2495,6 +2504,7 @@ class AIAgent:
             # Snapshot for the bounded scan above — only on full success, so
             # a partially-processed list can never be treated as settled.
             self._db_flush_scan_prefix = messages[:]
+            self._last_session_persist_confirmed = True
             return True
         except Exception as e:
             # Force a full re-scan on the next flush: an exception mid-loop
@@ -4104,24 +4114,25 @@ class AIAgent:
                     prefix
                     + "the turn was stopped because another process was "
                     "compressing this session. Your message should already be "
-                    "saved — please send it again after compression completes."
+                    "saved. Check saved progress and reconcile earlier actions "
+                    "before retrying after compression completes."
                 )
             if cause == "compression_closed":
                 return (
                     prefix
                     + "the turn was stopped because this session was rotated "
                     "by context compression and its live continuation could "
-                    "not be adopted. The storage itself is healthy — refresh "
-                    "the client (or start a new turn) so it picks up the new "
-                    "session id, then send your message again."
+                    "not be adopted. Refresh the client so it picks up the new "
+                    "session id. Check saved progress and reconcile earlier "
+                    "actions before retrying."
                 )
             if cause == "turn_lease":
                 return (
                     prefix
                     + "the turn was stopped because another Clover process "
                     "took over this session. Your reply was not saved — wait "
-                    "for the other process to finish, then send your message "
-                    "again."
+                    "for the other process to finish. Check saved progress "
+                    "and reconcile earlier actions before retrying."
                 )
             if cause == "locked":
                 return (
@@ -4142,7 +4153,8 @@ class AIAgent:
                     "2. Salvage with: sqlite3 ~/.clover/state.db \".recover\" "
                     "(then replace state.db)\n"
                     "3. Restore from a backup in ~/.clover/backups/\n"
-                    "Then send your message again."
+                    "Check saved progress and reconcile earlier actions "
+                    "before retrying."
                 )
             if cause == "disk":
                 return (
@@ -4150,15 +4162,16 @@ class AIAgent:
                     + "the turn was stopped because session storage could not "
                     "be written (the transcript would have been lost on "
                     "restart). This is often a full disk — free some space "
-                    "(or fix state.db permissions), then send your message "
-                    "again."
+                    "(or fix state.db permissions). Check saved progress "
+                    "and reconcile earlier actions before retrying."
                 )
             return (
                 prefix
                 + "the turn was stopped because session storage could not be "
                 "written (the transcript would have been lost on restart). "
-                "Check the state database health (`clover doctor`), then "
-                "send your message again."
+                "Check the state database health (`clover doctor`) and saved "
+                "progress. Reconcile earlier actions before retrying; do not "
+                "run them again blindly."
             )
         # Unknown/diagnostic-only reasons (e.g. "unknown", guardrail_halt
         # which already surfaces its own message) — don't second-guess.

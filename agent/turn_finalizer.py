@@ -126,6 +126,22 @@ def _drop_verification_continuation_scaffolding(messages) -> None:
     ]
 
 
+def _final_save_failure_notice(cause) -> str:
+    """A storage failure is not proof that earlier actions failed."""
+    detail = {
+        "locked": "storage busy; a reader or writer may be blocking persistence",
+        "disk": "disk space or permissions error",
+        "corrupt": "reported database corruption",
+        "compression": "session changed during compression",
+        "turn_lease": "session ownership changed",
+    }.get(cause, "unknown storage error")
+    return (
+        f"⚠️ Session storage did not confirm the final save ({detail}). "
+        "Tools or external actions may already have run. Check saved progress "
+        "and reconcile uncertain effects before retrying actions."
+    )
+
+
 def finalize_turn(
     agent,
     *,
@@ -304,6 +320,10 @@ def finalize_turn(
     # scaffolding has been removed. Otherwise a later user "continue" turn
     # can replay assistant("(empty)") / recovery nudges and fall into the
     # same empty-response loop again.
+    _persist_failed = False
+    # Reset the per-attempt witness before fallible preparation too. A prior
+    # successful save cannot certify this attempt's new transcript tail.
+    agent._last_session_persist_confirmed = None
     try:
         agent._drop_trailing_empty_response_scaffolding(messages)
 
@@ -461,10 +481,45 @@ def finalize_turn(
             except Exception as _mc_err:
                 logger.info("Micro-compaction failed: %s", _mc_err)
 
-        agent._persist_session(messages, conversation_history)
+        _persist_result = agent._persist_session(messages, conversation_history)
+        _persist_failed = (_persist_result is False
+                           and getattr(agent, "_last_session_persist_confirmed", None) is not True)
     except Exception as _persist_err:
         _cleanup_errors.append(f"persist_session: {_persist_err}")
         logger.error("finalize_turn: _persist_session failed: %s", _persist_err, exc_info=True)
+        if (getattr(agent, "_session_db", None) is not None
+                and not getattr(agent, "_persist_disabled", False)
+                and getattr(agent, "_last_session_persist_confirmed", None) is not True):
+            from clover_state import classify_persistence_error
+            agent._last_persistence_error_cause = classify_persistence_error(_persist_err)
+            _persist_failed = True
+
+    if _persist_failed:
+        # Keep real output and the original transcript. A failed final save
+        # neither undoes effects nor authorizes replay, even after Stop.
+        _notice = _final_save_failure_notice(
+            getattr(agent, "_last_persistence_error_cause", None)
+        )
+        if str(_turn_exit_reason) == "session_persistence_failed":
+            final_response = _notice
+        else:
+            final_response = ((final_response.rstrip() + "\n\n")
+                              if final_response else "") + _notice
+        completed = False
+        failed = True
+        _turn_exit_reason = "session_persistence_failed"
+    elif (str(_turn_exit_reason) == "session_persistence_failed"
+          and getattr(agent, "_last_session_persist_confirmed", None) is True):
+        # Storage recovered during finalization, after execution had stopped.
+        # Certify the save, not task completion, and never restart the work.
+        final_response = (
+            "Transcript saved after storage contention, but this turn already stopped. "
+            "Tools or external actions may already have run. Check saved progress "
+            "and reconcile uncertain effects before continuing."
+        )
+        completed = False
+        failed = True
+        _turn_exit_reason = "session_persistence_recovered"
 
     # The gateway owns a separate in-memory history snapshot. Keep it current
     # even when finalization reports a cleanup error: a later prompt must not be
@@ -806,10 +861,12 @@ def finalize_turn(
     # Persistence failures already set failed=True + an explanation in
     # final_response; also stamp `error` so gateway surfaces status="error"
     # (and desktop can toast the cause) instead of a quiet complete frame.
-    if failed and str(_turn_exit_reason) == "session_persistence_failed":
+    if failed and str(_turn_exit_reason) in {"session_persistence_failed", "session_persistence_recovered"}:
+        # A storage error must not strip already-produced output from clients.
+        result["partial"] = bool(final_response)
         result["error"] = final_response or (
-            "session storage could not be written — check the state database "
-            "health (`clover doctor`), then send your message again"
+            "session storage could not be confirmed — check saved progress "
+            "and reconcile earlier actions before retrying"
         )
         # Machine-readable cause for the gateway/desktop: exactly
         # 'session_persistence_failed:<locked|compression|turn_lease|corrupt|disk|unknown>'.
@@ -817,7 +874,8 @@ def finalize_turn(
         if "failure_reason" not in result:
             _cause = getattr(agent, "_last_persistence_error_cause", None)
             result["failure_reason"] = (
-                "session_persistence_failed:" + (_cause or "unknown")
+                "session_persistence_recovered" if _turn_exit_reason == "session_persistence_recovered"
+                else "session_persistence_failed:" + (_cause or "unknown")
             )
     # Surface any post-loop cleanup failures so the caller can distinguish a
     # clean turn from one whose trajectory/session/resource teardown raised

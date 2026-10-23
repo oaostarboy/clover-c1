@@ -151,6 +151,46 @@ class _TrackingMixin:
 
     _clover_tracked_path: str | None = None
 
+    def cursor(self, *args, **kwargs):
+        cursor = super().cursor(*args, **kwargs)
+        scopes = getattr(self, "_clover_read_scopes", None)
+        if scopes:
+            scopes[-1].append(cursor)
+        return cursor
+
+    def execute(self, *args, **kwargs):
+        cursor = super().execute(*args, **kwargs)
+        scopes = getattr(self, "_clover_read_scopes", None)
+        if scopes:
+            scopes[-1].append(cursor)
+        return cursor
+
+    @contextlib.contextmanager
+    def read_cursor_scope(self):
+        """Close even implicit SELECT cursors before returning a read lease.
+
+        ``in_transaction`` is false for an unfinished autocommit SELECT, so
+        checking it alone cannot release its SHARED lock or WAL snapshot.
+        Keep native connection/cursor types and preserve nested lease ownership.
+        """
+        from clover_cli.sqlite_operation_observer import observe_connection_operation
+        scopes = getattr(self, "_clover_read_scopes", None)
+        if scopes is None:
+            scopes = self._clover_read_scopes = []
+        cursors = []
+        scopes.append(cursors)
+        try:
+            with observe_connection_operation(self, self._clover_tracked_path, "read"):
+                yield
+        finally:
+            scopes.pop()
+            for cursor in cursors:
+                try:
+                    cursor.close()
+                except sqlite3.ProgrammingError:
+                    # A caller may already have closed the whole connection.
+                    pass
+
     def close(self) -> None:  # type: ignore[misc]
         with _live_lock:
             path = getattr(self, "_clover_tracked_path", None)
