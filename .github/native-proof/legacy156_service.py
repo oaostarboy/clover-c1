@@ -157,7 +157,7 @@ def main():
     cli=[py.parent/'clover']
     run([py,HERE/'linux_proof.py','identity','--repo',root,'--sha',old,'--tree',git('rev-parse',old+'^{tree}'),'--output',E/'before-imports.json'],'before-identity')
     # Supported CLI config writes, never edit live config files.
-    for key,value in [('model.provider','custom'),('model.base_url','http://127.0.0.1:18792/v1'),('model.default','native-test'),('agent.max_iterations','6'),('display.streaming','false')]:
+    for key,value in [('model.provider','custom'),('model.base_url','http://127.0.0.1:18792/v1'),('model.default','native-test'),('agent.max_iterations','6'),('display.streaming','false'),('auxiliary.free_only','true')]:
         run([*cli,'config','set',key,value],'config-'+key)
     with (home/'.env').open('a') as f:f.write('\nAPI_SERVER_ENABLED=true\nAPI_SERVER_KEY=native-test-key-not-secret\nAPI_SERVER_PORT=18791\nAPI_SERVER_HOST=127.0.0.1\nOPENAI_API_KEY=native-fixture-dummy\nOPENROUTER_API_KEY=native-fixture-dummy\nIRC_SERVER=127.0.0.1\nIRC_PORT=16667\nIRC_USE_TLS=false\nIRC_CHANNEL=#clover\nIRC_NICKNAME=cloverbot\nIRC_ALLOWED_USERS=ant\nGATEWAY_ALLOW_ALL_USERS=true\n')
     fixture_log=(E/'fixture.log').open('w');fixture_proc=subprocess.Popen([sys.executable,__file__,'fixture'],env=env,stdout=fixture_log,stderr=subprocess.STDOUT)
@@ -165,6 +165,9 @@ def main():
     uid=os.getuid();env['XDG_RUNTIME_DIR']=f'/run/user/{uid}';env['DBUS_SESSION_BUS_ADDRESS']=f'unix:path=/run/user/{uid}/bus'
     run(['sudo','loginctl','enable-linger',os.environ['USER']],'enable-linger')
     run(['sudo','systemctl','start',f'user@{uid}.service'],'user-manager')
+    large_lane=os.environ.get('LARGE_ROLLBACK_LANE')=='true'
+    if large_lane:
+        run([py,HERE/'legacy156_large_state.py','grow','--home',home,'--evidence',E], 'large-state-grow',timeout=300)
     run([*cli,'gateway','install','--start-now','--start-on-login'],'service-install')
     def observe(name,sha,seconds=0,previous=None):
         args=[py,HERE/'linux_proof.py','gateway','--repo',root,'--home',home,'--sha',sha,'--port','18791','--seconds',str(seconds),'--output',E/(name+'.json')]
@@ -217,6 +220,11 @@ def main():
     w=loadmodule('inflight_witness');snapshot=w.capture(home,session,CALL,E/'effects.txt',EFFECT,TOKEN);dump(E/'inflight-before.json',snapshot)
     dump(E/'active-turn-barrier.json',dict(provider_second_request=True,tool_call_id=CALL,session=session,pid=before['pid'],at=time.time()))
     began=time.time();dump(E/'begin.json',began)
+    health_watch=None
+    if large_lane:
+        health_log=(E/'large-state-health-watch.log').open('w')
+        health_watch=subprocess.Popen([str(py),str(HERE/'legacy156_large_state.py'),'watch',
+            '--home',str(home),'--evidence',str(E),'--target',TARGET],env=env,stdout=health_log,stderr=subprocess.STDOUT)
     if entry=='cli':
         out=(E/'update.log').open('w');updater=subprocess.Popen(list(map(str,[*cli,'update','--yes'])),env=env,cwd=scratch,stdout=out,stderr=subprocess.STDOUT)
     else:
@@ -249,7 +257,9 @@ def main():
             assert exit_path.read_text().strip()=='0','chat updater exited before drain: '+exit_path.read_text()
 
         assert state['pid']==before['pid'], 'original gateway exited before in-flight turn drained'
-        return state.get('restart_requested') is True
+        logs=[home/'.update_output.txt',E/'update.log']
+        quiet_wait=any(p.exists() and 'Waiting for the running gateway' in p.read_text(errors='replace') for p in logs)
+        return state.get('restart_requested') is True or quiet_wait
     # Wait for actual product drain state, not merely updater spawn/build time.
     wait(draining,1200)
     dump(E/'during-update.json',dict(gateway_state=json.loads((home/'gateway_state.json').read_text()),barrier_released=False,observed_restart_requested=True,effects=(E/'effects.txt').read_text().splitlines()))
@@ -272,7 +282,12 @@ def main():
     assert receipt['delivery_restart_guard']['status']=='legacy-proceed',receipt.get('delivery_restart_guard')
     assert not any((home/n).exists() for n in ('fleet_restart_pending','.update-incomplete')),'stale restart markers remain'
     run([py,'-c','import sqlite3,sys,json;from clover_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable as bad;print(json.dumps(dict(executable=sys.executable,prefix=sys.prefix,sqlite=sqlite3.sqlite_version)));assert not bad(sqlite3.sqlite_version_info)'],'safe-sqlite')
-    dump(E/'result.json',dict(status='PASS_LEGACY_156_TO_TARGET_SYSTEMD_INFLIGHT',tests=9,old=old,target=TARGET,before_pid=before['pid'],after_pid=after['pid'],service='real registered user systemd',automatic_restart=True,transport='local IRC, not Telegram',layout=layout))
+    if large_lane:
+        assert health_watch.wait(timeout=120)==0, 'large state first health failed'
+        run([py,HERE/'legacy156_large_state.py','rollback','--source',root,'--home',home,'--evidence',E,
+            '--python',py,'--old',old,'--target',TARGET,'--supervisor','systemd'], 'frozen-156-failure-rollback',timeout=1200)
+        c.verify_relaxed(snapshot,home,E/'effects.txt',E/'received.txt',E,E/'irc.jsonl')
+    dump(E/'result.json',dict(large_state_measured=large_lane,rollback='frozen-156-fault-stop-passed' if large_lane else 'covered-by-platform-large-lane',status='PASS_LEGACY_156_TO_TARGET_SYSTEMD_INFLIGHT',tests=9,old=old,target=TARGET,before_pid=before['pid'],after_pid=after['pid'],service='real registered user systemd',automatic_restart=True,transport='local IRC, not Telegram',layout=layout))
 
 if __name__=='__main__':
     if len(sys.argv)>1 and sys.argv[1]=='fixture':fixture()

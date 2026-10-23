@@ -8,8 +8,8 @@ concurrency:
   group: legacy156-${{ github.run_id }}
   cancel-in-progress: false
 env:
-  TARGET_REF: 4e1a81016ca2af45c74843201c9479bf9179275e
-  TARGET_TREE: 1b89af7105e0cbf4ac7dd93d65c1f2904d4ab16b
+  TARGET_REF: e2097856443434fa7797c4ebf9c62ed5d9b2f103
+  TARGET_TREE: 48654e2c1df8654588a43d04f78cb0a635523051
   OLD_156: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
 jobs:
   linux:
@@ -37,6 +37,7 @@ jobs:
           BASE: v1.5.6
           ENTRY: ${{ matrix.entry }}
           LAYOUT: ${{ matrix.layout }}
+          LARGE_ROLLBACK_LANE: ${{ matrix.entry == 'cli' && matrix.layout == 'normal' && 'true' || 'false' }}
         run: python helpers/.github/native-proof/legacy156_service.py
       - name: Diagnostics even on failure
         if: always()
@@ -83,6 +84,7 @@ jobs:
       - name: Real v1.5.6 install + launchd service; update with a reply in flight
         env:
           ENTRY: ${{ matrix.entry }}
+          LARGE_ROLLBACK_LANE: ${{ matrix.entry == 'terminal' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/evidence"
@@ -128,6 +130,7 @@ jobs:
         shell: bash
         env:
           ENTRY: ${{ matrix.entry }}
+          LARGE_ROLLBACK_LANE: ${{ matrix.entry == 'terminal' && 'true' || 'false' }}
         run: |
           set -euo pipefail
           mkdir -p "$RUNNER_TEMP/evidence"

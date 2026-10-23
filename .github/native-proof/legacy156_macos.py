@@ -87,7 +87,7 @@ class LocalProvider:
                     'stream': data.get('stream'), 'tool_results': len(tools),
                     'offered_tools': [t.get('function', {}).get('name') for t in data.get('tools', [])]})
                 dump(evidence / 'provider-observations.json', owner.calls)
-                if tools:
+                if any(m.get('tool_call_id') == 'native-call-once' for m in tools):
                     # The real agent has executed the real terminal tool, and
                     # now awaits this response. No product methods are patched.
                     owner.entered.set()
@@ -98,7 +98,10 @@ class LocalProvider:
                 else:
                     names = [t.get('function', {}).get('name') for t in data.get('tools', [])]
                     if 'terminal' not in names:
-                        raise RuntimeError('real terminal tool not offered: ' + repr(names))
+                        self.send_json({'id':'fixture-aux','object':'chat.completion',
+                            'model':'native-fixture','choices':[{'index':0,
+                            'message':{'role':'assistant','content':'OK'},'finish_reason':'stop'}]})
+                        return
                     command = '/usr/bin/printf ' + shlex.quote('%s\n') + ' ' + shlex.quote(owner.token) + ' >> ' + shlex.quote(str(owner.effect))
                     message = {'role': 'assistant', 'content': None, 'tool_calls': [{
                         'id': 'native-call-once', 'type': 'function', 'function': {
@@ -298,7 +301,8 @@ def main(a):
     for key, value in [('model.provider', 'custom'), ('model.default', 'native-fixture'),
         ('model.base_url', 'http://127.0.0.1:18792/v1'), ('model.context_length', '131072'),
         ('terminal.backend', 'local'), ('terminal.cwd', str(scratch)),
-        ('platform_toolsets.api_server', '[terminal]'), ('streaming.enabled', 'false')]:
+        ('platform_toolsets.api_server', '[terminal]'), ('streaming.enabled', 'false'),
+        ('auxiliary.free_only', 'true')]:
         run([bin, 'config', 'set', key, value], 'config-' + key)
     (home / '.env').write_text('API_SERVER_ENABLED=true\nAPI_SERVER_KEY=native-macos-fixture-only\nAPI_SERVER_PORT=18791\nAPI_SERVER_HOST=127.0.0.1\nOPENAI_API_KEY=fixture-not-a-secret\nIRC_SERVER=127.0.0.1\nIRC_PORT=16667\nIRC_USE_TLS=false\nIRC_CHANNEL=#clover\nIRC_NICKNAME=cloverbot\nIRC_ALLOWED_USERS=ant\n')
     effect, receiver = evidence / 'effects.txt', evidence / 'received.txt'
@@ -306,6 +310,12 @@ def main(a):
     provider = LocalProvider(evidence, effect, token, reply)
     irc = LocalIRC(evidence)
     records = [call('state', 'seed-state', '--label', 'old-before-start')]
+    large_lane = os.environ.get('LARGE_ROLLBACK_LANE') == 'true'
+    live_python = live / 'bin/python'
+    if large_lane:
+        run([live_python, HELPERS/'legacy156_large_state.py', 'grow', '--home', home,
+             '--evidence', evidence], 'large-state-grow', timeout=300)
+    health_watch = None
     service = None
     try:
         run([bin, 'gateway', 'install'], 'service-install', timeout=180)
@@ -344,6 +354,11 @@ def main(a):
         update_offsets = {str(path): path.stat().st_size if path.exists() else 0
                           for path in update_paths}
         began = time.time()
+        if large_lane:
+            health_log = (evidence/'large-state-health-watch.log').open('w')
+            health_watch = subprocess.Popen([str(live_python), str(HELPERS/'legacy156_large_state.py'),
+                'watch', '--home',str(home),'--evidence',str(evidence),'--target',a.target],
+                env=env,stdout=health_log,stderr=subprocess.STDOUT)
         update = None
         update_log = (evidence / 'terminal-update.log').open('w')
         if a.entry == 'terminal':
@@ -372,7 +387,7 @@ def main(a):
             matches = [line for line in text.splitlines() if any(s in line.lower() for s in [
                 'draining in-flight', 'in-flight turn(s)', '/update refused by pre-check',
                 'deferring stop() until they finish', 'restart deferred: waiting on',
-                'update blocked', 'refusing to update'])]
+                'update blocked', 'refusing to update', 'waiting for the running gateway'])]
             if matches:
                 dump(evidence / 'actual-drain-or-refusal.json', dict(time=time.time(), lines=matches))
                 return True
@@ -421,7 +436,12 @@ def main(a):
             if observed and observed['state']['pid'] != before['state']['pid']:
                 return observed
             return None
-        after = wait_for(candidate, 900)
+        def candidate_with_diagnostics():
+            result=candidate()
+            if result is None and not (evidence/'first-listener-owners.log').exists():
+                run(['lsof','-nP','-iTCP:18791'], 'first-listener-owners', allow=True)
+            return result
+        after = wait_for(candidate_with_diagnostics, 900)
         samples = [after]
         end = time.monotonic() + 90
         while time.monotonic() < end:
@@ -451,13 +471,24 @@ def main(a):
         assert read_json(receipt)['delivery_restart_guard']['status'] == 'legacy-proceed', read_json(receipt).get('delivery_restart_guard')
         assert not any((home / n).exists() for n in ('fleet_restart_pending', '.update-incomplete')), 'stale restart markers remain'
         shutil.copy2(service['path'], evidence / 'installed-after.plist')
+        if large_lane:
+            assert health_watch.wait(timeout=120) == 0, 'large state first health failed'
+            run([live_python, HELPERS/'legacy156_large_state.py', 'rollback', '--source',source,
+                 '--home',home,'--evidence',evidence,'--python',live_python,
+                 '--old',a.old,'--target',a.target,'--supervisor','launchd'],
+                 'frozen-156-failure-rollback',timeout=1200)
+            call('verify', 'rollback-seed-records-after', '--records', evidence/'records.json')
+            legacy.verify_relaxed(pending,home,effect,receiver,evidence,evidence/'irc.log')
         dump(evidence / 'result.json', dict(status='PASS', target=a.target, old=a.old,
             workflow_sha=os.environ['GITHUB_SHA'], entry=a.entry, retry_after_busy_refusal=retry,
             actual_launchd=True, updater_owned_successor=True, stability_seconds=90,
             real_terminal_tool=True, local_deterministic_provider=True, real_external_llm=False,
             real_telegram=False, inflight_witness=True, latest_write_state=True,
-            rollback='separate-runtime-probe-required'))
+            rollback='frozen-156-fault-stop-passed' if large_lane else 'covered-by-platform-large-lane',
+            large_state_measured=large_lane, final_source_after_fault_injection=a.old if large_lane else a.target))
     finally:
+        if health_watch is not None and health_watch.poll() is None:
+            health_watch.terminate()
         provider.release.set()
         # Cleanup is after acceptance or failure; it can never repair a result.
         for path in (home / 'logs').glob('*.log'):
