@@ -170,6 +170,40 @@ def test_immutable_legacy_publisher_uses_proven_parent_phase_not_child_clock_tic
         assert not (handoff.directory / 'handoff_phases').exists()
 
 
+def test_cold_process_query_can_retry_without_losing_original_receipt(handoff, monkeypatch):
+    """Native 39889573087 timed out its only CIM query after five seconds."""
+    from clover_cli import windows_update_receipt_handoff as bridge
+    import subprocess
+    clock = [0.0]
+    monkeypatch.setattr(bridge, 'time', SimpleNamespace(
+        monotonic=lambda: clock[0], sleep=lambda delay: clock.__setitem__(0, clock[0] + delay)))
+    calls = []
+
+    def cold_query(pid, *, timeout):
+        calls.append(timeout)
+        if len(calls) == 1:
+            clock[0] += timeout
+            raise subprocess.TimeoutExpired('private-process-command', timeout)
+        clock[0] += .1
+        return copy.deepcopy(handoff.chain)
+
+    handoff.phase.update(pid=202, epoch=handoff.phase['epoch'] + 1)
+    current = receipt.UpdateReceipt().data
+    path, status = bridge.resume(current, handoff.directory, handoff.repo,
+        process_chain=cold_query, interpreter={'prefix': handoff.fake_sys.prefix,
+        'executable': handoff.fake_sys.executable, 'base_executable': handoff.fake_sys._base_executable,
+        'argv': ['child-module', *handoff.arguments]}, now=lambda: handoff.phase['epoch'])
+    assert status == 'adopted', current.get(bridge.TAG)
+    assert path == handoff.parent
+    assert current['pid'] == 101 and current['pre_update']['sha'] == 'a' * 40
+    assert current['outcome'] == 'running'
+    diagnostics = current[bridge.TAG + '_probe']
+    assert diagnostics['attempt_count'] == 1
+    assert diagnostics['attempts'][0]['reason'] == 'TimeoutExpired'
+    assert 'private-process-command' not in json.dumps(diagnostics)
+    assert len(calls) == 2
+
+
 def test_refusal_retains_predicate_before_later_process_query_timeout(handoff, monkeypatch):
     from clover_cli import windows_update_receipt_handoff as bridge
     import subprocess
