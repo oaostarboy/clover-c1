@@ -25,7 +25,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 5be4eab28f3906d7d67dcac37a28ccbc01e67f12
+          ref: 5817449d88e5ada1edb74f7c95e862bb2d8ecc43
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -43,12 +43,12 @@ jobs:
           set -euo pipefail
           old=32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
           if [[ $BASE == main ]]; then old=9535350bee1d57cf7e466672e6f416403886bec1; fi
-          target=5be4eab28f3906d7d67dcac37a28ccbc01e67f12
-          tree=e41ff16f866ff1e01cd561183f49a0a82cd3a59a
+          target=5817449d88e5ada1edb74f7c95e862bb2d8ecc43
+          tree=a3963b1828770a760c06383bf4439d8bf43bdeaf
           if [[ $BASE == fixed ]]; then
-            old=5be4eab28f3906d7d67dcac37a28ccbc01e67f12
-            target=5ee2d1d55823d99b6c6b505be11273bb3d41ceff
-            tree=bf6ee25964847e1cfbc513a2569e2097c72c8637
+            old=5817449d88e5ada1edb74f7c95e862bb2d8ecc43
+            target=b2b99ffa96650fec078e904430cbc8f1ad177b25
+            tree=8556c37ac2903864858bf47113085b801c3d64fd
           fi
           uv run --no-project --with psutil python helpers/.github/native-proof/guard_native_upgrade.py \
             --source "$GITHUB_WORKSPACE/source" --old "$old" --entry "$ENTRY" \
@@ -70,7 +70,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 5be4eab28f3906d7d67dcac37a28ccbc01e67f12
+          ref: 5817449d88e5ada1edb74f7c95e862bb2d8ecc43
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -82,8 +82,8 @@ jobs:
         run: |
           python3 helpers/.github/native-proof/macos_external_env.py --rollback-only \
             --source "$GITHUB_WORKSPACE/source" \
-            --target-sha 5be4eab28f3906d7d67dcac37a28ccbc01e67f12 \
-            --target-tree e41ff16f866ff1e01cd561183f49a0a82cd3a59a \
+            --target-sha 5817449d88e5ada1edb74f7c95e862bb2d8ecc43 \
+            --target-tree a3963b1828770a760c06383bf4439d8bf43bdeaf \
             --evidence "$RUNNER_TEMP/evidence"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
@@ -112,7 +112,7 @@ jobs:
           GIT_CONFIG_KEY_0: core.autocrlf
           GIT_CONFIG_VALUE_0: 'false'
         with:
-          ref: 5be4eab28f3906d7d67dcac37a28ccbc01e67f12
+          ref: 5817449d88e5ada1edb74f7c95e862bb2d8ecc43
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -126,7 +126,7 @@ jobs:
       - name: Actual failed promotion preserves newest state
         shell: pwsh
         run: |
-          python helpers/.github/windows-external-runtime/probe.py --source source --target-sha 5be4eab28f3906d7d67dcac37a28ccbc01e67f12 --target-tree e41ff16f866ff1e01cd561183f49a0a82cd3a59a --old-sha 9535350bee1d57cf7e466672e6f416403886bec1 --case smoke-rollback --evidence "$env:RUNNER_TEMP/evidence"
+          python helpers/.github/windows-external-runtime/probe.py --source source --target-sha 5817449d88e5ada1edb74f7c95e862bb2d8ecc43 --target-tree a3963b1828770a760c06383bf4439d8bf43bdeaf --old-sha 9535350bee1d57cf7e466672e6f416403886bec1 --case smoke-rollback --evidence "$env:RUNNER_TEMP/evidence"
           if ($LASTEXITCODE -ne 0) { throw 'Native rollback probe failed' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()

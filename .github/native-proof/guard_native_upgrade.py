@@ -339,6 +339,19 @@ def main(a):
                 alive=psutil.pid_exists(state['pid'])
                 trace.append(dict(at=time.time(),monotonic=time.monotonic(),state=state,pid_alive=alive,
                     disk_sha=git('rev-parse','HEAD'),beacon=(home/'.clover-update-heartbeat.json').exists()))
+                beacon=home/'.clover-update-heartbeat.json'
+                if beacon.exists():
+                    trace[-1]['beacon_data']=read_json(beacon)
+                    updater=trace[-1]['beacon_data'].get('updater_pid')
+                    if updater:
+                        trace[-1]['updater_alive']=psutil.pid_exists(updater)
+                        if psutil.pid_exists(updater):
+                            u=psutil.Process(updater)
+                            trace[-1]['updater_process']=dict(pid=u.pid,ppid=u.ppid(),status=u.status(),argv=u.cmdline())
+                for src,dst in [(home/'.update_output.txt',evidence/'live-product-update.log'),(home/'logs/gateway.log',evidence/'live-product-gateway.log'),(home/'logs/update_receipts/latest.json',evidence/'live-product-receipt.json')]:
+                    if src.exists():
+                        try: shutil.copy2(src,dst)
+                        except OSError: pass
                 dump(evidence/'raw-observer.json',trace)
             except Exception as exc:
                 trace.append(dict(at=time.time(),error=repr(exc)))
@@ -440,7 +453,7 @@ def main(a):
             rc=update.wait(timeout=1800)
             dump(evidence/'terminal-update-exit.json',dict(exit=rc,pid=update.pid))
         else:
-            wait_for(lambda:(home/'.update_exit_code').exists(),1800)
+            wait_for(lambda:(home/'.update_exit_code').exists(),180)
             rc=int((home/'.update_exit_code').read_text().strip())
             dump(evidence/'gateway-update-exit.json',dict(exit=rc))
         update_log.close()
@@ -478,19 +491,19 @@ def main(a):
             dump(evidence/'gateway-window.json',samples)
             call('verify','state-after','--records',evidence/'records.json')
             dump(evidence/'inflight-after-successor.json',witness.verify(pending,home,effect,receiver))
-            dump(evidence/'result.json',dict(status=('FIXED_GATEWAY_FALSE_REFUSAL' if a.old=='5be4eab28f3906d7d67dcac37a28ccbc01e67f12' else 'SAFE_REFUSAL'),target=a.target,old=a.old,
+            dump(evidence/'result.json',dict(status=('FIXED_GATEWAY_FALSE_REFUSAL' if a.old=='5817449d88e5ada1edb74f7c95e862bb2d8ecc43' else 'SAFE_REFUSAL'),target=a.target,old=a.old,
                 entry=a.entry,exit=rc,workflow_sha=os.environ['GITHUB_SHA'],original_pid=before['state']['pid'],
                 stability_seconds=155,driver_restart=False,real_telegram=False))
             return
         assert rc==0
-        if WINDOWS and a.old!='5be4eab28f3906d7d67dcac37a28ccbc01e67f12':
+        if WINDOWS and a.old!='5817449d88e5ada1edb74f7c95e862bb2d8ecc43':
             died=next((x for x in trace if x.get('state',{}).get('pid')==before['state']['pid'] and x.get('pid_alive') is False),None)
             dump(evidence/'result.json',dict(status='UNPROTECTED_STOP_BEFORE_HOOK',target=a.target,old=a.old,
                 entry=a.entry,workflow_sha=os.environ['GITHUB_SHA'],exit=rc,first_original_dead=died,
                 original_pid=before['state']['pid'],driver_restart=False,real_telegram=False,
                 reply_received_once=received==[reply],note='Orderly pause is not guard refusal; legacy stops before pulling target hook.'))
             return
-        assert a.old=='5be4eab28f3906d7d67dcac37a28ccbc01e67f12', 'legacy upgrade was not refused'
+        assert a.old=='5817449d88e5ada1edb74f7c95e862bb2d8ecc43', 'legacy upgrade was not refused'
         retry=False
         def candidate():
             if git('rev-parse', 'HEAD') != a.target:
