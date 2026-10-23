@@ -384,6 +384,8 @@ def main(a):
                         home / '.update_output.txt', evidence / 'irc.log']
         update_offsets = {str(path): path.stat().st_size if path.exists() else 0
                           for path in update_paths}
+        marker=home/'fleet_restart_pending'
+        pending_before=marker.read_bytes() if marker.exists() else None
         began = time.time()
         update = None
         update_log = (evidence / 'terminal-update.log').open('w')
@@ -460,6 +462,8 @@ def main(a):
         dump(evidence/'inflight-after.json',witness.verify(pending,home,effect,receiver))
         if refused:
             assert rc==2
+            if pending_before is not None:
+                assert marker.read_bytes()==pending_before
             samples=[]
             end=time.monotonic()+155
             while time.monotonic()<end:
@@ -469,23 +473,24 @@ def main(a):
                 samples.append(current)
                 time.sleep(3)
             assert not (home/'.clover-update-heartbeat.json').exists()
-            assert (home/'fleet_restart_pending').exists(), list(home.glob('*pending*'))
+            if git('rev-parse','HEAD') != a.old:
+                assert (home/'fleet_restart_pending').exists(), list(home.glob('*pending*'))
             dump(evidence/'gateway-window.json',samples)
             call('verify','state-after','--records',evidence/'records.json')
             dump(evidence/'inflight-after-successor.json',witness.verify(pending,home,effect,receiver))
-            dump(evidence/'result.json',dict(status='SAFE_REFUSAL',target=a.target,old=a.old,
+            dump(evidence/'result.json',dict(status=('FIXED_GATEWAY_FALSE_REFUSAL' if a.old=='5be4eab28f3906d7d67dcac37a28ccbc01e67f12' else 'SAFE_REFUSAL'),target=a.target,old=a.old,
                 entry=a.entry,exit=rc,workflow_sha=os.environ['GITHUB_SHA'],original_pid=before['state']['pid'],
                 stability_seconds=155,driver_restart=False,real_telegram=False))
             return
         assert rc==0
-        if WINDOWS and a.old!='61ebcedded39b7c9c86021df268d21017747ddea':
+        if WINDOWS and a.old!='5be4eab28f3906d7d67dcac37a28ccbc01e67f12':
             died=next((x for x in trace if x.get('state',{}).get('pid')==before['state']['pid'] and x.get('pid_alive') is False),None)
             dump(evidence/'result.json',dict(status='UNPROTECTED_STOP_BEFORE_HOOK',target=a.target,old=a.old,
                 entry=a.entry,workflow_sha=os.environ['GITHUB_SHA'],exit=rc,first_original_dead=died,
                 original_pid=before['state']['pid'],driver_restart=False,real_telegram=False,
                 reply_received_once=received==[reply],note='Orderly pause is not guard refusal; legacy stops before pulling target hook.'))
             return
-        assert a.old=='61ebcedded39b7c9c86021df268d21017747ddea', 'legacy upgrade was not refused'
+        assert a.old=='5be4eab28f3906d7d67dcac37a28ccbc01e67f12', 'legacy upgrade was not refused'
         retry=False
         def candidate():
             if git('rev-parse', 'HEAD') != a.target:
