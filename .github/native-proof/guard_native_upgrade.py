@@ -491,19 +491,19 @@ def main(a):
             dump(evidence/'gateway-window.json',samples)
             call('verify','state-after','--records',evidence/'records.json')
             dump(evidence/'inflight-after-successor.json',witness.verify(pending,home,effect,receiver))
-            dump(evidence/'result.json',dict(status=('FIXED_GATEWAY_FALSE_REFUSAL' if a.old=='5817449d88e5ada1edb74f7c95e862bb2d8ecc43' else 'SAFE_REFUSAL'),target=a.target,old=a.old,
+            dump(evidence/'result.json',dict(status=('FIXED_GATEWAY_FALSE_REFUSAL' if a.old=='e1eac70b63afcbf4152cb7c8e965f997d93cca32' else 'SAFE_REFUSAL'),target=a.target,old=a.old,
                 entry=a.entry,exit=rc,workflow_sha=os.environ['GITHUB_SHA'],original_pid=before['state']['pid'],
                 stability_seconds=155,driver_restart=False,real_telegram=False))
             return
         assert rc==0
-        if WINDOWS and a.old!='5817449d88e5ada1edb74f7c95e862bb2d8ecc43':
+        if WINDOWS and a.old!='e1eac70b63afcbf4152cb7c8e965f997d93cca32':
             died=next((x for x in trace if x.get('state',{}).get('pid')==before['state']['pid'] and x.get('pid_alive') is False),None)
             dump(evidence/'result.json',dict(status='UNPROTECTED_STOP_BEFORE_HOOK',target=a.target,old=a.old,
                 entry=a.entry,workflow_sha=os.environ['GITHUB_SHA'],exit=rc,first_original_dead=died,
                 original_pid=before['state']['pid'],driver_restart=False,real_telegram=False,
                 reply_received_once=received==[reply],note='Orderly pause is not guard refusal; legacy stops before pulling target hook.'))
             return
-        assert a.old=='5817449d88e5ada1edb74f7c95e862bb2d8ecc43', 'legacy upgrade was not refused'
+        assert a.old=='e1eac70b63afcbf4152cb7c8e965f997d93cca32', 'legacy upgrade was not refused'
         retry=False
         def candidate():
             if git('rev-parse', 'HEAD') != a.target:
@@ -540,7 +540,7 @@ def main(a):
         shutil.copy2(service['path'], evidence / 'installed-after.definition')
         dump(evidence / 'result.json', dict(status='PASS', target=a.target, old=a.old,
             workflow_sha=os.environ['GITHUB_SHA'], entry=a.entry, retry_after_busy_refusal=retry,
-            actual_launchd=True, updater_owned_successor=True, stability_seconds=90,
+            actual_launchd=True, updater_owned_successor=True, driver_restart=False, stability_seconds=90,
             real_terminal_tool=True, local_deterministic_provider=True, real_external_llm=False,
             real_telegram=False, inflight_witness=True, latest_write_state=True,
             rollback='separate-runtime-probe-required'))
