@@ -158,7 +158,7 @@ else:
               'installer_pipeline_exits': [int(code) for code in pipeline.split()],
               'installer_command': ['bash', '$RUNNER_TEMP/install.sh', '--branch',
                   os.environ['NEXT_REF'], '--commit', from_sha, '--non-interactive',
-                  '--skip-setup', '--skip-browser', '--skip-computer-use'],
+                  '--skip-setup', '--include-desktop'],
               'npm_command': ['npm', 'install', '--silent'],
               'npm_command_basis': 'pinned installer root dependency function; actual argv/exit in npm debug logs when available',
               'before': before, 'after': after, 'npm_logs': logs,
@@ -182,7 +182,7 @@ trap finish_install_evidence EXIT
 git -C "$SOURCE" show "$TARGET_REF:scripts/install.sh" > "$RUNNER_TEMP/install.sh"
 set +e
 bash "$RUNNER_TEMP/install.sh" --branch "$NEXT_REF" --commit "$FROM_SHA" \
-  --non-interactive --skip-setup --skip-browser --skip-computer-use 2>&1 | tee "$RUNNER_TEMP/native-install-output.log" > /dev/null
+  --non-interactive --skip-setup --include-desktop 2>&1 | tee "$RUNNER_TEMP/native-install-output.log" > /dev/null
 INSTALL_PIPESTATUS="${PIPESTATUS[*]}"
 set -e
 INSTALL_EXIT=${INSTALL_PIPESTATUS%% *}
