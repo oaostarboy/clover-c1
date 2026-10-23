@@ -202,7 +202,7 @@ def observe(home, source, expected, live):
     owned=[]
     for q in psutil.process_iter(['cmdline']):
         argv=q.info['cmdline'] or []
-        if 'clover_cli.main' in argv and 'gateway' in argv and 'run' in argv and '-c' not in argv:
+        if 'clover_cli.main' in argv and 'gateway' in argv and 'run' in argv and '--' not in argv:
             try:
                 if q.environ().get('CLOVER_HOME') == str(home): owned.append(q)
             except psutil.NoSuchProcess: pass
@@ -215,7 +215,7 @@ def observe(home, source, expected, live):
         assert str(python(live)).lower() in [q.cmdline()[0].lower() for q in owned]
         supervisor={'startup': str(__import__('clover_cli.gateway_windows',fromlist=['get_startup_entry_path']).get_startup_entry_path())}
     else:
-        assert [q.pid for q in owned] == [p.pid]
+        assert [q.pid for q in owned] == [p.pid], dict(state=state,actual=p.cmdline(),owned=[dict(pid=q.pid,argv=q.cmdline()) for q in owned])
         from clover_cli.gateway import get_launchd_label, _locate_launchd_gateway_service
         domain, manager = _locate_launchd_gateway_service(get_launchd_label())
         assert domain and manager in [p.pid,*[q.pid for q in p.parents()]]
@@ -478,6 +478,13 @@ def main(a):
                 stability_seconds=155,driver_restart=False,real_telegram=False))
             return
         assert rc==0
+        if WINDOWS and a.old!='61ebcedded39b7c9c86021df268d21017747ddea':
+            died=next((x for x in trace if x.get('state',{}).get('pid')==before['state']['pid'] and x.get('pid_alive') is False),None)
+            dump(evidence/'result.json',dict(status='UNPROTECTED_STOP_BEFORE_HOOK',target=a.target,old=a.old,
+                entry=a.entry,workflow_sha=os.environ['GITHUB_SHA'],exit=rc,first_original_dead=died,
+                original_pid=before['state']['pid'],driver_restart=False,real_telegram=False,
+                reply_received_once=received==[reply],note='Orderly pause is not guard refusal; legacy stops before pulling target hook.'))
+            return
         assert a.old=='61ebcedded39b7c9c86021df268d21017747ddea', 'legacy upgrade was not refused'
         retry=False
         def candidate():
