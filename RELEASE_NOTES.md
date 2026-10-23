@@ -15,6 +15,12 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.9 | Clover C1.5.9 | 2026-10-23
+- Helpers now start when your chat is not inside a code project, instead of being refused after a restart.
+- Helpers working in a real code project still get their own safe copy, and still stop if that copy cannot be made.
+- When a helper is refused, the message now names the exact setting to change.
+- The two helper isolation settings are now known, so changing them no longer shows a warning.
+
 ## 1.5.8 | Clover C1.5.8 | 2026-10-23
 - Saving no longer gets stuck behind a leftover database read, so busy-storage failures should be much rarer.
 - A turn whose final save failed is no longer shown as completed; your real output is kept.
