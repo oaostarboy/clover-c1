@@ -102,10 +102,31 @@ def test_capability_requires_live_exact_owner(monkeypatch, tmp_path, capability,
     monkeypatch.setattr(gateway, 'find_gateway_pids', lambda **kw: [123])
     monkeypatch.setattr(update_cmd, '_gateway_pid_install_verdict', lambda pid: 'own')
     monkeypatch.setattr(status, 'runtime_status_pid_is_live', lambda row: live)
+    monkeypatch.setattr(status, '_get_process_start_time', lambda pid: 42)
     (tmp_path/'gateway_state.json').write_text(json.dumps({
         'pid':123,'start_time':42,'kind':'clover-gateway',
         'clover_home':str(tmp_path),'update_restart_capability':capability}))
     assert bool(guard._unsafe_gateways()) == bool(expected)
+
+
+@pytest.mark.parametrize('live_start,unsafe', [(None, True), (41, True), (42, False)])
+def test_guard_requires_rechecked_status_creation_time(monkeypatch, tmp_path, live_start, unsafe):
+    """The diagnostic liveness helper permits unknown times; admission must not."""
+    from clover_cli import gateway, update_cmd, update_delivery_guard as guard
+    import gateway.status as status
+
+    monkeypatch.setattr(gateway, 'find_profile_gateway_processes', lambda **kw: [
+        SimpleNamespace(profile='default', path=tmp_path, pid=123, create_time=42)])
+    monkeypatch.setattr(gateway, 'find_gateway_pids', lambda **kw: [123])
+    monkeypatch.setattr(update_cmd, '_gateway_pid_install_verdict', lambda pid: 'own')
+    monkeypatch.setattr(status, '_pid_exists', lambda pid: True)
+    monkeypatch.setattr(status, '_get_process_start_time', lambda pid: live_start)
+    (tmp_path/'gateway_state.json').write_text(json.dumps({
+        'pid':123, 'start_time':42, 'kind':'clover-gateway',
+        'clover_home':str(tmp_path), 'update_restart_capability':guard.CAPABILITY}),
+        encoding='utf-8')
+
+    assert bool(guard._unsafe_gateways()) is unsafe
 
 
 def test_refusal_preserves_pending_state_and_snapshot(monkeypatch, tmp_path):

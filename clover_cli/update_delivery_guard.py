@@ -15,7 +15,7 @@ CAPABILITY = 'reply-carriers-through-ack-v1'
 def _unsafe_gateways() -> list[str]:
     from clover_cli.gateway import find_gateway_pids, find_profile_gateway_processes
     from clover_cli.update_cmd import _gateway_pid_install_verdict
-    from gateway.status import runtime_status_pid_is_live
+    from gateway.status import _get_process_start_time, runtime_status_pid_is_live
 
     processes = find_profile_gateway_processes(strict=True)
     by_pid = {p.pid: p for p in processes}
@@ -35,7 +35,11 @@ def _unsafe_gateways() -> list[str]:
             valid = (
                 row.get('pid') == pid
                 and row.get('kind') == 'clover-gateway'
+                # The diagnostic liveness helper tolerates an unreadable live
+                # creation time. Restart admission must positively bind this
+                # capability to its owner, including on the second probe.
                 and row.get('start_time') is not None
+                and row.get('start_time') == _get_process_start_time(pid)
                 and Path(row.get('clover_home', '')).resolve() == proc.path.resolve()
                 and runtime_status_pid_is_live(row)
                 and row.get('update_restart_capability') == CAPABILITY
