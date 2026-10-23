@@ -31,7 +31,7 @@ jobs:
         persist-credentials: false
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
-        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        ref: 6d44b1f1d5ca95594723aa49a85444cef95f0086
         path: source
         fetch-depth: 0
         persist-credentials: false
@@ -43,9 +43,9 @@ jobs:
       env:
         ENTRY: ${{ matrix.entry }}
       run: "set -euo pipefail\nuv run --no-project --with psutil python helpers/.github/native-proof/guard_native_upgrade.py\
-        \ \\\n  --source \"$GITHUB_WORKSPACE/source\" --old dc4054a10cfa3372e3f75bea9985b2da74523ecf\
-        \ --entry \"$ENTRY\" \\\n  --target a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b\
-        \ --tree e7fa69f31d788ab81d08b0b717e0bd1b25eda958 --fixed-base dc4054a10cfa3372e3f75bea9985b2da74523ecf\
+        \ \\\n  --source \"$GITHUB_WORKSPACE/source\" --old 6d44b1f1d5ca95594723aa49a85444cef95f0086\
+        \ --entry \"$ENTRY\" \\\n  --target f8465d94fca96d97942aba6c12e73f442241b861\
+        \ --tree 939de52a57b4cbe0937cd787d9822e25803c2257 --fixed-base 6d44b1f1d5ca95594723aa49a85444cef95f0086\
         \ \\\n  --evidence \"$RUNNER_TEMP/evidence\""
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
@@ -69,7 +69,7 @@ jobs:
         persist-credentials: false
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
-        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        ref: 6d44b1f1d5ca95594723aa49a85444cef95f0086
         path: source
         fetch-depth: 0
         persist-credentials: false
@@ -83,7 +83,7 @@ jobs:
     - name: Actual failed promotion preserves newest state
       shell: pwsh
       run: 'python helpers/.github/windows-external-runtime/probe.py --source source
-        --target-sha dc4054a10cfa3372e3f75bea9985b2da74523ecf --target-tree 85751aedbef129f31ea943307846a48844b53d2d
+        --target-sha 6d44b1f1d5ca95594723aa49a85444cef95f0086 --target-tree 939de52a57b4cbe0937cd787d9822e25803c2257
         --old-sha 9535350bee1d57cf7e466672e6f416403886bec1 --case smoke-rollback --evidence
         "$env:RUNNER_TEMP/evidence"
 
@@ -106,7 +106,7 @@ jobs:
         persist-credentials: false
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
-        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        ref: 6d44b1f1d5ca95594723aa49a85444cef95f0086
         path: source
         fetch-depth: 0
         persist-credentials: false
@@ -116,8 +116,8 @@ jobs:
     - name: Actual failed promotion preserves newest state
       shell: bash
       run: "python3 helpers/.github/native-proof/macos_external_env.py --rollback-only\
-        \ \\\n  --source \"$GITHUB_WORKSPACE/source\" \\\n  --target-sha dc4054a10cfa3372e3f75bea9985b2da74523ecf\
-        \ \\\n  --target-tree 85751aedbef129f31ea943307846a48844b53d2d \\\n  --evidence\
+        \ \\\n  --source \"$GITHUB_WORKSPACE/source\" \\\n  --target-sha 6d44b1f1d5ca95594723aa49a85444cef95f0086\
+        \ \\\n  --target-tree 939de52a57b4cbe0937cd787d9822e25803c2257 \\\n  --evidence\
         \ \"$RUNNER_TEMP/evidence\"\n"
     - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
       if: always()
@@ -137,7 +137,7 @@ jobs:
         path: helpers
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
-        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        ref: 6d44b1f1d5ca95594723aa49a85444cef95f0086
         persist-credentials: false
         fetch-depth: 0
         path: source
@@ -174,11 +174,11 @@ jobs:
         if-no-files-found: error
     env:
       OLD_REF: v1.5.6
-      TARGET_REF: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-      TARGET_TREE: 85751aedbef129f31ea943307846a48844b53d2d
-      NEXT_REF: ci/native-next/overnight-final-20261023
-      NEXT_SHA: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
-      NEXT_TREE: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+      TARGET_REF: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+      TARGET_TREE: 939de52a57b4cbe0937cd787d9822e25803c2257
+      NEXT_REF: ci/native-next/overnight-final-v2-20261023
+      NEXT_SHA: f8465d94fca96d97942aba6c12e73f442241b861
+      NEXT_TREE: 939de52a57b4cbe0937cd787d9822e25803c2257
       OLD_SHA: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
       SETUP: zyra
       UPDATE_PATH: cli
@@ -193,11 +193,11 @@ jobs:
         - windows-2025
     env:
       OLD_REF: v1.5.6
-      TARGET_REF: dc4054a10cfa3372e3f75bea9985b2da74523ecf
-      TARGET_TREE: 85751aedbef129f31ea943307846a48844b53d2d
-      NEXT_REF: ci/native-next/overnight-final-20261023
-      NEXT_SHA: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
-      NEXT_TREE: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+      TARGET_REF: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+      TARGET_TREE: 939de52a57b4cbe0937cd787d9822e25803c2257
+      NEXT_REF: ci/native-next/overnight-final-v2-20261023
+      NEXT_SHA: f8465d94fca96d97942aba6c12e73f442241b861
+      NEXT_TREE: 939de52a57b4cbe0937cd787d9822e25803c2257
       OLD_SHA: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
       SETUP: zyra
       UPDATE_PATH: cli
@@ -209,7 +209,7 @@ jobs:
         path: helpers
     - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
       with:
-        ref: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        ref: 6d44b1f1d5ca95594723aa49a85444cef95f0086
         fetch-depth: 0
         persist-credentials: false
         path: source
