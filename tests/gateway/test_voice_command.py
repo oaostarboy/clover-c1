@@ -118,7 +118,7 @@ class TestHandleVoiceCommand:
         event = _make_event("/voice on")
         await runner._handle_voice_command(event)
         assert runner._VOICE_MODE_PATH.exists()
-        data = json.loads(runner._VOICE_MODE_PATH.read_text())
+        data = json.loads(runner._VOICE_MODE_PATH.read_text(encoding="utf-8"))
         assert data["telegram:123"] == "voice_only"
 
 

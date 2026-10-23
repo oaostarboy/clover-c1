@@ -41,6 +41,7 @@ def test_running_external_venv_is_selected_only_with_own_installed_metadata(tmp_
     dist.mkdir()
     (dist/'METADATA').write_text('Metadata-Version: 2.1\nName: clover-c1\nVersion: 0\n', encoding='utf-8')
     target = source if metadata_mode.startswith('owned') else tmp_path/'different-checkout'
+    target.mkdir(exist_ok=True)  # foreign proof names a real, different checkout
     if metadata_mode != 'missing':
         (dist/'direct_url.json').write_text(
             '{broken' if metadata_mode == 'malformed' else json.dumps({'url':target.as_uri(),'dir_info':{'editable':True}}),
