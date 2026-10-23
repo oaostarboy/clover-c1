@@ -170,6 +170,40 @@ def test_immutable_legacy_publisher_uses_proven_parent_phase_not_child_clock_tic
         assert not (handoff.directory / 'handoff_phases').exists()
 
 
+@pytest.mark.parametrize('raw', [True, float('nan'), 123.5])
+def test_raw_birth_must_be_finite_and_match_its_display_timestamp(handoff, raw):
+    from clover_cli import windows_update_receipt_handoff as bridge
+    chain = copy.deepcopy(handoff.chain)
+    chain[0]['created_unix'] = raw
+    parent = json.loads(handoff.parent_bytes)
+    current = {'pid': 202, 'started_at': datetime.fromtimestamp(handoff.phase['epoch'] + 1, timezone.utc).isoformat()}
+    with pytest.raises(bridge.Unverified):
+        bridge._witness(chain, current, parent, handoff.repo,
+            {'prefix': handoff.fake_sys.prefix, 'executable': handoff.fake_sys.executable,
+             'base_executable': handoff.fake_sys._base_executable}, lambda: handoff.phase['epoch'] + 2)
+
+
+def test_native_birth_roundtrip_does_not_make_a_current_beacon_stale(handoff):
+    """Replay native run39897711972's exact machine birth and refresh values."""
+    from clover_cli import windows_update_receipt_handoff as bridge
+    birth = 1792728134.7630808
+    iso = lambda value: datetime.fromtimestamp(value, timezone.utc).isoformat()
+    parent = {'pid': 101, 'started_at': iso(birth - 1),
+              'pre_update': {'sha': 'a' * 40}, 'pre_update_snapshot_id': None}
+    current = {'pid': 202, 'started_at': iso(birth + 1)}
+    chain = [{'pid': 202, 'parent_pid': 101, 'executable': handoff.fake_sys.executable,
+              'created_utc': iso(birth), 'created_unix': birth}]
+    owned = bridge._witness(chain, current, parent, handoff.repo,
+        {'prefix': handoff.fake_sys.prefix, 'executable': handoff.fake_sys.executable,
+         'base_executable': handoff.fake_sys._base_executable}, lambda: birth + 2)
+    beacon = {'updater_pid': 202, 'updater_create_time': birth, 'refreshed_at': birth,
+              'repo': str(handoff.repo), 'pre_pull_sha': 'a' * 40,
+              'pre_update_snapshot_id': None, 'ready_for_probe': False}
+    (handoff.home / '.clover-update-heartbeat.json').write_text(json.dumps(beacon))
+    assert bridge._beacon(handoff.directory, parent, owned, handoff.repo, lambda: birth + 2)
+    assert owned[0]['created'] == birth
+
+
 @pytest.mark.parametrize('owned_image', [True, False])
 def test_base_python_alias_binds_only_to_its_actual_file(handoff, tmp_path, owned_image):
     """Managed Windows aliases and OS-reported image paths can differ."""

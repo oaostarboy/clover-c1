@@ -37,6 +37,13 @@ def test_process_chain_refuses_invalid_pid_without_spawning(monkeypatch, pid):
         bridge.process_chain(pid)
 
 
+def test_filetime_conversion_preserves_native_submicrosecond_precision():
+    from clover_cli.windows_process_witness import filetime_to_unix
+    # A legal 100ns FILETIME vector; subtracting after float conversion loses
+    # precision compared with the native machine measurement.
+    assert filetime_to_unix(134372017347630808) == 1792728134.7630808
+
+
 def test_chain_uses_measured_rows_and_stops_only_at_absent_ancestor():
     from clover_cli.windows_process_witness import chain_from_snapshot
     observations = []

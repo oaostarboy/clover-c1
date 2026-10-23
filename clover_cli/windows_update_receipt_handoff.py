@@ -7,7 +7,7 @@ be continued; ordinary historical success receipts are never adopted.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -48,6 +48,19 @@ def _stamp(value):
     result = datetime.fromisoformat(value)
     _require(result.tzinfo is not None, 'timestamp lacks timezone')
     return result.timestamp()
+
+
+def _birth(item):
+    display = _stamp(item.get('created_utc'))
+    if 'created_unix' not in item:
+        return display
+    raw = item['created_unix']
+    _require(type(raw) in (int, float) and math.isfinite(raw) and raw > 0, 'invalid native birth')
+    _require(datetime.fromtimestamp(raw, timezone.utc).isoformat() == item['created_utc'],
+             'inconsistent native birth representations')
+    # ISO rounds to microseconds; ownership must retain the original machine
+    # measurement, not make an exactly current beacon appear stale.
+    return raw
 
 
 def _read(path):
@@ -121,7 +134,7 @@ def _witness(chain, current, parent, project_root, interpreter, now):
         _require(item['pid'] not in seen, 'cyclic process witness')
         seen.add(item['pid'])
         _require(_key(item.get('executable')) in allowed, 'foreign continuation executable')
-        created = _stamp(item.get('created_utc'))
+        created = _birth(item)
         _require(_stamp(parent['started_at']) <= created <= now() + 1, 'process outside current run')
         if owned:
             _require(owned[-1]['parent_pid'] == item['pid'] and created <= owned[-1]['created'], 'broken ancestry')
@@ -133,7 +146,7 @@ def _witness(chain, current, parent, project_root, interpreter, now):
     _require(_stamp(current['started_at']) >= owned[0]['created'], 'receipt predates continuation')
     # A still-live original producer may overwrite latest after we return.
     for item in chain[len(owned):]:
-        if item.get('pid') == root_pid and _stamp(item.get('created_utc')) <= _stamp(parent['started_at']):
+        if item.get('pid') == root_pid and _birth(item) <= _stamp(parent['started_at']):
             raise Unverified('original producer still alive')
     return owned
 
