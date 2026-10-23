@@ -3252,8 +3252,9 @@ def _run_single_child(
                 ),
             }
             raise RuntimeError(
-                "Required workspace isolation was not available; child was not started: "
-                + _worktree_outcome["reason"]
+                subagent_worktree.format_isolation_refusal(
+                    _worktree_outcome["reason"], conflict=True
+                )
             )
         if isolation_requested:
             _worktree_outcome, _worktree_info = subagent_worktree.prepare_subagent_worktree(
@@ -3304,8 +3305,9 @@ def _run_single_child(
                     logger.debug("Progress callback update failed: %s", exc)
             if _worktree_outcome.get("status") == "blocked":
                 raise RuntimeError(
-                    "Required workspace isolation was not available; child was not started: "
-                    + str(_worktree_outcome.get("reason", "unknown setup failure"))
+                    subagent_worktree.format_isolation_refusal(
+                        _worktree_outcome.get("reason")
+                    )
                 )
 
         wall_start = time.time()

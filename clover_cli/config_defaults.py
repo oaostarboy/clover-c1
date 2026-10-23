@@ -2268,6 +2268,16 @@ DEFAULT_CONFIG = {
         # 6 hours, or cut off a second time). false = they stay stopped and the
         # chat is told, as before.
         "resume_after_restart": True,
+        # Give each helper its own git worktree (a private copy of the repo)
+        # so parallel helpers cannot overwrite each other's files. Only
+        # applies when the parent's folder is inside a git repository; with no
+        # repo there is nothing to isolate and helpers run in the shared folder.
+        "worktree_isolation": False,
+        # true = refuse to start a helper when isolation was asked for and could
+        # not be set up INSIDE a git repository (for example a git error).
+        # A folder that is not a git repository never blocks a helper.
+        # Needs worktree_isolation: true.
+        "worktree_isolation_required": False,
         # When a subagent hits a dangerous-command approval prompt, the parent's
         # prompt_toolkit TUI owns stdin — a thread-local input() call from the
         # subagent worker would deadlock the parent UI. To avoid the deadlock,

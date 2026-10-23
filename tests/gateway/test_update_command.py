@@ -38,6 +38,21 @@ def _make_runner():
     return runner
 
 
+@pytest.fixture(autouse=True)
+def _not_in_user_systemd_unit():
+    """Keep these tests independent of where the suite runs.
+
+    Inside a user systemd service (e.g. a developer's own gateway unit) the
+    handler wraps the spawn with ``systemd-run`` and probes it with a real
+    ``subprocess.run`` -- which the ``subprocess.Popen`` mocks below turn into
+    a MagicMock, so the handler returned "Failed to start update" before it
+    wrote anything. The cgroup escape has its own tests
+    (test_update_streaming.py); here the handler is exercised as on a plain host.
+    """
+    with patch("clover_cli.update_contract.running_in_user_systemd_unit", return_value=False):
+        yield
+
+
 # ---------------------------------------------------------------------------
 # _handle_update_command
 # ---------------------------------------------------------------------------
