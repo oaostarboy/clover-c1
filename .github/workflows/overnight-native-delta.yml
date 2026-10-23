@@ -10,8 +10,8 @@ concurrency:
 env:
   PYTHONUTF8: '1'
   PYTHONIOENCODING: utf-8
-  TARGET_SHA: c5409e93646f770c3cad0d74de2431212bc89845
-  TARGET_TREE: 79523af814bf36e86628a971dfaf5c138fd6b9ed
+  TARGET_SHA: 6d44b1f1d5ca95594723aa49a85444cef95f0086
+  TARGET_TREE: 939de52a57b4cbe0937cd787d9822e25803c2257
 jobs:
   delta:
     name: Exact source delta / ${{ matrix.os }}
@@ -28,7 +28,7 @@ jobs:
           GIT_CONFIG_KEY_0: core.autocrlf
           GIT_CONFIG_VALUE_0: 'false'
         with:
-          ref: c5409e93646f770c3cad0d74de2431212bc89845
+          ref: 6d44b1f1d5ca95594723aa49a85444cef95f0086
           fetch-depth: 1
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
@@ -50,7 +50,7 @@ jobs:
           export CLOVER_PYTHON="$(uv run --no-sync python -c 'import sys; print(sys.executable)')"
           export CLOVER_TEST_WORKERS=1 CLOVER_TEST_FILE_RETRIES=0
           "$CLOVER_PYTHON" -c 'import json,sys,platform,clover_cli; print(json.dumps(dict(python=sys.executable,os=platform.platform(),source=clover_cli.__file__)))'
-          bash scripts/run_tests.sh tests/gateway/test_workstream_ui_ingress.py tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_update_stale_module_purge.py tests/clover_cli/test_windows_update_receipt_handoff.py tests/clover_cli/test_update_delivery_guard.py tests/clover_cli/test_update_delivery_guard_wrappers.py -vv --tb=short 2>&1 | tee "$RUNNER_TEMP/native-delta.log"
+          bash scripts/run_tests.sh tests/gateway/test_workstream_ui_ingress.py tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_update_stale_module_purge.py tests/clover_cli/test_windows_update_receipt_handoff.py tests/clover_cli/test_windows_process_witness.py tests/clover_cli/test_windows_process_witness_native.py tests/clover_cli/test_update_delivery_guard.py tests/clover_cli/test_update_delivery_guard_wrappers.py -vv --tb=short 2>&1 | tee "$RUNNER_TEMP/native-delta.log"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:
