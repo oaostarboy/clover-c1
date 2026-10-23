@@ -170,6 +170,43 @@ def test_immutable_legacy_publisher_uses_proven_parent_phase_not_child_clock_tic
         assert not (handoff.directory / 'handoff_phases').exists()
 
 
+@pytest.mark.parametrize('owned_image', [True, False])
+def test_base_python_alias_binds_only_to_its_actual_file(handoff, tmp_path, owned_image):
+    """Managed Windows aliases and OS-reported image paths can differ."""
+    from clover_cli import windows_update_receipt_handoff as bridge
+    real = tmp_path / 'python-versioned/python.exe'
+    real.parent.mkdir()
+    real.write_bytes(b'owned-base-identity')
+    foreign = tmp_path / 'foreign-runtime/python.exe'
+    foreign.parent.mkdir()
+    foreign.write_bytes(b'other-base-identity')
+    alias_directory = tmp_path / 'python-current'
+    if sys.platform == 'win32':
+        import os
+        import subprocess
+        # Directory junctions need no symlink privilege and match uv's alias.
+        subprocess.run([os.environ['COMSPEC'], '/c', 'mklink', '/J',
+                        str(alias_directory), str(real.parent)], check=True, capture_output=True)
+    else:
+        alias_directory.symlink_to(real.parent, target_is_directory=True)
+    alias = alias_directory / 'python.exe'
+    handoff.chain[0]['executable'] = str(real if owned_image else foreign)
+    handoff.phase.update(pid=202, epoch=handoff.phase['epoch'] + 1)
+    current = receipt.UpdateReceipt().data
+    path, status = bridge.resume(current, handoff.directory, handoff.repo,
+        process_chain=lambda *_args, **_kwargs: copy.deepcopy(handoff.chain),
+        interpreter={'prefix': handoff.fake_sys.prefix, 'executable': handoff.fake_sys.executable,
+        'base_executable': str(alias), 'argv': ['child-module', *handoff.arguments]},
+        now=lambda: handoff.phase['epoch'], wait_seconds=0)
+    if owned_image:
+        assert status == 'adopted', current.get(bridge.TAG)
+        assert path == handoff.parent and current['pre_update']['sha'] == 'a' * 40
+    else:
+        assert status == 'unverified' and path is None
+        assert current[bridge.TAG]['reason'] == 'foreign continuation executable'
+        assert handoff.parent.read_bytes() == handoff.parent_bytes
+
+
 def test_cold_process_query_can_retry_without_losing_original_receipt(handoff, monkeypatch):
     """Native 39889573087 timed out its only CIM query after five seconds."""
     from clover_cli import windows_update_receipt_handoff as bridge
