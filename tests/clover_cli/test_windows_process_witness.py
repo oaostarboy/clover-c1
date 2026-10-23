@@ -42,6 +42,9 @@ def test_filetime_conversion_preserves_native_submicrosecond_precision():
     # A legal 100ns FILETIME vector; subtracting after float conversion loses
     # precision compared with the native machine measurement.
     assert filetime_to_unix(134372017347630808) == 1792728134.7630808
+    # psutil's durable beacon uses the Windows C double conversion. Python's
+    # integer true division rounds this second vector to an adjacent float.
+    assert filetime_to_unix(134372028136154819) == 1792729213.615482
 
 
 def test_chain_uses_measured_rows_and_stops_only_at_absent_ancestor():
