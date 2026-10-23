@@ -1,7 +1,7 @@
 """Owned Windows shim receipt continuation; no gateway or service actions.
 
-Uses a separate system PowerShell CIM query rather than importing psutil into
-an updater that is about to replace venv extension modules. Missing ownership
+Uses a separate base-Python Win32 query rather than importing native extension
+modules into an updater that is about to replace its venv. Missing ownership
 is explicitly unverified. Only the current, proven handed-off logical run may
 be continued; ordinary historical success receipts are never adopted.
 """
@@ -77,29 +77,18 @@ def _json(value):
 
 
 def process_chain(pid, *, timeout=5):
-    """Read current ancestry, executable and creation time without loading pyds."""
+    """Read Win32 ancestry in an isolated base process, without updater pyd locks.
+
+    Native acceptance reproduced PowerShell/CIM not completing even after
+    two fifteen-second queries. Toolhelp32 + process handles provide the same
+    measured PID, parent edge, image path and creation-time facts without WMI.
+    ctypes stays in the disposable base-Python child, never this updater.
+    """
+    import sys
     _require(_pid(pid), 'invalid process identity')
-    command = r'''
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$ErrorActionPreference = 'Stop'
-$all = @(Get-CimInstance Win32_Process)
-$cursor = CURRENT_PID
-$seen = @{}
-$chain = @()
-for ($i=0; $i -lt 8 -and $cursor -gt 0; $i++) {
-  if ($seen.ContainsKey($cursor)) { throw 'Cyclic process ancestry' }
-  $seen[$cursor] = $true
-  $item = @($all | Where-Object { $_.ProcessId -eq $cursor })
-  if ($item.Count -ne 1) { break }
-  $item = $item[0]
-  $chain += [pscustomobject]@{ pid=[int]$item.ProcessId; parent_pid=[int]$item.ParentProcessId;
-    executable=$item.ExecutablePath; created_utc=$item.CreationDate.ToUniversalTime().ToString('o') }
-  $cursor = [int]$item.ParentProcessId
-}
-ConvertTo-Json -InputObject $chain -Depth 4 -Compress
-'''.replace('CURRENT_PID', str(pid))
-    powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    result = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-Command', command],
+    helper = Path(__file__).with_name('windows_process_witness.py')
+    interpreter = getattr(sys, '_base_executable', None) or sys.executable
+    result = subprocess.run([interpreter, '-I', str(helper), str(pid)],
                             stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8-sig', errors='strict',
                             timeout=timeout, check=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     chain = json.loads(result.stdout)
