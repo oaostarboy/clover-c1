@@ -103,6 +103,16 @@ def _witness(chain, current, parent, project_root, interpreter, now):
     venv_paths = {_key(venv / 'python.exe'), _key(venv / 'pythonw.exe')}
     _require(_key(interpreter['executable']) in venv_paths, 'foreign venv interpreter')
     allowed = venv_paths | {_key(interpreter['base_executable'])}
+    # uv's managed "current" directory is a real link to its versioned
+    # runtime. Win32 reports the physical image, while Python may preserve
+    # the configured alias. Admit only that locally resolved existing file,
+    # never a basename match or a different interpreter directory.
+    try:
+        base_image = Path(interpreter['base_executable']).resolve(strict=True)
+        if base_image.is_file():
+            allowed.add(_key(base_image))
+    except OSError:
+        pass
     root_pid = parent['pid']
     seen = set()
     owned = []
