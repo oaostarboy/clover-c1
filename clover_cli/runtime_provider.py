@@ -603,11 +603,13 @@ def _resolve_runtime_from_pool_entry(
     # symmetrically: strip /v1 for anthropic_messages, re-append it for
     # chat_completions / codex_responses (heals a stripped URL persisted to
     # model.base_url by an earlier switch into an anthropic-routed model).
-    from clover_cli.models import opencode_provider_family
-    if opencode_provider_family(provider) is not None:
-        from clover_cli.models import normalize_opencode_base_url
-
-        base_url = normalize_opencode_base_url(provider, api_mode, base_url)
+    # Codex has no OpenCode endpoint normalization. Avoid importing the whole
+    # model catalog (and its unrelated provider/network-library probes) here.
+    if provider != 'openai-codex':
+        from clover_cli.models import opencode_provider_family
+        if opencode_provider_family(provider) is not None:
+            from clover_cli.models import normalize_opencode_base_url
+            base_url = normalize_opencode_base_url(provider, api_mode, base_url)
 
     # Optional opt-in: route OpenAI/Codex turns through `codex app-server`.
     # Inert when `model.openai_runtime` is unset or "auto".
@@ -1837,8 +1839,14 @@ def resolve_runtime_provider(
     explicit_api_key: Optional[str] = None,
     explicit_base_url: Optional[str] = None,
     target_model: Optional[str] = None,
+    read_only: bool = False,
 ) -> Dict[str, Any]:
     """Resolve runtime provider credentials for agent execution.
+
+    read_only: Opt-in existing configured-main selection for evaluation. No
+    initialization, refresh, discovery, migration, env seeding or fallback. The
+    currently supported contract is one locally owned Codex pool credential;
+    unsupported/ambiguous state fails closed. Ordinary callers are unchanged.
 
     target_model: Optional override for model_cfg.get("default") when
     computing provider-specific api_mode (e.g. OpenCode Zen/Go where different
@@ -1848,6 +1856,39 @@ def resolve_runtime_provider(
     persisted default. Other callers can leave it None to preserve existing
     behavior (api_mode derived from config).
     """
+    if read_only:
+        from clover_cli.config import load_config_snapshot, is_provider_enabled
+        from clover_cli.readonly_files import ReadOnlyStateError
+        from agent.bounded_provider_metadata import configured_entry, endpoint_identity
+        config = load_config_snapshot()
+        main = config.get('model')
+        if not isinstance(main, dict):
+            raise ReadOnlyStateError('configured_main_required')
+        provider, model = main.get('provider'), main.get('default')
+        if (provider != 'openai-codex' or configured_entry(config, provider) is not None
+                or not isinstance(model, str) or not model or model != model.strip()
+                or any(ord(c) < 32 for c in model)):
+            raise ReadOnlyStateError('read_only_configured_main_unsupported')
+        if (requested not in (None, provider) or target_model not in (None, model)
+                or explicit_api_key is not None or explicit_base_url is not None):
+            raise ReadOnlyStateError('read_only_route_override_forbidden')
+        providers = config.get('providers', {})
+        if not isinstance(providers, dict) or not is_provider_enabled(providers.get(provider, {})):
+            raise ReadOnlyStateError('configured_provider_disabled')
+        if (main.get('api_key') or main.get('key_env') or main.get('api_key_env') or main.get('key_cmd')
+                or main.get('openai_runtime') not in (None, '', 'auto')
+                or main.get('api_mode') not in (None, '', 'codex_responses')):
+            raise ReadOnlyStateError('read_only_credential_override_unsupported')
+        pool = load_pool(provider, read_only=True, config=config)
+        entry = pool.select()
+        runtime = _resolve_runtime_from_pool_entry(provider=provider, entry=entry,
+            requested_provider=provider, model_cfg=main, pool=pool, target_model=model)
+        if (endpoint_identity(runtime['base_url']) != endpoint_identity(DEFAULT_CODEX_BASE_URL)
+                or (main.get('base_url') and endpoint_identity(main['base_url']) != endpoint_identity(runtime['base_url']))):
+            raise ReadOnlyStateError('read_only_endpoint_unsupported')
+        runtime['model'] = model
+        return runtime
+
     requested_provider = resolve_requested_provider(requested)
 
     # Honour ``providers.<name>.enabled: false`` for BOTH user-defined

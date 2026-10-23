@@ -1109,6 +1109,7 @@ def write_runtime_status(
     retrying_since: Any = _UNSET,
     served_profiles: Any = _UNSET,
     session_store: Any = _UNSET,
+    update_restart_capability: Any = _UNSET,
     clear_profile_platforms: bool = False,
 ) -> None:
     """Persist gateway runtime health information for diagnostics/status."""
@@ -1116,6 +1117,12 @@ def write_runtime_status(
     payload = _read_json_file(path) or _build_runtime_status_record()
     previous_payload = copy.deepcopy(payload)
     current_record = _build_pid_record()
+    if (payload.get("pid"), payload.get("start_time")) != (
+        current_record.get("pid"), current_record.get("start_time")
+    ):
+        payload.pop("update_restart_capability", None)
+    if update_restart_capability is not _UNSET:
+        payload["update_restart_capability"] = update_restart_capability
     payload.setdefault("platforms", {})
     if clear_profile_platforms:
         # Secondary-profile adapter health is stored in the process-level

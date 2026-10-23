@@ -134,8 +134,31 @@ def refresh_budget(agent: Any) -> None:
         pass
 
 
+def continuation_forbidden(result: Any, agent: Any = None) -> bool:
+    """Owner/Stop/error boundaries take precedence over every resume reason.
+
+    This only removes continuation authority; a partial outcome does not grant
+    authority beyond the existing bounded, approved worker context.
+    """
+    if not isinstance(result, dict):
+        return True
+    if result.get("interrupted") or result.get("failed") or result.get("error"):
+        return True
+    if getattr(agent, "_interrupt_requested", False) is True:
+        return True
+    hard_stop = getattr(agent, "_hard_interrupt_requested", None)
+    if hard_stop is not None and callable(getattr(hard_stop, "is_set", None)):
+        if hard_stop.is_set() is True:
+            return True
+    from agent.task_outcome import task_outcome
+
+    return task_outcome(result, result.get("final_response") or "")["status"] == "blocked"
+
+
 def needs_continuation(result: Any, agent: Any = None) -> Optional[str]:
     """Which continuation a run needs: ``"budget"``, ``"unfinished"`` or None."""
+    if continuation_forbidden(result, agent):
+        return None
     if stopped_on_step_budget(result):
         return "budget"
     if quit_with_steps_left(result, agent):

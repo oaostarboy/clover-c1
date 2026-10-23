@@ -164,22 +164,28 @@ def test_restore_active_tool_dependencies_uses_static_allowlist(monkeypatch):
     assert calls == [(["uv", "pip", "install", "langfuse", "--quiet"], env)]
 
 
+@pytest.mark.parametrize('layout', ['local', 'external'])
 def test_cmd_update_captures_and_propagates_pre_rebuild_snapshot(
-    tmp_path, monkeypatch
+    tmp_path, monkeypatch, layout
 ):
     """The updater must carry pre-rebuild state into its repair refresh."""
     from clover_cli import managed_uv, update_cmd
 
     (tmp_path / ".git").mkdir()
+    target_venv = tmp_path / 'venv' if layout == 'local' else tmp_path.parent / 'external-venv'
+    monkeypatch.setattr(managed_uv, '_default_live_venv', lambda root: target_venv)
     snapshot = ["platform.telegram"]
     tool_snapshot = ["langfuse"]
     refresh_calls = []
     restore_calls = []
+    create_calls = []
 
     class RestoreReached(Exception):
         pass
 
     def fake_run(cmd, **kwargs):
+        if cmd[:2] == ['uv', 'venv']:
+            create_calls.append(cmd)
         if "rev-parse" in cmd:
             return SimpleNamespace(returncode=0, stdout="main\n", stderr="")
         if "rev-list" in cmd:
@@ -231,6 +237,7 @@ def test_cmd_update_captures_and_propagates_pre_rebuild_snapshot(
     )
     with pytest.raises(RestoreReached):
         m._cmd_update_impl(args, gateway_mode=False)
+    assert create_calls == [['uv', 'venv', 'venv' if layout == 'local' else str(target_venv)]]
 
     # The repair env is now built via managed_python_env (#83914): third-party
     # UV vars are stripped, managed pins set, then VIRTUAL_ENV re-pointed at
@@ -238,7 +245,7 @@ def test_cmd_update_captures_and_propagates_pre_rebuild_snapshot(
     from clover_cli.managed_uv import managed_python_env
 
     expected_env = managed_python_env()
-    expected_env["VIRTUAL_ENV"] = str(tmp_path / "venv")
+    expected_env["VIRTUAL_ENV"] = str(target_venv)
     assert refresh_calls == [
         (
             ["uv", "pip"],

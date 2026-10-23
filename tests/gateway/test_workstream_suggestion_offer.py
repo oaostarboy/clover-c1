@@ -42,10 +42,15 @@ class OfferHarness(Harness):
         async def run():
             await self.adapter._handle_text_message(self.update(text, **kwargs), object())
             deadline = asyncio.get_running_loop().time() + 15
-            while len(self.results) < expected_results or self.adapter.send.await_count < expected_sends:
-                assert asyncio.get_running_loop().time() < deadline, "ordinary reply did not settle"
+            # The adapter keeps its session guard until its real one-shot
+            # after-delivery owner has returned (including chained callbacks).
+            # A sent ordinary reply alone is not lifecycle completion: closing
+            # asyncio.run then would cancel optional work still in progress.
+            while (len(self.results) < expected_results
+                   or self.adapter.send.await_count < expected_sends
+                   or self.adapter._active_sessions):
+                assert asyncio.get_running_loop().time() < deadline, "reply/after-delivery owner did not settle"
                 await asyncio.sleep(0.02)
-            await asyncio.sleep(0.2)
 
         asyncio.run(run())
 

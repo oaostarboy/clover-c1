@@ -1363,6 +1363,14 @@ def _build_child_system_prompt(
         "points over paragraphs, and don't replay your whole process. Your "
         "response is returned to the parent agent as a summary, and overlong "
         "summaries crowd out the parent's context window.\n\n"
+        "Report the task outcome separately from whether this model turn ended. "
+        "Before the Result line, write exactly one single-line JSON report: "
+        "Task outcome: {\"status\":\"done|partial|blocked\",\"remaining\":[],"
+        "\"owner\":\"who owns the next step\",\"next_step\":\"what happens next\"}. "
+        "Choose one status, not the pipe-separated example. For partial or blocked, "
+        "list every unfinished acceptance criterion in remaining. An approval or "
+        "auth gate stays blocked; never bypass it or start automatic retries. "
+        "For done, remaining must be empty; the parent still reviews your claim.\n\n"
         "Just before that, write one line: 'Result: done' if you did what was "
         "asked, or 'Result: not done' if you could not (blocked, wrong input, "
         "only part of it). Never claim done for work you did not finish.\n\n"
@@ -2836,6 +2844,7 @@ from agent.step_continuation import (  # noqa: E402
     continue_until_done as _continue_until_done,
     stopped_on_step_budget as _stopped_on_step_budget,
     needs_continuation as _needs_continuation,
+    continuation_forbidden as _continuation_forbidden,
 )
 
 
@@ -3549,13 +3558,12 @@ def _run_single_child(
             if (
                 not _schema_valid
                 and _first_text.strip()
-                and not result.get("interrupted", False)
+                and not _continuation_forbidden(result, child)
             ):
                 # Exactly one retry turn, carrying the validation errors
                 # verbatim (no schema re-paste — the child already holds
                 # the contract in its context).
                 _schema_retries = 1
-                _retry_result = None
                 try:
                     _retry_result = child.run_conversation(
                         user_message=build_retry_message(_schema_errors),
@@ -3568,24 +3576,62 @@ def _run_single_child(
                         task_index,
                         _retry_exc,
                     )
-                if isinstance(_retry_result, dict):
-                    _retry_text = _retry_result.get("final_response") or ""
-                    if _retry_text.strip():
-                        result["final_response"] = _retry_text
+                    _retry_result = {"failed": True, "error": str(_retry_exc)}
+
+                # The final leg owns outcome/termination evidence, including
+                # absent fields. Never overlay it on an earlier success:
+                # that would retain stale task_outcome/completed/Stop flags.
+                _prior_result = result
+                result = dict(_retry_result) if isinstance(_retry_result, dict) else {
+                    "failed": True,
+                    "error": "Subagent schema-retry returned an invalid result.",
+                }
+                _retry_text = result.get("final_response")
+                if _retry_text is None:
+                    _retry_text = ""
+                from agent.task_outcome import task_outcome
+                _retry_obligation = task_outcome(result, "")["status"] in {"partial", "blocked"}
+                if not isinstance(_retry_text, str) or (not _retry_text.strip() and not _retry_obligation):
+                    # No current response is not evidence for the old verdict.
+                    # A valid current obligation is evidence even without prose;
+                    # malformed output or a real failure still takes precedence.
+                    result["failed"] = True
+                    if not result.get("error"):
+                        result["error"] = (result.get("failure_reason")
+                                           or "Subagent schema-retry did not produce a response.")
+                    _retry_text = ""
+                result["final_response"] = _retry_text
+                for _key in ("auto_continuations", "continuation_kinds", "storage_recovery"):
+                    if _key not in result and _key in _prior_result:
+                        result[_key] = _prior_result[_key]
+                _pending = [_leg.get("pending_steer") for _leg in (_prior_result, result)]
+                _pending = [text for text in _pending if isinstance(text, str) and text.strip()]
+                if _pending:
+                    result["pending_steer"] = "\n".join(_pending)
+                _api_total = 0
+                for _leg in (_prior_result, result):
                     try:
-                        result["api_calls"] = int(
-                            result.get("api_calls", 0) or 0
-                        ) + int(_retry_result.get("api_calls", 0) or 0)
-                    except (TypeError, ValueError):
-                        pass
-                    _retry_messages = _retry_result.get("messages")
-                    if isinstance(_retry_messages, list) and isinstance(
-                        result.get("messages"), list
-                    ):
-                        result["messages"] = result["messages"] + _retry_messages
-                    _schema_valid, _schema_errors = validate_output(
-                        _retry_text, _output_schema
+                        _api_total += int(_leg.get("api_calls", 0) or 0)
+                    except (TypeError, ValueError, OverflowError):
+                        pass  # retain known accounting from the other leg
+                result["api_calls"] = _api_total
+                _retry_messages = result.get("messages")
+                if isinstance(_prior_result.get("messages"), list):
+                    result["messages"] = _prior_result["messages"] + (
+                        _retry_messages if isinstance(_retry_messages, list) else []
                     )
+                # Stop may arrive during the repair even if the provider returns
+                # success. It still wins over task/schema evidence at assembly.
+                _hard_stop = getattr(child, "_hard_interrupt_requested", None)
+                if (getattr(child, "_interrupt_requested", False) is True or (
+                    _hard_stop is not None
+                    and callable(getattr(_hard_stop, "is_set", None))
+                    and _hard_stop.is_set() is True
+                )):
+                    result["interrupted"] = True
+                _schema_valid, _schema_errors = validate_output(
+                    _retry_text, _output_schema
+                )
 
         # Linearization boundary for registry steering. From this point on the
         # child cannot consume another steer. Closing under the registry lock
@@ -3612,6 +3658,8 @@ def _run_single_child(
         duration = round(time.monotonic() - child_start, 2)
 
         summary = result.get("final_response") or ""
+        from agent.task_outcome import task_outcome
+        reported_outcome = task_outcome(result, summary)
         completed = result.get("completed", False)
         interrupted = result.get("interrupted", False)
         api_calls = result.get("api_calls", 0)
@@ -3632,6 +3680,11 @@ def _run_single_child(
             status = "interrupted"
         elif _turn_failed:
             status = "failed"
+        elif (_schema_retries and not summary.strip()
+              and reported_outcome["status"] in {"partial", "blocked"}):
+            # Structured retry evidence can carry the obligation without prose.
+            # Turn completion is not task completion; activity renders incomplete.
+            status = "completed"
         elif summary and not _empty_sentinel:
             # A summary means the subagent produced usable output.
             # exit_reason ("completed" vs "max_iterations") already
@@ -3697,6 +3750,7 @@ def _run_single_child(
         entry: Dict[str, Any] = {
             "task_index": task_index,
             "status": status,
+            "task_outcome": reported_outcome,
             "summary": summary,
             "api_calls": api_calls,
             "duration_seconds": duration,
@@ -3745,6 +3799,11 @@ def _run_single_child(
         # only feeds the parent session rollup).
         # Inspired by: Perplexity Agent API result shape (idea-level).
         entry["cost_usd"] = round(entry["_child_cost_usd"], 6)
+        _storage_recovery = result.get("storage_recovery")
+        if isinstance(_storage_recovery, dict):
+            # Preserve the child's durable progress evidence without opening
+            # failed-turn auto-continuation or parent callback spawn rights.
+            entry["storage_recovery"] = dict(_storage_recovery)
         requested_route = getattr(child, '_delegate_requested_route', None)
         if isinstance(requested_route, dict):
             entry['route_provenance'] = {
@@ -3874,9 +3933,13 @@ def _run_single_child(
             "preview": summary[:160] if summary else entry.get("error", ""),
             "status": status,
             "exit_reason": entry.get("exit_reason", ""),
+            "task_outcome": reported_outcome,
             "duration_seconds": duration,
             "summary": summary[:500] if summary else entry.get("error", ""),
-            "outcome": _helper_outcome(summary),
+            "outcome": (
+                "not_done" if reported_outcome["status"] in {"partial", "blocked"}
+                else "done" if reported_outcome["status"] == "done" else ""
+            ),
             "input_tokens": (
                 int(_input_tokens) if isinstance(_input_tokens, (int, float)) else 0
             ),

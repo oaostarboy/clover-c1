@@ -109,11 +109,15 @@ def _headline_parts(headline):
 # --- clover skin ---------------------------------------------------------------------
 
 @pytest.mark.asyncio
-async def test_clover_reply_layout():
+@pytest.mark.parametrize(("roll", "expected_mark"), [(1, "☘️"), (0, "🍀")])
+async def test_clover_reply_layout(monkeypatch, roll, expected_mark):
+    # Exercise both documented RNG outcomes, never a probabilistic layout check.
+    monkeypatch.setattr(clover_flavor.random, "randrange", lambda *_a, **_k: roll)
     reply = await _reply()
     headline, info, tip = reply.split("\n\n")
     mark, _, line = _headline_parts(headline)
-    assert mark == "☘️" and line in clover_flavor.CLOVER_PACK["lines"]["new_session"]
+    assert mark == expected_mark
+    assert line in clover_flavor.CLOVER_PACK["lines"]["new_session"]
     assert info == "> 🤖 Grok 4.7 · xAI\n> 📏 500K context"
     assert tip == "🍀 tip: *Try /compress when chats get long.*"
     for stock in ("Session reset", "◆", "Provider", "xai-oauth", "grok-4.7", "✦"):

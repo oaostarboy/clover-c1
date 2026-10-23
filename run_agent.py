@@ -2163,17 +2163,20 @@ class AIAgent:
         conversation_history: Optional[List[Dict]] = None,
     ):
         """Serialize direct and turn-boundary session flushes per agent."""
+        from agent.storage_recovery import flush_with_recovery
+
         persist_lock = getattr(self, "_session_persist_lock", None)
         if persist_lock is None:
-            return self._flush_messages_to_session_db_unlocked(messages, conversation_history)
+            return flush_with_recovery(self, messages, conversation_history)
         with persist_lock:
-            return self._flush_messages_to_session_db_unlocked(messages, conversation_history)
+            return flush_with_recovery(self, messages, conversation_history)
 
     def _flush_messages_to_session_db_unlocked(
         self,
         messages: List[Dict],
         conversation_history: Optional[List[Dict]] = None,
         _adoption_budget: int = 1,
+        _recovery_patience_s: Optional[float] = None,
     ):
         """Persist any un-flushed messages to the SQLite session store.
 
@@ -2462,6 +2465,10 @@ class AIAgent:
             # re-writes the whole tail (same recovery contract as before,
             # minus the partial-prefix case that could double-pay counters).
             if _batch_rows:
+                _recovery_kwargs = (
+                    {"patience_s": _recovery_patience_s}
+                    if _recovery_patience_s is not None else {}
+                )
                 self._session_db.append_messages_batch(
                     session_id=self.session_id,
                     messages=_batch_rows,
@@ -2475,6 +2482,7 @@ class AIAgent:
                         self, "_active_session_turn_lease_ttl_seconds", 300.0
                     )
                     or 300.0,
+                    **_recovery_kwargs,
                 )
                 from agent.transcript_repair import sync_flushed_message_markers
 
@@ -4119,9 +4127,9 @@ class AIAgent:
                 return (
                     prefix
                     + "the turn was stopped because session storage was busy "
-                    "(another Clover process was writing to the state "
-                    "database). Your message should already be saved — "
-                    "please send it again in a moment."
+                    "(a reader or writer may have blocked persistence). "
+                    "The last tool may already have run. Check saved progress "
+                    "before retrying actions."
                 )
             if cause == "corrupt":
                 return (

@@ -101,6 +101,9 @@ def test_pending_marker_sweep_finds_same_venv_alias_gateway(monkeypatch, tmp_pat
     update_cmd._write_fleet_restart_pending_marker(expected_sha="deadbeef")
     assert update_cmd._pending_fleet_restart_needed()
 
+    # PID 101 is a synthetic capable gateway; test the alias/restart mechanism,
+    # not the independently tested legacy compatibility refusal.
+    monkeypatch.setattr("clover_cli.update_delivery_guard._unsafe_gateways", lambda: [])
     restarted = []
 
     def restart_units(failed):

@@ -141,7 +141,7 @@ async def test_fifo_enqueued_continuation_is_drained_without_new_user_message():
 
 
 @pytest.mark.asyncio
-async def test_runner_goal_hook_enqueues_into_the_key_the_adapter_drains(clover_home):
+async def test_runner_goal_hook_enqueues_into_the_key_the_adapter_drains(clover_home, monkeypatch):
     """_post_turn_goal_continuation resolves the FIFO key via
     _session_key_for_source; the adapter drain uses build_session_key on the
     event source. These must agree or the continuation is orphaned under a
@@ -179,7 +179,13 @@ async def test_runner_goal_hook_enqueues_into_the_key_the_adapter_drains(clover_
     adapter = _DrainProbeAdapter()
     runner.adapters = {Platform.SLACK: adapter}
 
+    # Reproduce an exceeded event-loop bootstrap window deterministically;
+    # this routing test must not depend on a cold database opening in 1.5s.
+    monkeypatch.setattr("clover_cli.goals._DB_BOOTSTRAP_INIT_WAIT_S", 0)
+    monkeypatch.setattr("clover_cli.goals._DB_BOOTSTRAP_LOOP_WAIT_S", 0)
+    await runner._warm_goals_session_db("goal drain fixture")
     GoalManager(session_entry.session_id).set("ship it")
+    assert GoalManager(session_entry.session_id).is_active(), "test goal must be persisted before the hook"
     with patch(
         "clover_cli.goals.judge_goal",
         return_value=("continue", "still needs work", False, None, False),
@@ -189,7 +195,6 @@ async def test_runner_goal_hook_enqueues_into_the_key_the_adapter_drains(clover_
             source=src,
             final_response="partial progress",
         )
-        await asyncio.sleep(0.05)
 
     assert adapter_key in adapter._pending_messages, (
         "continuation enqueued under a different key than the adapter "

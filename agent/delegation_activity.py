@@ -730,6 +730,10 @@ class DelegationActivityTracker:
         state = _COMPLETE_STATUS.get(status, "failed")
         if str(kw.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}:
             state = "incomplete"
+        report = kw.get("task_outcome")
+        task_incomplete = isinstance(report, dict) and report.get("status") in {"partial", "blocked", "unknown"}
+        if state == "completed" and task_incomplete:
+            state = "incomplete"
         child.state = state
         child.exited_unverified = state == "incomplete" and bool(kw.get("exited_unverified"))
         child.ended_at = now
@@ -745,7 +749,9 @@ class DelegationActivityTracker:
         elif state == "cancelled":
             child.reason = sanitize_text(kw.get("reason") or "", _REASON_MAX) or "stopped before finishing"
         elif state == "incomplete":
-            child.reason = sanitize_text(kw.get("reason") or "", _REASON_MAX) or "ran out of steps"
+            from agent.task_outcome import outcome_reason
+            reason = outcome_reason(report) if task_incomplete and isinstance(report, dict) else kw.get("reason") or ""
+            child.reason = sanitize_text(reason, _REASON_MAX) or "ran out of steps"
         elif status == "timeout":
             child.reason = f"timed out after {format_duration(dur)}"
         else:

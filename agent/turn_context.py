@@ -606,6 +606,7 @@ def build_turn_context(
             auth_mode=getattr(agent, "auth_mode", "") or "",
             session_id=getattr(agent, "session_id", "") or "",
             cache_scope=_cache_scope,
+            credential_pool=getattr(agent, "_credential_pool", None),
         )
     except Exception:
         pass

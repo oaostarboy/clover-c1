@@ -1104,6 +1104,34 @@ class WalUnsupportedError(sqlite3.OperationalError):
     """
 
 
+def _owned_database_update_pending(conn: sqlite3.Connection) -> bool:
+    """Defer new WAL headers until this install's owner restart finishes.
+
+    Every profile sharing the interpreter observes its owner's breadcrumb.
+    Explicitly external databases do not inherit the profile's obligation.
+    """
+    try:
+        from clover_constants import get_clover_home
+        from clover_cli.update_lock import read_live_update
+        from clover_cli.managed_uv import _runtime_restart_obligation_pending
+
+        home = get_clover_home().resolve()
+        if (not (home / "fleet_restart_pending").is_file()
+                and read_live_update() is None
+                and not _runtime_restart_obligation_pending(Path(__file__).resolve().parent)):
+            return False
+        cursor = conn.execute("PRAGMA database_list")
+        try:
+            main = next((row[2] for row in cursor.fetchall() if row[1] == "main"), "")
+        finally:
+            cursor.close()
+        return bool(main) and Path(main).resolve().parent == home
+    except Exception:
+        # Failure to establish quiescence must not authorize a header change.
+        logger.debug("Could not establish SQLite update boundary", exc_info=True)
+        return True
+
+
 def apply_wal_with_fallback(
     conn: sqlite3.Connection,
     *,
@@ -1112,7 +1140,9 @@ def apply_wal_with_fallback(
 ) -> str:
     """Set ``journal_mode=WAL`` on ``conn``, falling back to DELETE on failure.
 
-    Returns the journal mode actually set (``"wal"`` or ``"delete"``).
+    Returns the journal mode actually set (normally ``"wal"`` or ``"delete"``).
+    While an owner update/restart is pending, retain any verified non-WAL
+    mode unchanged rather than activating WAL under old-runtime openers.
 
     On WAL-incompatible filesystems (NFS, SMB, some FUSE, ZFS), SQLite either
     raises ``OperationalError("locking protocol")`` /
@@ -1206,6 +1236,17 @@ def apply_wal_with_fallback(
                 f"could not set configured journal_mode=delete (got {actual or 'no result'})"
             )
         return actual
+
+    if _owned_database_update_pending(conn):
+        if current_mode is None:
+            raise sqlite3.OperationalError(
+                "cannot verify journal mode while owner update/restart is pending"
+            )
+        if require_wal:
+            raise WalUnsupportedError(
+                "WAL activation deferred until the owner update and gateway restart finish"
+            )
+        return current_mode
 
     # Decide BEFORE the flip whether it would silently overwrite a mode
     # somebody chose. Both inputs are only readable while the file is still
@@ -5019,15 +5060,22 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             try:
                 yield conn
             finally:
+                # A caller's explicit read transaction must not outlive its
+                # checkout. Reusing it returns stale snapshots and pins WAL
+                # history indefinitely. Close rather than just ROLLBACK: live
+                # cursors can retain a snapshot after a rollback.
+                if conn.in_transaction:
+                    self._close_read_conn(conn)
+                    conn = None
                 returned = False
                 with self._read_conns_lock:
-                    if not self._read_conns_closed:
+                    if conn is not None and not self._read_conns_closed:
                         try:
                             self._read_pool.put_nowait(conn)
                             returned = True
                         except queue.Full:
                             pass
-                if not returned:
+                if conn is not None and not returned:
                     # close() has already drained the pool, so this connection
                     # is surplus. Close it here — dropping it on the floor is
                     # what leaked the fd.
@@ -5328,11 +5376,14 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             return "no more rows available" in str(exc).lower()
 
         while True:
+            phase = "begin"
             try:
                 with self._lock:
                     self._conn.execute("BEGIN IMMEDIATE")
                     try:
+                        phase = "body"
                         result = fn(self._conn)
+                        phase = "commit"
                         self._conn.commit()
                     except BaseException:
                         try:
@@ -5380,11 +5431,12 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     # (e.g. a worktree named fix-corrupt-db) would flip it.
                     log_write_lock_holders(self.db_path, patience_s)
                     raise sqlite3.OperationalError(
-                        f"database is locked (another Clover process held the "
-                        f"state.db write lock for over {patience_s:.0f}s — "
-                        "likely a long maintenance operation such as VACUUM, "
-                        "a large WAL checkpoint, or an older pre-update "
-                        "process; the database itself is healthy)"
+                        f"database is locked (state.db persistence retry budget "
+                        f"{patience_s:g}s exhausted; phase={phase}; "
+                        f"sqlite_errorname={getattr(exc, 'sqlite_errorname', 'unknown')}; "
+                        f"sqlite_errorcode={getattr(exc, 'sqlite_errorcode', 'unknown')}; "
+                        "a reader or writer may be blocking this operation; "
+                        "holder and database health are not established)"
                     ) from exc
                 if _is_no_more_rows(exc) and self._sleep_before_write_retry(deadline, patience_s):
                     continue
@@ -11377,6 +11429,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         turn_lease_holder: Optional[str] = None,
         chunk_rows: Optional[int] = None,
         turn_lease_ttl_seconds: float = 300.0,
+        patience_s: Optional[float] = None,
     ) -> int:
         """Append multiple messages atomically in ONE write transaction.
 
@@ -11417,6 +11470,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     compression_lock_holder=compression_lock_holder,
                     turn_lease_holder=turn_lease_holder,
                     turn_lease_ttl_seconds=turn_lease_ttl_seconds,
+                    patience_s=patience_s,
                 )
             return inserted_total
 
@@ -11461,7 +11515,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         # Same criticality as append_message: this IS the turn's transcript.
         return self._execute_write(
-            _do, patience_s=self._TRANSCRIPT_WRITE_PATIENCE_S
+            _do, patience_s=(self._TRANSCRIPT_WRITE_PATIENCE_S if patience_s is None else patience_s)
         )
 
     # ── trusted human-origin receipts ──────────────────────────────────────
@@ -12618,7 +12672,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         return cols
 
     def set_latest_user_api_content(
-        self, session_id: str, content: Any, api_content: str
+        self, session_id: str, content: Any, api_content: str, *, expected_row_id: Optional[int] = None,
+        is_current=None, expected_api_content: Optional[str] = None,
     ) -> int:
         """Backfill the ``api_content`` sidecar onto the newest ACTIVE user row.
 
@@ -12633,17 +12688,28 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         row is not the message the caller stamped (racing rewrite, unexpected
         tail shape), nothing is written. Returns the number of rows updated
         (0 or 1).
+        ``is_current`` fences optional current-turn additions inside the actual
+        write/retry callback. ``expected_api_content`` is a CAS guard for rolling
+        back an unsent addition, never a license to rewrite sent history.
         """
         encoded = self._encode_content(content)
 
         def _do(conn):
+            if is_current is not None:
+                try:
+                    if is_current() is not True:
+                        return 0
+                except Exception:
+                    return 0
             cursor = conn.execute(
                 "UPDATE messages SET api_content = ? WHERE id = ("
                 "SELECT id FROM messages "
                 "WHERE session_id = ? AND role = 'user' AND active = 1 "
                 "ORDER BY id DESC LIMIT 1"
-                ") AND content IS ?",
-                (_scrub_surrogates(api_content), session_id, encoded),
+                ") AND content IS ? AND (? IS NULL OR id = ?) "
+                "AND (? IS NULL OR api_content IS ?)",
+                (_scrub_surrogates(api_content), session_id, encoded, expected_row_id, expected_row_id,
+                 expected_api_content, expected_api_content),
             )
             return cursor.rowcount
 
