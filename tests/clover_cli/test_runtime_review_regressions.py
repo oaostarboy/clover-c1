@@ -59,9 +59,21 @@ def test_shared_runtime_restart_obligation_protects_a_sibling_profile(tmp_path, 
 
 
 @pytest.mark.parametrize("failure", ["exception", "not-applicable"])
-def test_bootstrap_repair_failure_cannot_hide_known_unsafe_runtime(tmp_path, failure):
+def test_bootstrap_repair_failure_cannot_hide_known_unsafe_runtime(tmp_path, failure, monkeypatch):
+    import sqlite3
     from types import SimpleNamespace
     from tests.clover_cli.test_managed_uv import _runtime_info
+
+    # The refusal protects a database that is already in WAL mode on a vulnerable
+    # runtime. (With every database in DELETE mode the update continues; that case
+    # is covered in test_update_runtime_failure_boundary.py.)
+    monkeypatch.setenv("CLOVER_HOME", str(tmp_path / "home"))
+    (tmp_path / "home").mkdir()
+    wal = sqlite3.connect(tmp_path / "home" / "state.db")
+    wal.execute("PRAGMA journal_mode=WAL")
+    wal.execute("CREATE TABLE t (x)")
+    wal.commit()
+    wal.close()
 
     uv = tmp_path / "uv"
     uv.write_text("fixture")

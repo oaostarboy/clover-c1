@@ -240,6 +240,124 @@ def _failed_update_runtime_attempt(detail: str) -> RuntimeRepairResult:
     )
 
 
+def _print_pulled_not_restarted() -> None:
+    """Say what this stop actually left behind (never "nothing was changed")."""
+    try:
+        from clover_cli.update_delivery_guard import disarm_owned_restart_watcher
+
+        # Without this the detached watcher would roll the checkout back and
+        # relaunch the gateway behind our back, which is a second half-state.
+        disarm_owned_restart_watcher()
+    except Exception:
+        logger.debug("could not stand down the restart watcher", exc_info=True)
+    print("    The new files were already downloaded, but the running version was NOT restarted and keeps")
+    print("    running the version it had. Dependencies may already have changed. Run `clover update` again to finish:")
+    print("    the restart that is still owed is kept and will be completed then.")
+
+
+def _clover_databases_in_wal_mode() -> list[str]:
+    """Read-only WAL inventory; missing evidence raises instead of implying DELETE.
+
+    Include nested cron, memory, plugin and profile stores, not just state.db.
+    A bounded inventory must fail closed at its limit, never return a prefix as
+    if it proved the rest of the files safe. Both SQLite format-version bytes
+    must positively identify rollback mode to permit offline continuation.
+    """
+    from clover_constants import get_clover_home
+    from clover_cli.sqlite_safe_read import read_header_bytes_preopen
+
+    home = Path(get_clover_home())
+    import os
+
+    wal: list[str] = []
+    databases = 0
+    entries = 0
+
+    def unreadable(error):
+        # pathlib.glob silently suppresses scandir PermissionError. That is
+        # missing evidence, not proof that a store directory has no WAL files.
+        raise error
+
+    for directory, dirs, files in os.walk(home, onerror=unreadable, followlinks=False):
+        parent = Path(directory)
+        entries += len(dirs) + len(files)
+        if entries > 50_000:
+            raise RuntimeError('Database directory inventory is incomplete')
+        if any((parent / name).is_symlink() for name in dirs):
+            raise RuntimeError('Database directory inventory has an unverified link')
+        for name in sorted(files):
+            path = parent / name
+            if path.suffix.lower() not in ('.db', '.sqlite', '.sqlite3'):
+                if 'plugin-data' in path.relative_to(home).parts and not name.endswith(('-wal', '-shm', '-journal')):
+                    # plugin_db accepts custom names. Do not certify an
+                    # omitted arbitrary-name store as safe from its suffix.
+                    raise RuntimeError('Plugin storage has an unverified custom filename')
+                continue
+            databases += 1
+            if databases > 200:
+                raise RuntimeError('Database inventory limit reached; journal modes unverified')
+            if path.is_symlink() or not path.is_file():
+                raise RuntimeError('Database inventory contains an unverified target')
+            header = read_header_bytes_preopen(path, length=100)
+            if not header or len(header) < 100 or header[:16] != b"SQLite format 3\x00":
+                raise RuntimeError('Database journal header is unreadable or invalid')
+            versions = header[18:20]
+            if versions == b"\x02\x02":
+                wal.append(str(path.relative_to(home)))
+            elif versions != b"\x01\x01":
+                raise RuntimeError('Database journal mode is unverified')
+    return wal
+
+
+
+def _repair_failure_is_safe_to_continue(repair: RuntimeRepairResult) -> bool:
+    """True when a failed runtime repair cannot expose a WAL-reset corruption.
+
+    The corruption needs a database in WAL mode on a vulnerable SQLite. Clover's
+    fresh target-side openers (``clover_state.apply_wal_with_fallback``) keep
+    databases out of WAL on a vulnerable runtime. A still-running gateway can
+    cache released plugin openers that did not honor that fallback, so require
+    no active gateway as well as a complete readable rollback-mode inventory.
+    The repair is retried by the next update.
+    Failing the whole update here (after the new files were already pulled) only
+    strands offline / no-uv users in a half-updated state.
+    """
+    try:
+        from clover_cli.gateway import find_gateway_pids, find_profile_gateway_processes
+        from clover_cli.update_cmd import _gateway_pid_install_verdict
+
+        # Fresh target-side openers honor DELETE fallback. Cached plugin_db in
+        # a still-running released gateway did not: it can turn WAL on AFTER a
+        # clean header inventory. A quiet agent count cannot repair loaded code.
+        if find_profile_gateway_processes(strict=True):
+            return False
+        if any(_gateway_pid_install_verdict(pid) != 'other'
+               for pid in find_gateway_pids(all_profiles=True)):
+            return False
+        wal = _clover_databases_in_wal_mode()
+    except Exception:
+        return False
+    if wal:
+        return False
+    print(
+        "  \u26a0 The Python runtime's SQLite is older than the safe version and could not be "
+        f"replaced now ({repair.detail or repair.status})."
+    )
+    print(
+        "    Continuing with no active gateway: built-in database openers keep rollback-journal mode, and "
+        "the next `clover update` will retry the repair."
+    )
+    try:
+        from clover_cli.update_receipt import record_step
+
+        record_step("sqlite_runtime", True,
+                    f"unrepaired SQLite {repair.sqlite_before or 'unknown'} continued in DELETE journal mode; "
+                    f"repair status={repair.status}")
+    except Exception:
+        logger.debug("could not record runtime repair warning", exc_info=True)
+    return True
+
+
 def _finish_update_runtime_attempt(
     repair: RuntimeRepairResult,
     observer: Callable[[RuntimeRepairResult], None] | None,
@@ -266,6 +384,7 @@ def _finish_update_runtime_attempt(
             print("  ⚠ Runtime repair skipped: the target is not a proved owned virtual environment.")
             return
         print("  ✗ Update stopped: the runtime target is not a proved owned virtual environment.")
+        _print_pulled_not_restarted()
         try:
             from clover_cli.update_receipt import record_step
             record_step("sqlite_runtime", False, "runtime ownership could not be established")
@@ -291,8 +410,11 @@ def _finish_update_runtime_attempt(
         return
     if repair.status == "failed" and report_failure:
         _report_runtime_repair_failure(repair)
+    if _repair_failure_is_safe_to_continue(repair):
+        return
     print("  ✗ Update incomplete: the known-vulnerable SQLite runtime was not repaired.")
     print("    No unsafe WAL override was applied. Resolve the reported repair failure and retry `clover update`.")
+    _print_pulled_not_restarted()
     try:
         from clover_cli.update_receipt import record_step
 

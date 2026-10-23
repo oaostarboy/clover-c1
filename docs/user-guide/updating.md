@@ -1,50 +1,60 @@
 # Updating Clover
 
-## Legacy gateway maintenance
+Use `/update` in chat or `clover update` in a terminal. The updater must identify
+its running gateways before restarting them. An unreadable or mismatched
+process record is not treated as an older, safe-to-restart gateway.
 
-A gateway started before the delivery-aware restart repair cannot prove that
-all replies have finished when its agent count reaches zero. Updating its
-files does not change its already-loaded restart code.
+## Updating from Clover 1.5.6
 
-The normal updater therefore refuses automatic restart with exit status 2
-when a running gateway does not advertise the delivery-aware restart contract.
-This check is mandatory, including with `--skip-preflight` or `--force`.
-The running gateway and unresolved delivery records remain intact. A refusal
-is **not** a successful upgrade. A released updater may already have pulled
-new files and created a consistent pre-update snapshot before it reaches the
-new check. Those files are staged; the process still runs its old code.
-The pending restart marker remains so this state is not mistaken for activation.
+An identified gateway without the newer reply-delivery capability can proceed
+instead of being refused solely for its age. On Linux and macOS, the new restart
+helper waits up to 90 seconds for zero active work and no owned pending or
+attempting reply deliveries, then observes a short quiet window. If work stays
+active, or the evidence becomes unreadable, the update leaves the restart
+pending rather than forcing the gateway down. Retry after the reported
+condition is resolved.
 
-A one-time maintenance window is required:
+The old running gateway cannot acquire the new drain implementation until it
+restarts. During this first transition, an ordinary reply can arrive twice;
+a recovered copy may say "may be a duplicate". This allowance does not permit
+repeating tools, payments, scheduled actions, third-party messages or uncertain
+commits. An empty delivery ledger alone is not a universal exactly-once proof.
+Slash-command replies from the old gateway are not covered by its delivery
+ledger and may be interrupted.
 
-1. From outside the gateway, pause every incoming and internal producer,
-   including automation, queued follow-ups, and connected clients. Do not use
-   an agent-count sample or an empty delivery ledger as proof of quiescence.
-   The old external-drain control gates human turns only; it does not fence
-   every internal producer.
-2. Let all previously accepted work finish. Establish that every transport
-   carrier has completed and every applicable durable delivery acknowledgement
-   belongs to the original process. If any delivery is uncertain, or you cannot
-   establish that boundary, **defer maintenance**. Do not forge acknowledgements,
-   suppress recovery, rely on a timeout, or force-kill the process.
-3. Only after that boundary is established, use the supported commands from
-   the installation's terminal: `clover gateway stop`, then `clover update --yes`.
-   Always run `clover gateway start` afterward, even if the update fails.
-   Check `clover gateway status` and the update receipt before resuming producers.
-4. Keep the pre-update source pin and consistent state snapshot. If source
-   rollback is needed, stop the quiescent service, restore the prior code and
-   compatible environment, preserve the latest database and unresolved delivery
-   records, and always start the gateway again. Never overwrite newer work with
-   an older database snapshot merely to undo a code update.
+A stop after downloading files is not a completed update: source or dependencies
+may already have changed while the old process remains loaded. The updater
+retains pending restart intent and saved state, and reports that completion is
+still owed. It retires only its own identified rollback watcher when deliberately
+leaving a restart pending. Retry `clover update` after resolving the condition;
+do not delete pending delivery records or restore an old database over new work.
 
-There is no universal automatic first-transition guarantee for this legacy
-process. A controlled maintenance trial does not prove arbitrary live traffic
-is quiescent. Repaired gateways retain the normal automatic update path; they
-track outer reply carriers through transport completion and durable ACK.
+If an old SQLite runtime cannot be repaired, continuation is allowed only after
+a read-only inventory positively establishes rollback-journal mode and no gateway
+is still active. Older gateways may cache plugin openers that can turn WAL on
+after an inventory, so a clean header alone does not waive runtime repair during
+a running-gateway update. WAL files, unreadable headers, unknown ownership and
+incomplete inventories still stop the update. Built-in database openers retain their vulnerable-SQLite WAL fallback.
+An offline runtime repair is retried by a later update.
 
-The compatibility hook is reached by released Git updaters that freshly import
-`managed_uv.update_managed_uv` after pulling. A released entry point that stops
-its gateway **before** that import cannot be retroactively protected by this
-hook (notably old Windows pause-before-pull flows). Use acknowledged maintenance
-for those installations; do not treat a candidate-only check as first-update
-coverage on an untested old entry point.
+## Windows: the first update from 1.5.6
+
+The released Windows updater pauses and may force-stop the gateway **before**
+it downloads the new files. Target-side changes cannot repair that already
+executed step. Native ordinary-path trials preserve one completed tool effect,
+but do not prove safety for an action still running or an uncertain commit at
+that earlier stop. Do not treat this first-transition limitation as covered by
+the Linux/macOS quiet wait. Finish active actions before updating from 1.5.6 on
+Windows. If the gateway remains down after a failed update, run
+`clover gateway start` and retain its update receipt for diagnosis.
+
+## Rolling back
+
+The updater attempts a consistent pre-update snapshot; released versions can
+skip oversized database files. Check that the required backup actually exists.
+The restart watcher can restore the previous source, dependencies and
+configuration if the new gateway fails its health probe. This is separate from
+rolling back saved work: the watcher does not restore state.db. Versions in this
+transition use the same state schema, but compatibility alone is not proof of
+failure-path recovery. Never overwrite newer saved work with a pre-update
+snapshot merely to undo a code update.

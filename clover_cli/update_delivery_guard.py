@@ -1,13 +1,16 @@
-"""Fail closed before restarting a gateway with an unproved drain contract.
+"""Admit identified legacy gateways without removing runtime identity fences.
 
-This is a compatibility gate, NOT a quiescence detector. Empty ledgers and zero
-agents cannot prove an old process has no pre-ledger or initiating slash reply.
-The loaded runner must advertise the carrier-through-ACK drain implementation.
+This is NOT a quiescence detector. Empty ledgers and zero agents cannot prove an
+old process has no pre-ledger or initiating slash reply. A gateway that does not
+advertise the carrier-through-ACK drain implementation (every Clover <= 1.5.6
+gateway) is restarted after a bounded idle wait; see
+``clover_cli.gateway.wait_for_legacy_gateway_idle``.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
+from typing import NoReturn
 
 CAPABILITY = 'reply-carriers-through-ack-v1'
 
@@ -75,6 +78,7 @@ def _unsafe_gateways() -> list[str]:
         if proc is None:
             unmapped.append(pid)
             continue
+        row = {}
         try:
             row = json.loads((proc.path/'gateway_state.json').read_text(encoding='utf-8'))
             valid = (
@@ -87,13 +91,18 @@ def _unsafe_gateways() -> list[str]:
                 and row.get('start_time') == _get_process_start_time(pid)
                 and Path(row.get('clover_home', '')).resolve() == proc.path.resolve()
                 and runtime_status_pid_is_live(row)
-                and row.get('update_restart_capability') == CAPABILITY
             )
         except (OSError, ValueError, TypeError, AttributeError):
             valid = False
         if not valid:
             reasons.append(f'{proc.profile} (PID {pid}): delivery-aware restart is not established')
         else:
+            capability = row.get('update_restart_capability')
+            if capability is None:
+                reasons.append(f'legacy: {proc.profile} (PID {pid}): identified legacy runtime')
+            elif capability != CAPABILITY:
+                reasons.append(f'{proc.profile} (PID {pid}): unknown restart contract')
+                continue
             admitted[pid] = (proc.path, row['start_time'])
     for pid in unmapped:
         if not _proved_stderr_wrapper(pid, admitted):
@@ -101,63 +110,97 @@ def _unsafe_gateways() -> list[str]:
     return reasons
 
 
-def require_delivery_safe_update() -> None:
-    """Refuse without stopping anything; old callers must unwind via SystemExit.
+def require_delivery_safe_update() -> dict:
+    """Permit missing legacy capability only after positive owner validation.
 
-    Invoked at modern entry, catch-up, and the long-standing freshly imported
-    managed_uv post-pull API. The last hook protects a released updater without
-    modifying its loaded code. Do not catch this as an ordinary optional error.
+    Released callers may ignore the return value. Unknown identity still exits
+    through SystemExit, which their broad Exception handlers cannot turn into
+    a forced restart. Exit 1 avoids old notifications claiming nothing changed.
     """
     try:
         reasons = _unsafe_gateways()
     except Exception:
-        reasons = ['gateway discovery could not establish delivery-aware restart']
+        defer_unsafe_restart('Gateway discovery could not establish runtime ownership.')
+    unsafe = [reason for reason in reasons if not reason.startswith('legacy: ')]
+    if unsafe:
+        defer_unsafe_restart('; '.join(unsafe))
+    status = 'legacy-proceed' if reasons else 'capable'
+    record = {'status': status, 'required_capability': CAPABILITY, 'reasons': reasons}
     if not reasons:
-        return
-    detail = (
-        'Automatic update deferred: the running gateway cannot prove it waits '
-        'for complete reply delivery. No gateway was stopped or restarted. '
-        'If source was already pulled, it is staged only; this is NOT a completed upgrade. '
-        'Do not retry /update or force-stop it. Arrange one-time terminal maintenance: '
-        'pause all inbound and internal producers, let accepted work and transport '
-        'delivery finish, and verify their durable acknowledgements. An empty agent '
-        'count or ledger alone is insufficient. Then run clover gateway stop; '
-        'clover update --yes; always run clover gateway start even if update fails. '
-        'Keep unresolved deliveries and the pre-update snapshot for recovery. '
-        'See docs/user-guide/updating.md#legacy-gateway-maintenance.'
+        return record
+    print(
+        '\n\u2139 The running gateway predates restart-safe reply delivery. The update '
+        'continues: the gateway is restarted when it is idle (waiting up to a '
+        'couple of minutes; if it stays busy the restart remains pending). An '
+        'ordinary reply may be delivered once more during the first transition.',
+        flush=True,
     )
-    print('\n✗ ' + detail, flush=True)
     for reason in reasons:
         print('  ' + reason, flush=True)
-    from clover_cli import update_receipt
-    if update_receipt._current is None:
-        update_receipt.begin_update_receipt()
-    if update_receipt._current is not None:
-        update_receipt._current.data['delivery_restart_guard'] = {
-            'status': 'refused', 'required_capability': CAPABILITY,
-            'reasons': reasons, 'maintenance_required': True,
-        }
-    # An old detached watcher otherwise probes the intentionally still-old
-    # gateway and may roll back/relaunch after this refusal. Retire only OUR
-    # live updater's beacon before unwinding; retain the fleet restart marker
-    # and rollback snapshot. A missing beacon is the legacy watcher's supported
-    # stand-down signal, not a delivery acknowledgement.
-    from clover_cli import update_restart_watcher as watcher
+    try:
+        from clover_cli import update_receipt
+        if update_receipt._current is None:
+            update_receipt.begin_update_receipt()
+        if update_receipt._current is not None:
+            update_receipt._current.data['delivery_restart_guard'] = record
+    except Exception:
+        pass  # the receipt is evidence, not a gate
+    return record
+
+
+
+def defer_unsafe_restart(detail: str) -> NoReturn:
+    """Stop without signalling, preserving pending intent and newest saved state."""
+    print(f'\n✗ Update not completed: {detail}', flush=True)
+    print('Source or dependencies may already have changed. Automatic completion remains deferred; '
+          'pending restart intent and saved state are retained. Resolve the reported condition '
+          'and retry clover update.', flush=True)
+    try:
+        disarmed = disarm_owned_restart_watcher()
+        from clover_cli import update_receipt
+        if update_receipt._current is None:
+            update_receipt.begin_update_receipt()
+        if update_receipt._current is not None:
+            update_receipt._current.data['delivery_restart_guard'] = {
+                'status': 'deferred', 'reasons': [detail], 'owned_watcher_disarmed': disarmed,
+            }
+        update_receipt.finalize_update_receipt('failed', stop_reason=detail)
+    finally:
+        # Frozen callers catch Exception and then force-restart. Always escape
+        # through BaseException, even if saving the failure receipt also fails.
+        raise SystemExit(1)
+
+
+
+def disarm_owned_restart_watcher() -> bool:
+    """Stand down THIS updater's detached rollback watcher. Returns True if it was disarmed.
+
+    Used when the updater stops after the pull but before any restart. The
+    frozen watcher would otherwise see "updater gone, HEAD moved, gateway still
+    old", probe the intentionally still-old gateway, roll the checkout back and
+    relaunch it. Only a beacon bound to our own live PID and create time is
+    removed; another updater's beacon, the fleet restart marker, the snapshot
+    and the database are never touched.
+    """
     import os
+    from clover_cli import update_restart_watcher as watcher
+
     beacon = watcher.beacon_path()
     try:
         raw = beacon.read_bytes()
-    except FileNotFoundError:
-        raw = None
-    if raw is not None:
         data = json.loads(raw)
-        if (data.get('updater_pid') == os.getpid()
-                and data.get('updater_create_time') is not None
-                and watcher._updater_identity_alive(data) is True):
-            if beacon.read_bytes() != raw:
-                raise RuntimeError('Update watcher ownership changed during refusal')
-            beacon.unlink()
-            if update_receipt._current is not None:
-                update_receipt._current.data['delivery_restart_guard']['owned_watcher_disarmed'] = True
-    update_receipt.finalize_update_receipt('refused', stop_reason=detail)
-    raise SystemExit(2)
+    except (OSError, ValueError):
+        return False
+    if not isinstance(data, dict):
+        return False
+    if not (data.get('updater_pid') == os.getpid()
+            and data.get('updater_create_time') is not None
+            and watcher._updater_identity_alive(data) is True):
+        return False
+    try:
+        if beacon.read_bytes() != raw:
+            return False
+        beacon.unlink()
+    except OSError:
+        return False
+    return True

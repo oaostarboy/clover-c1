@@ -13,6 +13,7 @@ import shlex
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -295,11 +296,145 @@ def _request_gateway_self_restart(pid: int) -> bool:
         return False
     if not _is_pid_ancestor_of_current_process(pid):
         return False
+    _require_gateway_restart_ready(pid)
     try:
         os.kill(pid, signal.SIGUSR1)  # windows-footgun: ok — POSIX signal, guarded by hasattr(signal, 'SIGUSR1') above
     except (ProcessLookupError, PermissionError, OSError):
         return False
     return True
+
+
+# A gateway older than the carrier-through-ACK drain (every release <= 1.5.6)
+# counts only running agents when it decides it is drained, so it can exit while
+# a final reply is still being sent and the successor then replays that reply,
+# marked as a possible duplicate. We cannot change the loaded process, but the
+# updater that restarts it runs THIS file, so it can wait for a quiet moment
+# first. 90 s: a normal reply send takes seconds, the old gateway's own
+# after-turn drain already covers running turns once it is signalled, and the
+# frozen 1.5.6 watcher only starts its health clock after the updater exits, so
+# this wait cannot trigger a rollback. Always bounded; busy or unverified state leaves the restart pending.
+LEGACY_GATEWAY_IDLE_WAIT_SECONDS = 90.0
+_LEGACY_IDLE_POLL_SECONDS = 1.0
+_LEGACY_IDLE_STABLE_SECONDS = 3.0
+
+
+def _legacy_gateway_status(pid: int) -> dict | None:
+    """Return the runtime status row owned by *pid*, searching every profile."""
+    homes: list[Path] = []
+    try:
+        from clover_constants import get_clover_home
+        homes.append(Path(get_clover_home()))
+    except Exception:
+        pass
+    try:
+        homes.extend(p.path for p in find_profile_gateway_processes() if p.pid == pid)
+    except Exception:
+        pass
+    for home in homes:
+        try:
+            row = json.loads((home / "gateway_state.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        from gateway.status import _get_process_start_time, runtime_status_pid_is_live
+        if (isinstance(row, dict) and row.get("pid") == pid
+                and row.get("kind") == "clover-gateway"
+                and row.get("clover_home") == str(home)
+                and row.get("start_time") is not None
+                and row["start_time"] == _get_process_start_time(pid)
+                and runtime_status_pid_is_live(row)):
+            row["_home"] = str(home)
+            return row
+    return None
+
+
+def _in_flight_delivery_rows(home: str, pid: int) -> int | None:
+    """Count owned in-flight rows read-only; None means evidence is unavailable."""
+    db = Path(home) / "state.db"
+    if not db.is_file():
+        return None
+    conn = None
+    try:
+        conn = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True, timeout=2)
+        if conn.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='delivery_obligations'").fetchone() is None:
+            return 0
+        row = conn.execute(
+            "SELECT COUNT(*) FROM delivery_obligations "
+            "WHERE owner_pid = ? AND state IN ('pending', 'attempting')", (pid,)
+        ).fetchone()
+        return int(row[0]) if row else 0
+    except (sqlite3.Error, OSError, ValueError):
+        return None
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def wait_for_legacy_gateway_idle(
+    pid: int,
+    max_wait: float | None = None,
+    *,
+    poll: float = _LEGACY_IDLE_POLL_SECONDS,
+    stable_seconds: float = _LEGACY_IDLE_STABLE_SECONDS,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> str:
+    """Wait (bounded) until a legacy gateway has no active agent and no reply in flight.
+
+    Returns "not-legacy" for an identified capable gateway, "idle" for a
+    quiet legacy gateway, or "timeout"/"unverified" to defer without signalling.
+    Reads gateway_state.json and the delivery ledger; writes nothing.
+    """
+    from clover_cli.update_delivery_guard import CAPABILITY
+
+    row = _legacy_gateway_status(pid)
+    if row is None:
+        return "unverified"
+    if row.get("update_restart_capability") == CAPABILITY:
+        return "not-legacy"
+    if row.get("update_restart_capability") is not None:
+        return "unverified"
+    budget = LEGACY_GATEWAY_IDLE_WAIT_SECONDS if max_wait is None else float(max_wait)
+    start = clock()
+    quiet_since = None
+    announced = False
+    while True:
+        row = _legacy_gateway_status(pid)
+        if row is None:
+            return "unverified"
+        deliveries = _in_flight_delivery_rows(row["_home"], pid)
+        active = row.get("active_agents")
+        if deliveries is None or type(active) is not int or active < 0:
+            return "unverified"
+        busy = active > 0 or deliveries > 0
+        now = clock()
+        if busy:
+            quiet_since = None
+            if not announced:
+                print(f"→ Waiting for the running gateway (PID {pid}) to finish sending "
+                      f"before restarting it (up to {budget:.0f}s)...", flush=True)
+                announced = True
+        else:
+            if quiet_since is None:
+                quiet_since = now
+            if now - quiet_since >= stable_seconds:
+                return "idle"
+        if now - start >= budget:
+            return "timeout"
+        sleep(min(poll, max(budget - (now - start), 0.01)))
+
+
+def _require_gateway_restart_ready(pid: int) -> str:
+    """Do not let frozen updater fallbacks force-stop busy or unidentified work."""
+    from clover_cli.update_delivery_guard import defer_unsafe_restart
+    try:
+        quiet = wait_for_legacy_gateway_idle(pid)
+    except Exception:
+        defer_unsafe_restart(f'Cannot verify quiet state for gateway PID {pid}.')
+    if quiet not in ('idle', 'not-legacy'):
+        # Returning False is unsafe: frozen 1.5.6 callers interpret it as
+        # permission for SIGTERM/systemctl restart and a survivor kill sweep.
+        defer_unsafe_restart(f'Gateway PID {pid} remains busy or unverified ({quiet}); restart pending.')
+    return quiet
 
 
 def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
@@ -332,16 +467,25 @@ def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
         return False
     if pid <= 0:
         return False
+    quiet = _require_gateway_restart_ready(pid)
     try:
         os.kill(pid, signal.SIGUSR1)  # windows-footgun: ok — POSIX signal, guarded by hasattr(signal, 'SIGUSR1') above
     except ProcessLookupError:
         # Already gone — nothing to drain.
         return True
     except (PermissionError, OSError):
+        if quiet == 'idle':
+            from clover_cli.update_delivery_guard import defer_unsafe_restart
+            defer_unsafe_restart(f'Cannot signal identified legacy gateway PID {pid}; no forced stop requested.')
         return False
 
-    # Drain-wait: delegate to the shared PID-exit helper (0.5s poll, bounded).
-    return _wait_for_pid_exit(pid, max(drain_timeout, 1.0))
+    # A legacy caller treats False as permission to hard-stop survivors. The
+    # old process may still be completing an effect accepted near signalling.
+    exited = _wait_for_pid_exit(pid, max(drain_timeout, 1.0))
+    if not exited and quiet == 'idle':
+        from clover_cli.update_delivery_guard import defer_unsafe_restart
+        defer_unsafe_restart(f'Legacy gateway PID {pid} has not finished draining; no forced stop requested.')
+    return exited
 
 
 def _wait_for_pid_exit(pid: int, timeout: float) -> bool:

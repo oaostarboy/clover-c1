@@ -20,6 +20,8 @@ HOW TO EDIT (by hand, at release time)
 - Helpers working in a real code project still get their own safe copy, and still stop if that copy cannot be made.
 - When a helper is refused, the message now names the exact setting to change.
 - The two helper isolation settings are now known, so changing them no longer shows a warning.
+- Identified 1.5.6 gateways no longer stop an update just because their reply-delivery code is older.
+- Updates keep restart work pending if ownership or a quiet restart cannot be verified; one reply may repeat.
 
 ## 1.5.8 | Clover C1.5.8 | 2026-10-23
 - Saving no longer gets stuck behind a leftover database read, so busy-storage failures should be much rarer.

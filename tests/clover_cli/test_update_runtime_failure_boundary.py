@@ -5,6 +5,35 @@ import pytest
 from clover_cli import managed_uv as m
 
 
+def _make_db(home, name, mode):
+    import sqlite3
+    home.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(home / name)
+    conn.execute(f'PRAGMA journal_mode={mode}')
+    conn.execute('CREATE TABLE IF NOT EXISTS t (x)')
+    conn.execute('INSERT INTO t VALUES (1)')
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture(autouse=True)
+def wal_database_in_home(tmp_path, monkeypatch):
+    """The refusal is only owed when a database really is in WAL mode.
+
+    Tests that expect SystemExit(1) run against a home whose state.db is WAL.
+    DELETE-mode continuation is covered in test_failed_repair_in_delete_mode_*.
+    """
+    from clover_cli import gateway
+    # These runtime-only cases deliberately model an installation with no
+    # active cached gateway openers; do not consult the host's live processes.
+    monkeypatch.setattr(gateway, 'find_profile_gateway_processes', lambda **kw: [])
+    monkeypatch.setattr(gateway, 'find_gateway_pids', lambda **kw: [])
+    home = tmp_path / 'clover-home'
+    monkeypatch.setenv('CLOVER_HOME', str(home))
+    _make_db(home, 'state.db', 'WAL')
+    return home
+
+
 @pytest.mark.parametrize('status', ['failed', 'skipped'])
 def test_public_update_hook_refuses_known_vulnerable_unrepaired_runtime(tmp_path, status):
     uv=tmp_path/'uv'
@@ -137,3 +166,122 @@ def test_unrecognized_layout_does_not_hide_known_vulnerable_interpreter(tmp_path
         with pytest.raises(SystemExit) as error:
             m.update_managed_uv()
     assert error.value.code == 1
+
+
+@pytest.mark.parametrize('status', ['failed', 'skipped'])
+def test_failed_repair_in_delete_mode_is_non_fatal(tmp_path, wal_database_in_home, status, capsys):
+    """Offline / no-uv user on an old SQLite whose databases are already DELETE mode."""
+    import sqlite3
+    home = wal_database_in_home
+    (home / 'state.db').unlink()
+    for leftover in home.glob('state.db-*'):
+        leftover.unlink()
+    _make_db(home, 'state.db', 'DELETE')
+    _make_db(home, 'response_store.db', 'DELETE')
+    uv = tmp_path / 'uv'
+    uv.write_text('synthetic', encoding='utf-8')
+    repair = m.RuntimeRepairResult(status, 'provisioning unavailable', sqlite_before='3.50.4')
+    with (patch.object(m, 'resolve_uv', return_value=str(uv)),
+          patch.object(m, '_uv_self_update_is_fresh', return_value=True),
+          patch.object(m, 'repair_vulnerable_runtime', return_value=repair)):
+        assert m.update_managed_uv() == str(uv)
+    out = capsys.readouterr().out
+    assert 'Continuing' in out and 'next `clover update` will retry' in out
+    assert 'Update incomplete' not in out
+    # the data is untouched and still readable
+    assert sqlite3.connect(home / 'state.db').execute('select x from t').fetchone() == (1,)
+
+
+def test_failed_repair_still_refuses_when_any_database_is_wal(tmp_path, wal_database_in_home):
+    _make_db(wal_database_in_home / 'plugin-data' / 'p', 'data.db', 'WAL')
+    (wal_database_in_home / 'state.db').unlink()
+    for leftover in wal_database_in_home.glob('state.db-*'):
+        leftover.unlink()
+    _make_db(wal_database_in_home, 'state.db', 'DELETE')
+    assert m._clover_databases_in_wal_mode() == ['plugin-data/p/data.db']
+    uv = tmp_path / 'uv'
+    uv.write_text('synthetic', encoding='utf-8')
+    repair = m.RuntimeRepairResult('failed', 'provisioning unavailable', sqlite_before='3.50.4')
+    with (patch.object(m, 'resolve_uv', return_value=str(uv)),
+          patch.object(m, '_uv_self_update_is_fresh', return_value=True),
+          patch.object(m, 'repair_vulnerable_runtime', return_value=repair)):
+        with pytest.raises(SystemExit) as error:
+            m.update_managed_uv()
+    assert error.value.code == 1
+
+
+def test_unprovable_database_mode_keeps_the_refusal(tmp_path, monkeypatch):
+    monkeypatch.setattr(m, '_clover_databases_in_wal_mode',
+                        lambda: (_ for _ in ()).throw(RuntimeError('cannot inspect')))
+    repair = m.RuntimeRepairResult('failed', 'x', sqlite_before='3.50.4')
+    assert m._repair_failure_is_safe_to_continue(repair) is False
+
+
+def test_header_probe_does_not_modify_databases(wal_database_in_home):
+    before = {p.name: p.read_bytes() for p in wal_database_in_home.glob('state.db*')}
+    assert m._clover_databases_in_wal_mode() == ['state.db']
+    assert {p.name: p.read_bytes() for p in wal_database_in_home.glob('state.db*')} == before
+
+
+def test_plugin_storage_honors_the_vulnerable_sqlite_fallback(tmp_path, monkeypatch):
+    """plugin_db used to hard-set WAL; on a vulnerable SQLite it must stay DELETE."""
+    import clover_state
+    monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
+    monkeypatch.setattr(clover_state, 'is_sqlite_wal_reset_vulnerable', lambda *a, **k: True)
+    from plugins.plugin_storage import plugin_db
+    conn = plugin_db('demo')
+    try:
+        assert conn.execute('PRAGMA journal_mode').fetchone()[0].lower() == 'delete'
+    finally:
+        conn.close()
+
+
+def test_kanban_connect_uses_the_vulnerable_sqlite_fallback():
+    import inspect
+    from clover_cli import kanban_db
+    assert 'apply_wal_with_fallback' in inspect.getsource(kanban_db)
+
+
+@pytest.mark.parametrize('status,sqlite_before', [('failed', '3.50.4'), ('refused', '')])
+def test_remaining_stop_is_truthful_about_pulled_files(tmp_path, monkeypatch, capsys, status, sqlite_before):
+    """A WAL database on a vulnerable runtime still stops the update. The message must
+    say the files were downloaded and nothing was restarted, never 'nothing was changed'."""
+    import sqlite3
+    monkeypatch.setattr(sqlite3, 'sqlite_version', '3.50.4')
+    uv = tmp_path / 'uv'
+    uv.write_text('synthetic', encoding='utf-8')
+    repair = m.RuntimeRepairResult(status, 'provisioning unavailable', sqlite_before=sqlite_before)
+    with (patch.object(m, 'resolve_uv', return_value=str(uv)),
+          patch.object(m, '_uv_self_update_is_fresh', return_value=True),
+          patch.object(m, 'repair_vulnerable_runtime', return_value=repair)):
+        with pytest.raises(SystemExit):
+            m.update_managed_uv()
+    out = capsys.readouterr().out
+    assert 'already downloaded' in out and 'NOT restarted' in out
+    assert 'nothing was changed' not in out.lower()
+
+
+@pytest.mark.parametrize('owned', [True, False])
+def test_remaining_stop_stands_down_only_its_own_watcher(tmp_path, monkeypatch, capsys, owned):
+    import json
+    import os
+    import sqlite3
+    from clover_cli import update_restart_watcher as watcher
+    monkeypatch.setattr(sqlite3, 'sqlite_version', '3.50.4')
+    owner = os.getpid() if owned else os.getpid() + 1
+    beacon = watcher.beacon_path()
+    beacon.write_text(json.dumps({
+        'updater_pid': owner, 'updater_create_time': watcher._process_create_time(owner),
+        'pre_pull_sha': 'old', 'repo': 'staged-source'}))
+    marker = beacon.parent / 'fleet_restart_pending'
+    marker.write_text('owed')
+    uv = tmp_path / 'uv'
+    uv.write_text('synthetic', encoding='utf-8')
+    repair = m.RuntimeRepairResult('failed', 'offline', sqlite_before='3.50.4')
+    with (patch.object(m, 'resolve_uv', return_value=str(uv)),
+          patch.object(m, '_uv_self_update_is_fresh', return_value=True),
+          patch.object(m, 'repair_vulnerable_runtime', return_value=repair)):
+        with pytest.raises(SystemExit):
+            m.update_managed_uv()
+    assert beacon.exists() is (not owned)
+    assert marker.read_text() == 'owed'          # a restart really is owed; keep it
