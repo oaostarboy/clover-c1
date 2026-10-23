@@ -222,6 +222,32 @@ def test_ci_that_never_reports_explains_the_token_problem_and_leaves_the_pr_open
     assert not any(c[:3] == ("gh", "pr", "merge") for c in fake.calls)
 
 
+def test_ci_that_is_running_but_slow_to_aggregate_is_not_called_missing(tmp_path):
+    """Release PRs whose CI takes longer than the no-CI window must keep waiting.
+
+    Other checks have reported (CI demonstrably started); only the aggregate is
+    late. 1.5.9's aggregate landed 16s after the 10-minute no-CI cutoff.
+    """
+    fake = Fake(gate_runs=[run("Detect affected areas")])
+    polls = {"n": 0}
+    inner = Fake.__call__
+
+    def counting(self, cmd):
+        if "check-runs" in " ".join(cmd):
+            polls["n"] += 1
+            if polls["n"] >= 40:  # 40 polls x 60s fake clock = 40 min > no_ci_timeout_s
+                self.gate_runs = [run("Detect affected areas"), run(AGG)]
+        return inner(self, cmd)
+
+    Fake.__call__ = counting
+    try:
+        _, result = go(fake, tmp_path, no_ci_timeout_s=600)
+    finally:
+        Fake.__call__ = inner
+    assert result == 0, result
+    assert polls["n"] >= 40
+
+
 def test_pending_ci_is_polled_until_it_turns_green(tmp_path):
     fake = Fake(gate_runs=[run(AGG, "in_progress", "")])
     polls = {"n": 0}

@@ -100,6 +100,7 @@ class Ctx:
 class Gate:
     state: str  # "green" | "red" | "pending" | "absent"
     detail: str
+    runs: int = 0  # check runs seen on the SHA (0 = CI never started)
 
 
 def evaluate_checks(check_runs: Sequence[dict], statuses: Sequence[dict], required: str = REQUIRED_CHECK, strict: bool = False) -> Gate:
@@ -117,7 +118,7 @@ def evaluate_checks(check_runs: Sequence[dict], statuses: Sequence[dict], requir
     failed.sort()
     agg = [c for c in check_runs if c.get("name") == required]
     if not agg:
-        return Gate("absent", f"required check {required!r} has not reported ({len(check_runs)} check runs so far)")
+        return Gate("absent", f"required check {required!r} has not reported ({len(check_runs)} check runs so far)", len(check_runs))
     best = agg[-1]
     if best.get("status") != "completed":
         return Gate("pending", f"required check {required!r} is {best.get('status')}")
@@ -159,7 +160,9 @@ def wait_for_green(ctx: Ctx, pr: int, sha: str, required: str, timeout_s: int, p
         if gate.state == "red":
             raise Abort(f"CI is red on {sha[:10]} ({gate.detail}). PR #{pr} left open; nothing merged or tagged.")
         waited = ctx.clock() - start
-        if gate.state == "absent" and waited > no_ci_timeout_s:
+        # "No CI" means NOTHING reported. Other checks reporting proves CI started;
+        # a slow aggregate then falls under the normal overall timeout instead.
+        if gate.state == "absent" and gate.runs == 0 and waited > no_ci_timeout_s:
             raise Abort(
                 f"no CI check reported on {sha[:10]} after {int(waited)}s. Pushes and PRs made with the default GITHUB_TOKEN "
                 "do not trigger workflows, so release-cut needs a GitHub App token or RELEASE_CUT_TOKEN "
