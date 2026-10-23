@@ -423,7 +423,7 @@ def wait_for_legacy_gateway_idle(
         sleep(min(poll, max(budget - (now - start), 0.01)))
 
 
-def _require_gateway_restart_ready(pid: int) -> None:
+def _require_gateway_restart_ready(pid: int) -> str:
     """Do not let frozen updater fallbacks force-stop busy or unidentified work."""
     from clover_cli.update_delivery_guard import defer_unsafe_restart
     try:
@@ -434,6 +434,7 @@ def _require_gateway_restart_ready(pid: int) -> None:
         # Returning False is unsafe: frozen 1.5.6 callers interpret it as
         # permission for SIGTERM/systemctl restart and a survivor kill sweep.
         defer_unsafe_restart(f'Gateway PID {pid} remains busy or unverified ({quiet}); restart pending.')
+    return quiet
 
 
 def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
@@ -466,17 +467,25 @@ def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
         return False
     if pid <= 0:
         return False
-    _require_gateway_restart_ready(pid)
+    quiet = _require_gateway_restart_ready(pid)
     try:
         os.kill(pid, signal.SIGUSR1)  # windows-footgun: ok — POSIX signal, guarded by hasattr(signal, 'SIGUSR1') above
     except ProcessLookupError:
         # Already gone — nothing to drain.
         return True
     except (PermissionError, OSError):
+        if quiet == 'idle':
+            from clover_cli.update_delivery_guard import defer_unsafe_restart
+            defer_unsafe_restart(f'Cannot signal identified legacy gateway PID {pid}; no forced stop requested.')
         return False
 
-    # Drain-wait: delegate to the shared PID-exit helper (0.5s poll, bounded).
-    return _wait_for_pid_exit(pid, max(drain_timeout, 1.0))
+    # A legacy caller treats False as permission to hard-stop survivors. The
+    # old process may still be completing an effect accepted near signalling.
+    exited = _wait_for_pid_exit(pid, max(drain_timeout, 1.0))
+    if not exited and quiet == 'idle':
+        from clover_cli.update_delivery_guard import defer_unsafe_restart
+        defer_unsafe_restart(f'Legacy gateway PID {pid} has not finished draining; no forced stop requested.')
+    return exited
 
 
 def _wait_for_pid_exit(pid: int, timeout: float) -> bool:

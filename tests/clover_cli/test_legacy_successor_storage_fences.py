@@ -91,6 +91,46 @@ def test_unknown_journal_header_is_not_a_delete_mode_receipt(monkeypatch, tmp_pa
     assert m._repair_failure_is_safe_to_continue(repair) is False
 
 
+def test_unreadable_store_directory_is_not_an_empty_safe_inventory(monkeypatch, tmp_path):
+    monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
+    hidden=tmp_path/'cron';hidden.mkdir()
+    conn=sqlite3.connect(hidden/'executions.db')
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('CREATE TABLE evidence(x)')
+    conn.close()
+    hidden.chmod(0)
+    try:
+        try:
+            list(hidden.iterdir())
+        except PermissionError:
+            pass
+        else:
+            pytest.skip('host can read chmod(000) directories; native permission failure needs unprivileged runner')
+        repair=m.RuntimeRepairResult('failed','offline',sqlite_before='3.50.4')
+        assert m._repair_failure_is_safe_to_continue(repair) is False
+    finally:
+        hidden.chmod(0o700)
+
+
+@pytest.mark.parametrize('kind', ['custom-name', 'linked-directory'])
+def test_plugin_store_inventory_cannot_omit_valid_wal_files(monkeypatch, tmp_path, kind):
+    home=tmp_path/'owner';home.mkdir()
+    monkeypatch.setenv('CLOVER_HOME',str(home))
+    if kind=='custom-name':
+        path=home/'plugin-data'/'demo'/'custom-store'
+        path.parent.mkdir(parents=True)
+    else:
+        outside=tmp_path/'external';outside.mkdir()
+        (home/'plugin-data').symlink_to(outside,target_is_directory=True)
+        path=outside/'data.db'
+    conn=sqlite3.connect(path)
+    conn.execute('PRAGMA journal_mode=WAL')
+    conn.execute('CREATE TABLE evidence(x)')
+    conn.close()
+    assert m._repair_failure_is_safe_to_continue(
+        m.RuntimeRepairResult('failed','offline',sqlite_before='3.50.4')) is False
+
+
 def test_inventory_limit_cannot_hide_later_wal_store(monkeypatch, tmp_path):
     monkeypatch.setenv('CLOVER_HOME', str(tmp_path))
     real_glob = type(tmp_path).glob

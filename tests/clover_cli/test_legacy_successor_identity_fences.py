@@ -105,6 +105,20 @@ def test_quiet_wait_cannot_turn_missing_evidence_into_idle(owned_gateway, monkey
     assert gateway.wait_for_legacy_gateway_idle(123, max_wait=0, stable_seconds=0) == 'unverified'
 
 
+@pytest.mark.parametrize('failure', ['drain-timeout', 'signal-error'])
+def test_legacy_drain_timeout_cannot_fall_back_to_force_stop(owned_gateway, monkeypatch, failure):
+    from clover_cli import gateway
+    monkeypatch.setattr(gateway, 'wait_for_legacy_gateway_idle', lambda pid: 'idle')
+    def signal(*args):
+        if failure == 'signal-error':
+            raise PermissionError('signal denied')
+    monkeypatch.setattr(gateway.os, 'kill', signal)
+    monkeypatch.setattr(gateway, '_wait_for_pid_exit', lambda *args: False)
+    with pytest.raises(SystemExit) as exc:
+        gateway._graceful_restart_via_sigusr1(123, 1)
+    assert exc.value.code == 1
+
+
 def test_ancestor_shortcut_cannot_skip_the_legacy_effect_fence(owned_gateway, monkeypatch):
     from clover_cli import gateway
     calls = []

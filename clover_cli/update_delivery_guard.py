@@ -152,7 +152,7 @@ def require_delivery_safe_update() -> dict:
 def defer_unsafe_restart(detail: str) -> NoReturn:
     """Stop without signalling, preserving pending intent and newest saved state."""
     print(f'\n✗ Update not completed: {detail}', flush=True)
-    print('Source or dependencies may already have changed. No restart was requested by this check; '
+    print('Source or dependencies may already have changed. Automatic completion remains deferred; '
           'pending restart intent and saved state are retained. Resolve the reported condition '
           'and retry clover update.', flush=True)
     try:

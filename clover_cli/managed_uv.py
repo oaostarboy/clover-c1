@@ -267,14 +267,34 @@ def _clover_databases_in_wal_mode() -> list[str]:
     from clover_cli.sqlite_safe_read import read_header_bytes_preopen
 
     home = Path(get_clover_home())
-    seen: set[Path] = set()
+    import os
+
     wal: list[str] = []
-    for pattern in ("**/*.db", "**/*.sqlite", "**/*.sqlite3"):
-        for path in home.glob(pattern):
-            if path in seen:
+    databases = 0
+    entries = 0
+
+    def unreadable(error):
+        # pathlib.glob silently suppresses scandir PermissionError. That is
+        # missing evidence, not proof that a store directory has no WAL files.
+        raise error
+
+    for directory, dirs, files in os.walk(home, onerror=unreadable, followlinks=False):
+        parent = Path(directory)
+        entries += len(dirs) + len(files)
+        if entries > 50_000:
+            raise RuntimeError('Database directory inventory is incomplete')
+        if any((parent / name).is_symlink() for name in dirs):
+            raise RuntimeError('Database directory inventory has an unverified link')
+        for name in sorted(files):
+            path = parent / name
+            if path.suffix.lower() not in ('.db', '.sqlite', '.sqlite3'):
+                if 'plugin-data' in path.relative_to(home).parts and not name.endswith(('-wal', '-shm', '-journal')):
+                    # plugin_db accepts custom names. Do not certify an
+                    # omitted arbitrary-name store as safe from its suffix.
+                    raise RuntimeError('Plugin storage has an unverified custom filename')
                 continue
-            seen.add(path)
-            if len(seen) > 200:
+            databases += 1
+            if databases > 200:
                 raise RuntimeError('Database inventory limit reached; journal modes unverified')
             if path.is_symlink() or not path.is_file():
                 raise RuntimeError('Database inventory contains an unverified target')
@@ -287,6 +307,7 @@ def _clover_databases_in_wal_mode() -> list[str]:
             elif versions != b"\x01\x01":
                 raise RuntimeError('Database journal mode is unverified')
     return wal
+
 
 
 def _repair_failure_is_safe_to_continue(repair: RuntimeRepairResult) -> bool:
