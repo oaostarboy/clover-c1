@@ -10316,6 +10316,9 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 exit_reason=exit_reason,
                 restart_requested=self._restart_requested,
                 active_agents=self._active_work_count(),
+                # Only this loaded runner can attest its drain implementation.
+                # A newly imported status module must not upgrade an old runner.
+                update_restart_capability="reply-carriers-through-ack-v1",
             )
         except Exception:
             pass

@@ -3589,6 +3589,8 @@ def _run_pending_fleet_restart() -> bool:
     Returns True when restart completed or no services were running.
     Returns False if restart was incomplete. Never raises.
     """
+    from clover_cli.update_delivery_guard import require_delivery_safe_update
+    require_delivery_safe_update()
     print("→ Restarting gateways left on pre-update code...")
     try:
         _m()._purge_stale_clover_modules()
@@ -3776,6 +3778,8 @@ def _apply_pending_fleet_restart_catchup() -> None:
     No-op when nothing is pending. Exits 1 when the catch-up restart is
     incomplete so automation does not treat the fleet as healthy.
     """
+    from clover_cli.update_delivery_guard import require_delivery_safe_update
+    require_delivery_safe_update()
     if not _pending_fleet_restart_needed():
         return
     # A durable Linux/systemd catch-up receipt names the profiles whose new
@@ -8443,6 +8447,9 @@ def _rebuild_desktop_after_update(
 def _cmd_update_impl(args, gateway_mode: bool):
     """Body of ``cmd_update`` — kept separate so the wrapper can always
     restore stdio even on ``sys.exit``."""
+    from clover_cli.update_delivery_guard import require_delivery_safe_update
+    require_delivery_safe_update()
+
     # A managed-runtime refresh can replace site-packages before the normal
     # ``.[all]`` install runs. Snapshot while the old environment can still
     # prove which optional backends the user had activated.
