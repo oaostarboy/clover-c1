@@ -10,7 +10,7 @@ import pytest
 
 from clover_cli import windows_update_receipt_handoff as bridge
 
-pytestmark = pytest.mark.skipif(sys.platform != 'win32', reason='Native Win32 process evidence')
+pytestmark = pytest.mark.windows_only
 
 
 def test_real_current_process_witness_matches_independent_psutil(record_property):
