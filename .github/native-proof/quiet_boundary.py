@@ -13,6 +13,16 @@ import subprocess
 import time
 
 
+def read_acknowledged_boundary(home, token):
+    """Read the real outgoing payload, which may include a configured greeting."""
+    with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as db:
+        rows = db.execute('SELECT obligation_id,state,attempts,owner_pid FROM delivery_obligations WHERE instr(content, ?) > 0', (token,)).fetchall()
+        pending = db.execute("SELECT count(*) FROM delivery_obligations WHERE state NOT IN ('delivered','abandoned')").fetchone()[0]
+    if len(rows) == 1 and rows[0][1] == 'delivered' and pending == 0:
+        return dict(obligation_id=rows[0][0], state=rows[0][1], attempts=rows[0][2], owner_pid=rows[0][3], pending=pending, at=time.time())
+    return None
+
+
 def perform(*, home, cli, py, env, E, TOKEN, before, run, wait):
     # These modules and public marker protocol exist on the released source.
     run([py, '-c', 'from gateway.drain_control import write_drain_request; '
@@ -31,13 +41,8 @@ def perform(*, home, cli, py, env, E, TOKEN, before, run, wait):
     (E / 'release').touch()
 
     def acknowledged():
-        with closing(sqlite3.connect((home / 'state.db').as_uri() + '?mode=ro', uri=True)) as db:
-            rows = db.execute('SELECT obligation_id,state,attempts,owner_pid FROM delivery_obligations WHERE content=?', (TOKEN,)).fetchall()
-            pending = db.execute("SELECT count(*) FROM delivery_obligations WHERE state NOT IN ('delivered','abandoned')").fetchone()[0]
         # A canonical transcript or receipt at the peer is not this assertion.
-        if len(rows) == 1 and rows[0][1] == 'delivered' and pending == 0:
-            return dict(obligation_id=rows[0][0], state=rows[0][1], attempts=rows[0][2], owner_pid=rows[0][3], pending=pending, at=time.time())
-        return None
+        return read_acknowledged_boundary(home, TOKEN)
 
     ack = wait(acknowledged, 120)
     assert ack['owner_pid'] == before['pid']
