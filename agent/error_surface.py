@@ -171,6 +171,11 @@ def build_error_surface_from_result(
         if not error_text and not reason:
             return None
 
+        # A persistence failure can follow committed external effects. Never
+        # classify it as a provider failure or advertise a blind turn retry.
+        if reason.startswith("session_persistence_"):
+            return _surface(LAYER_DISK, reason, False, provider, model)
+
         # Disk-full wins outright: the fix (free space) is unrelated to the
         # provider stack, and clover_state owns the pattern list.
         try:

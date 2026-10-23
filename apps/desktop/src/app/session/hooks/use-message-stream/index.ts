@@ -571,8 +571,12 @@ export function useMessageStream({
         // Late completion from an already-cancelled turn: cancelRun has
         // already finalized the bubble (kept the partial text, dropped it if
         // empty). Re-running the dedupe below would replace the partial with
-        // the just-cancelled full text, so we settle and bail instead.
-        if (state.interrupted) {
+        // the just-cancelled full text, so we settle and bail instead. A
+        // terminal persistence warning is different: retain the real output
+        // and the warning without clearing Stop or resuming any execution.
+        const storageFailure = failure?.surface?.code.startsWith('session_persistence_') === true
+
+        if (state.interrupted && !storageFailure) {
           return {
             ...state,
             awaitingResponse: false,

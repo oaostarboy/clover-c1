@@ -5032,7 +5032,13 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         """
         try:
             with self._read_ctx_unlatched() as conn:
-                yield conn
+                # An autocommit SELECT can retain a SHARED lock/snapshot even
+                # while in_transaction is False. End every cursor owned by this
+                # checkout before releasing its connection or writer mutex.
+                from contextlib import nullcontext
+                scope = getattr(conn, "read_cursor_scope", None)
+                with scope() if callable(scope) else nullcontext():
+                    yield conn
         except sqlite3.DatabaseError as exc:
             _note_storage_error(self.db_path, exc)
             raise
@@ -5088,7 +5094,16 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                     self._close_read_conn(conn)
             return
         with self._lock:
-            yield self._conn
+            connection = self._conn
+            transaction_at_entry = connection.in_transaction if connection is not None else False
+            try:
+                yield connection
+            finally:
+                # A read lease may not leave its own explicit transaction on
+                # the shared/readonly fallback connection. Preserve a writer's
+                # transaction when a nested read borrowed it deliberately.
+                if connection is not None and not transaction_at_entry and connection.in_transaction:
+                    connection.rollback()
 
     # ── Core write helper ──
 
@@ -5379,18 +5394,21 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
             phase = "begin"
             try:
                 with self._lock:
-                    self._conn.execute("BEGIN IMMEDIATE")
-                    try:
-                        phase = "body"
-                        result = fn(self._conn)
-                        phase = "commit"
-                        self._conn.commit()
-                    except BaseException:
+                    from clover_cli.sqlite_operation_observer import observe_connection_operation
+                    with observe_connection_operation(self._conn, self.db_path, "write") as operation:
+                        self._conn.execute("BEGIN IMMEDIATE")
                         try:
-                            self._conn.rollback()
-                        except Exception:
-                            pass
-                        raise
+                            phase = operation["phase"] = "body"
+                            result = fn(self._conn)
+                            phase = operation["phase"] = "commit"
+                            self._conn.commit()
+                        except BaseException:
+                            operation["phase"] = "rollback"
+                            try:
+                                self._conn.rollback()
+                            except Exception:
+                                pass
+                            raise
                 # Success — periodic best-effort checkpoint + FTS merge.
                 self._write_count += 1
                 if self._write_count % self._CHECKPOINT_EVERY_N_WRITES == 0:

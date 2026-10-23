@@ -227,7 +227,9 @@ def _flush_session_db_after_tool_progress(
     """
     try:
         persisted = agent._flush_messages_to_session_db(messages) is not False
-        if not persisted:
+        if not persisted and getattr(agent, "_last_session_persist_confirmed", None) is not True:
+            # Recovery may commit successfully and then refuse continuation
+            # because Stop revoked the owner. That is not a storage failure.
             agent._incremental_persistence_failed = True
             # The flush caught its own exception and returned False; the
             # classified cause (if any) was captured at the catch site. Only

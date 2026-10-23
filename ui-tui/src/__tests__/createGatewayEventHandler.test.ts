@@ -67,6 +67,27 @@ describe('createGatewayEventHandler', () => {
     patchUiState({ showReasoning: true })
   })
 
+  it.each(['session_persistence_failed:locked', 'session_persistence_recovered'])(
+    'keeps a terminal storage warning visible after Stop without reviving the turn (%s)',
+    code => {
+      const appended: Msg[] = []
+      const onEvent = createGatewayEventHandler(buildCtx(appended))
+      onEvent({ payload: {}, type: 'message.start' } as any)
+      turnController.interrupted = true
+      onEvent({
+        payload: {
+          text: 'Saved action receipt. Session save failed; reconcile before retrying.',
+          status: 'error',
+          partial: true,
+          error_surface: { layer: 'disk', code, retryable: false }
+        },
+        type: 'message.complete'
+      } as any)
+      expect(appended.some(msg => msg.text.includes('reconcile before retrying'))).toBe(true)
+      expect(getUiState().busy).toBe(false)
+    }
+  )
+
   it('archives incomplete todos into transcript flow at end of turn so they scroll up', () => {
     const appended: Msg[] = []
 

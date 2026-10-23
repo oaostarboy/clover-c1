@@ -164,7 +164,27 @@ def log_write_lock_holders(db_path, patience_s: float) -> None:
                   "a rollback-journal COMMIT; same-process SQLite locks and "
                   "sampling races may hide the holder")
     else:
-        return  # no /proc/locks on this platform: nothing truthful to say
+        detail = "kernel lock-owner inspection unavailable on this platform"
+    local = []
+    try:
+        from clover_cli.sqlite_operation_observer import active_connection_operations
+        local = active_connection_operations(db_path)
+        for row in local[:8]:
+            detail += (
+                f" | local pid={row['pid']} thread_id={row['thread_id']}"
+                f" connection_id={row['connection_id']} kind={row['kind']}"
+                f" phase={row['phase']} age_seconds={row['age_seconds']:.3f}"
+                f" device={row['device']} inode={row['inode']}"
+                f" in_transaction={row['in_transaction']} caller={row['caller']}"
+            )
+        if len(local) > 8:
+            detail += f" | {len(local) - 8} additional active local scopes"
+        if local:
+            detail += " (active scopes are attribution candidates, not proof of the blocker)"
+    except Exception:
+        logger.debug("could not inspect local SQLite operation scopes", exc_info=True)
+    if not local and not sys.platform.startswith("linux"):
+        return
     logger.warning(
         "state.db write lock unavailable for %gs (%s): %s", round(float(patience_s), 1), Path(db_path).name, detail
     )

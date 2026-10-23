@@ -8,6 +8,8 @@ only source of model/UI-visible progress.
 from __future__ import annotations
 
 import copy
+from collections import Counter
+import hashlib
 import json
 import logging
 import os
@@ -127,6 +129,55 @@ def _write_checkpoint(path, payload):
                 os.close(directory_fd)
 
 
+def _progress_fingerprint(message):
+    # Persisted markers and row IDs are assigned only after COMMIT. Hash the
+    # public message fields instead; retain no second in-memory transcript.
+    public = {key: value for key, value in message.items() if not key.startswith("_")}
+    encoded = json.dumps(public, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def _retire_checkpoint(agent, identity, messages):
+    """Retire only this turn's known-committed payload, never replay it."""
+    scope = (identity[1], identity[2], identity[3], identity[4])
+    metadata = getattr(agent, "_storage_recovery_metadata", None)
+    path = getattr(agent, "_storage_recovery_checkpoint", None)
+    if (getattr(agent, "_storage_recovery_identity", None) != scope
+            or not isinstance(metadata, dict) or not isinstance(path, str)
+            or getattr(agent, "_storage_recovery_receipt_failed", False)
+            or metadata.get("disposition") == "canonical"):
+        return
+    try:
+        from agent.context_compressor import _DB_PERSISTED_MARKER
+        required = getattr(agent, "_storage_recovery_pending_fingerprints", None)
+        if not isinstance(required, Counter) or not required:
+            return
+        saved = Counter(_progress_fingerprint(message) for message in messages
+                        if isinstance(message, dict) and message.get(_DB_PERSISTED_MARKER))
+        if required - saved:
+            return  # a successful prefix flush did not save checkpointed work
+        current = Path(identity[2]).stat()
+        if (current.st_dev, current.st_ino) != identity[1]:
+            return  # the known commit belongs to a different database file
+        canonical = {**metadata, "disposition": "canonical"}
+        _write_checkpoint(Path(path), canonical)
+        agent._storage_recovery_metadata = canonical
+        agent._storage_recovery_pending_fingerprints = None
+    except Exception:
+        # A failed receipt barrier/replacement leaves uncertain evidence. A
+        # later ordinary flush is not new authority to alter that failed file.
+        agent._storage_recovery_receipt_failed = True
+        logger.warning("Could not mark storage checkpoint canonical", exc_info=True)
+
+
+def _same_database(identity):
+    try:
+        current = Path(identity[2]).stat()
+        return (current.st_dev, current.st_ino) == identity[1]
+    except OSError:
+        return False
+
+
 def flush_with_recovery(agent, messages, history=None):
     """Called under the agent's existing persistence lock, without a new turn."""
     # Capture authority before the failed attempt, not after Stop/reset/model
@@ -140,6 +191,13 @@ def flush_with_recovery(agent, messages, history=None):
     except Exception:
         identity = None
     result = agent._flush_messages_to_session_db_unlocked(messages, history)
+    if result is True and identity is not None:
+        if not _same_database(identity):
+            agent._last_session_persist_confirmed = False
+            agent._last_persistence_error_cause = "unknown"
+            return False
+        _retire_checkpoint(agent, identity, messages)
+        agent._last_persistence_error_cause = None
     if result is not False or identity is None:
         return result
     if getattr(agent, "_last_persistence_error_cause", None) != "locked":
@@ -154,14 +212,26 @@ def flush_with_recovery(agent, messages, history=None):
         return False
     agent._storage_recovery_turn = identity[4]
     agent._storage_recovery_checkpoint = None
+    agent._storage_recovery_metadata = None
+    agent._storage_recovery_identity = None
+    agent._storage_recovery_receipt_failed = False
+    agent._storage_recovery_pending_fingerprints = None
     path = Path(identity[2]).parent / "storage-recovery" / (uuid.uuid4().hex + ".json")
     try:
         payload = {"schema": 1, "session_id": identity[3], "turn_id": identity[4],
                    "model": identity[6], "provider": identity[7],
                    "database_identity": list(identity[1]), "disposition": "pending",
                    "automatic_replay_allowed": False, "messages": copy.deepcopy(messages)}
+        from run_agent import _is_ephemeral_scaffolding
+        # Include saved history too: an older identical result must not stand
+        # in for a new pending result when providers reuse tool-call IDs.
+        pending = Counter(_progress_fingerprint(message) for message in messages
+                          if isinstance(message, dict) and not _is_ephemeral_scaffolding(message))
         _write_checkpoint(path, payload)
+        agent._storage_recovery_pending_fingerprints = pending
         agent._storage_recovery_checkpoint = str(path)
+        agent._storage_recovery_identity = (identity[1], identity[2], identity[3], identity[4])
+        agent._storage_recovery_metadata = {key: value for key, value in payload.items() if key != "messages"}
     except Exception:
         logger.warning("Could not durably checkpoint blocked tool progress", exc_info=True)
         return False
@@ -172,17 +242,18 @@ def flush_with_recovery(agent, messages, history=None):
     result = agent._flush_messages_to_session_db_unlocked(
         messages, history, _adoption_budget=0,
         _recovery_patience_s=_RECOVERY_PATIENCE_S)
-    if result is not True or not _live(agent, identity):
+    if result is not True:
         return False
-    # SQLite now owns the transcript. Keep only the checkpoint's diagnostic
-    # identity; another full copy would outlive canonical session deletion.
-    payload.pop("messages")
-    payload["disposition"] = "canonical"
-    try:
-        _write_checkpoint(path, payload)
-    except Exception:
-        # Canonical append is already durable. A stale pending diagnostic must
-        # never be replayed, so a failed status update cannot duplicate effects.
-        logger.warning("Could not mark storage checkpoint canonical", exc_info=True)
+    if not _same_database(identity):
+        # COMMIT belongs to the original file, not an unrelated replacement
+        # now at its path. Keep the pending evidence for owner reconciliation.
+        agent._last_session_persist_confirmed = False
+        agent._last_persistence_error_cause = "unknown"
+        return False
+    # SQLite now owns the transcript. Keep only diagnostic identity; this
+    # same retirement also runs if an ordinary later flush saves the result.
+    _retire_checkpoint(agent, identity, messages)
     agent._last_persistence_error_cause = None
-    return True
+    # Revocation still forbids continuation, but cannot undo a known commit.
+    # Retire its sensitive payload even when Stop won immediately after COMMIT.
+    return _live(agent, identity)

@@ -734,6 +734,7 @@ export type GatewayEvent =
       payload?: {
         billing?: BillingBlock
         failure_reason?: string
+        error_surface?: { layer: string; code: string; retryable: boolean }
         reasoning?: string
         rendered?: string
         response_previewed?: boolean

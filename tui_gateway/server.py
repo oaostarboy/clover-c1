@@ -12861,8 +12861,11 @@ def _run_prompt_submit(
 
                 raw = result.get("final_response", "")
                 status = (
-                    "interrupted"
-                    if result.get("interrupted")
+                    "error"
+                    if result.get("error") and str(result.get("failure_reason", "")).startswith(
+                        "session_persistence_"
+                    )
+                    else "interrupted" if result.get("interrupted")
                     else "error" if result.get("error") else "complete"
                 )
                 # When the backend produced no visible response AND reported a
@@ -12900,6 +12903,8 @@ def _run_prompt_submit(
                 payload["warning"] = status_note
             if result.get("response_previewed"):
                 payload["response_previewed"] = True
+            if result.get("partial"):
+                payload["partial"] = True
             # Forward the structured billing-wall descriptor (provider,
             # billing_url, message) so the TUI/desktop render a
             # billing-specific recovery surface instead of re-parsing text.

@@ -15,6 +15,12 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.8 | Clover C1.5.8 | 2026-10-23
+- Saving no longer gets stuck behind a leftover database read, so busy-storage failures should be much rarer.
+- A turn whose final save failed is no longer shown as completed; your real output is kept.
+- Save-failure messages no longer say to resend after a tool may have already run.
+- Pressing Stop no longer hides a save failure in the terminal, gateway or desktop app.
+
 ## 1.5.7 | Clover C1.5.7 | 2026-10-23
 - Updates wait for complete reply delivery before restarting supported gateways.
 - Older gateways may need one terminal maintenance update before automatic updates work again.
