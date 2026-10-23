@@ -1,0 +1,175 @@
+name: Overnight exact-final Linux installed update acceptance
+'on':
+  push:
+    branches:
+    - ci/overnight-linux-20261023
+permissions:
+  contents: read
+concurrency:
+  group: overnight-linux-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  installed:
+    name: Native Linux / ${{ matrix.name }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+        - name: fresh
+          mode: fresh
+          base: target
+          entry: cli
+          layout: normal
+          expected: fresh
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: release-cli-normal
+          mode: update
+          base: v1.5.6
+          entry: cli
+          layout: normal
+          expected: protected-refusal
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: release-cli-external
+          mode: update
+          base: v1.5.6
+          entry: cli
+          layout: external
+          expected: protected-refusal
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: release-chat-normal
+          mode: update
+          base: v1.5.6
+          entry: chat
+          layout: normal
+          expected: protected-refusal
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: release-chat-external
+          mode: update
+          base: v1.5.6
+          entry: chat
+          layout: external
+          expected: protected-refusal
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: main-cli-normal
+          mode: update
+          base: 9535350bee1d57cf7e466672e6f416403886bec1
+          entry: cli
+          layout: normal
+          expected: protected-refusal
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: main-cli-external
+          mode: update
+          base: 9535350bee1d57cf7e466672e6f416403886bec1
+          entry: cli
+          layout: external
+          expected: protected-refusal
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: main-chat-normal
+          mode: update
+          base: 9535350bee1d57cf7e466672e6f416403886bec1
+          entry: chat
+          layout: normal
+          expected: protected-refusal
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: main-chat-external
+          mode: update
+          base: 9535350bee1d57cf7e466672e6f416403886bec1
+          entry: chat
+          layout: external
+          expected: protected-refusal
+          target: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          tree: 85751aedbef129f31ea943307846a48844b53d2d
+        - name: fixed-cli-normal
+          mode: update
+          base: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          entry: cli
+          layout: normal
+          expected: automatic-update
+          target: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
+          tree: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+        - name: fixed-cli-external
+          mode: update
+          base: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          entry: cli
+          layout: external
+          expected: automatic-update
+          target: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
+          tree: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+        - name: fixed-chat-normal
+          mode: update
+          base: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          entry: chat
+          layout: normal
+          expected: automatic-update
+          target: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
+          tree: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+        - name: fixed-chat-external
+          mode: update
+          base: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+          entry: chat
+          layout: external
+          expected: automatic-update
+          target: a9879ffb0233d5f9a4d0fbd65e099cc17a47c82b
+          tree: e7fa69f31d788ab81d08b0b717e0bd1b25eda958
+    steps:
+    - &id001
+      uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        path: helpers
+        persist-credentials: false
+        fetch-depth: 0
+    - name: Real installer, registered systemd, held real tool carrier
+      env:
+        PREPARE_RUNNER_APT: 'true'
+        MODE: ${{ matrix.mode }}
+        BASE: ${{ matrix.base }}
+        ENTRY: ${{ matrix.entry }}
+        LAYOUT: ${{ matrix.layout }}
+        EXPECTED: ${{ matrix.expected }}
+        TARGET_REF: ${{ matrix.target }}
+        TARGET_TREE: ${{ matrix.tree }}
+      run: python helpers/.github/native-proof/linux_service.py
+    - name: Retain actual product and service diagnostics
+      if: always()
+      run: "mkdir -p \"$RUNNER_TEMP/evidence\"\nsystemctl --user show clover-gateway.service\
+        \ > \"$RUNNER_TEMP/evidence/unit-final.txt\" 2>&1 || true\njournalctl --user\
+        \ -u clover-gateway.service --no-pager -n 400 > \"$RUNNER_TEMP/evidence/journal.log\"\
+        \ 2>&1 || true\nif test -d \"$HOME/.clover/logs\"; then cp -r \"$HOME/.clover/logs\"\
+        \ \"$RUNNER_TEMP/evidence/product-logs\"; fi\nfor f in gateway_state.json\
+        \ .update_output.txt .update_exit_code .update_refusal.json fleet_restart_pending;\
+        \ do\n  if test -f \"$HOME/.clover/$f\"; then cp \"$HOME/.clover/$f\" \"$RUNNER_TEMP/evidence/\"\
+        ; fi\ndone"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: overnight-linux-${{ matrix.name }}
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
+  runtime:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+    - *id001
+    - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+    - name: Native external runtime failure and newest-write rollback
+      env:
+        TARGET_REF: dc4054a10cfa3372e3f75bea9985b2da74523ecf
+        TARGET_TREE: 85751aedbef129f31ea943307846a48844b53d2d
+      run: python helpers/.github/native-proof/linux_external_env.py --source helpers
+        --target-sha "$TARGET_REF" --target-tree "$TARGET_TREE" --evidence "$RUNNER_TEMP/evidence"
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: overnight-linux-runtime-rollback
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
