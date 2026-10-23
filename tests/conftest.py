@@ -1198,6 +1198,19 @@ _OS_MARKS = {
 }
 
 
+@pytest.hookimpl(hookwrapper=True)
+def pytest_collection():
+    """Keep collection imports from starting the release-status network worker.
+
+    Per-test fixtures are too late for tui_gateway.server's import-time prefetch.
+    Restore the entry point after collection so banner/update tests exercise the
+    real function; application socket/DNS guards remain unchanged.
+    """
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr('clover_cli.banner.prefetch_update_check', lambda: None)
+        yield
+
+
 def pytest_configure(config):  # noqa: D401 — pytest hook
     """Register markers used by hermetic conftest."""
     config.addinivalue_line(

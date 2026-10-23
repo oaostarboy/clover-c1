@@ -55,11 +55,13 @@ def _describe_range(sidecar: str, start: int, end: int) -> str:
     return f"db bytes {start}-{end}"
 
 
-def parse_proc_locks(text: str, inodes: dict[tuple[int, int], str]) -> list[tuple[int, str, str]]:
+def parse_proc_locks(text: str, inodes: dict[tuple[int, int], str], *, include_readers: bool = False) -> list[tuple[int, str, str]]:
     """``(pid, lock kind, sidecar)`` for every WRITE lock on one of ``inodes``.
 
     ``inodes`` maps ``(st_dev, st_ino)`` to ``""`` (main file), ``"-wal"`` or
-    ``"-shm"``. Read locks are dropped: they never block a writer in WAL mode.
+    ``"-shm"``. By default read locks are dropped (legacy write-only API).
+    ``include_readers`` also reports READ locks, which can block a DELETE-mode
+    COMMIT. An observed lock is not proof that it caused a past timeout.
     An OFD lock is reported with pid ``-1`` (the kernel does not export its owner).
     """
     found: list[tuple[int, str, str]] = []
@@ -69,7 +71,7 @@ def parse_proc_locks(text: str, inodes: dict[tuple[int, int], str]) -> list[tupl
         if len(fields) < 8 or fields[1] == "->":
             continue
         _, _kind, _cls, access, pid_s, ident, start_s, end_s = fields[:8]
-        if access != "WRITE":
+        if access != "WRITE" and not (include_readers and access == "READ"):
             continue
         try:
             major_s, minor_s, ino_s = ident.split(":")
@@ -83,7 +85,8 @@ def parse_proc_locks(text: str, inodes: dict[tuple[int, int], str]) -> list[tupl
         sidecar = inodes.get(key)
         if sidecar is None:
             continue
-        found.append((pid, _describe_range(sidecar, start, end), sidecar))
+        kind = _describe_range(sidecar, start, end)
+        found.append((pid, ("READ " + kind) if access == "READ" else kind, sidecar))
     return found
 
 
@@ -111,7 +114,7 @@ def describe_holder_pid(pid: int) -> str:
     return f"PID {pid} ({who})"
 
 
-def state_db_write_lock_holders(db_path) -> list[str]:
+def state_db_write_lock_holders(db_path, *, include_readers: bool = False) -> list[str]:
     """Operator-facing lines naming the processes that hold a write-class lock on ``db_path``.
 
     Empty when nothing is held or the platform has no ``/proc/locks``.
@@ -135,7 +138,7 @@ def state_db_write_lock_holders(db_path) -> list[str]:
                 text = handle.read()
         except OSError:
             return []
-        held.extend(entry for entry in parse_proc_locks(text, inodes) if entry not in held)
+        held.extend(entry for entry in parse_proc_locks(text, inodes, include_readers=include_readers) if entry not in held)
     lines = []
     for pid, kind, sidecar in held:
         who = describe_holder_pid(pid) if pid > 0 else "OFD lock, owner pid not exported by the kernel"
@@ -150,14 +153,16 @@ def log_write_lock_holders(db_path, patience_s: float) -> None:
     mask the original ``database is locked`` error.
     """
     try:
-        holders = state_db_write_lock_holders(db_path)
+        holders = state_db_write_lock_holders(db_path, include_readers=True)
     except Exception:
         logger.debug("could not read state.db lock holders", exc_info=True)
         return
     if holders:
         detail = " | ".join(holders)
     elif sys.platform.startswith("linux"):
-        detail = "no write-class lock held at the deadline (the holder released just before it)"
+        detail = ("no write-class holder observed; a read transaction can block "
+                  "a rollback-journal COMMIT; same-process SQLite locks and "
+                  "sampling races may hide the holder")
     else:
         return  # no /proc/locks on this platform: nothing truthful to say
     logger.warning(

@@ -5,12 +5,14 @@ Fully non-interactive — designed to be driven by the agent via terminal comman
 The agent mediates between this script and the user (works on CLI, Telegram, Discord, etc.)
 
 Commands:
+  setup.py --preflight                      # Read-only dependencies; no auth/network
   setup.py --check                          # Is auth valid? Exit 0 = yes, 1 = no
   setup.py --client-secret /path/to.json    # Store OAuth client credentials
   setup.py --auth-url                       # Print the OAuth URL for user to visit
   setup.py --auth-code CODE                 # Exchange auth code for token
   setup.py --revoke                         # Revoke and delete stored token
-  setup.py --install-deps                   # Install Python dependencies only
+  /project/.venv/bin/python setup.py --install-deps --python /project/.venv/bin/python
+                                            # Explicit project-local installation
 
 Agent workflow:
   1. Run --check. If exit 0, auth is good — skip setup.
@@ -125,8 +127,15 @@ def _missing_required_packages() -> list[str]:
     return missing
 
 
-def install_deps():
-    """Install missing or stale Google API packages. Returns True on success."""
+def install_deps(python=None):
+    """Install only after an explicit project-venv interpreter opt-in."""
+    if (not python or not Path(python).is_absolute()
+            or os.path.abspath(python) != os.path.abspath(sys.executable)
+            or not (Path(python).parent.parent / "pyvenv.cfg").is_file()):
+        print("ENVIRONMENT_REQUIRED: Run this script with the intended project's venv "
+              "interpreter and --install-deps --python /absolute/project/.venv/bin/python. "
+              "No packages were installed. Do not use an unrelated application's venv.")
+        return False
     missing = _missing_required_packages()
     if not missing:
         print("Dependencies already installed.")
@@ -186,9 +195,14 @@ def install_deps():
 
 
 def _ensure_deps():
-    """Check exact dependency versions, install if stale, exit on failure."""
-    if _missing_required_packages() and not install_deps():
-        sys.exit(1)
+    """Read-only preflight: missing dependencies are a setup gate, not consent."""
+    missing = _missing_required_packages()
+    if missing:
+        print("MISSING_DEPENDENCIES: " + " ".join(missing))
+        print("No packages were installed. Create or select this project's own venv, "
+              "then explicitly run its Python with this script and "
+              "--install-deps --python /absolute/project/.venv/bin/python.")
+        sys.exit(2)
 
 
 def check_auth_live():
@@ -487,6 +501,7 @@ def revoke():
 def main():
     parser = argparse.ArgumentParser(description="Google Workspace OAuth setup for Clover")
     group = parser.add_mutually_exclusive_group(required=True)
+    group.add_argument("--preflight", action="store_true", help="Read-only dependency check; no token access or network")
     group.add_argument("--check", action="store_true", help="Check if auth is valid (exit 0=yes, 1=no)")
     group.add_argument("--check-live", action="store_true", help="Check auth with a real API call (detects disabled_client)")
     group.add_argument("--client-secret", metavar="PATH", help="Store OAuth client_secret.json")
@@ -494,8 +509,15 @@ def main():
     group.add_argument("--auth-code", metavar="CODE", help="Exchange auth code for token")
     group.add_argument("--revoke", action="store_true", help="Revoke and delete stored token")
     group.add_argument("--install-deps", action="store_true", help="Install Python dependencies")
+    parser.add_argument("--python", metavar="PATH", help="Explicit project-venv interpreter for --install-deps only")
     args = parser.parse_args()
+    if args.python and not args.install_deps:
+        parser.error("--python is valid only with --install-deps")
 
+    if args.preflight:
+        _ensure_deps()
+        print("DEPENDENCIES_READY: no packages or credentials changed.")
+        sys.exit(0)
     if args.check:
         sys.exit(0 if check_auth() else 1)
     if getattr(args, "check_live", False):
@@ -509,7 +531,7 @@ def main():
     elif args.revoke:
         revoke()
     elif args.install_deps:
-        sys.exit(0 if install_deps() else 1)
+        sys.exit(0 if install_deps(python=args.python) else 1)
 
 
 if __name__ == "__main__":

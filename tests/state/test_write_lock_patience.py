@@ -82,8 +82,8 @@ class TestTranscriptWritePatience:
         assert db._TRANSCRIPT_WRITE_PATIENCE_S >= 30.0
 
     def test_exhausted_patience_names_the_real_cause(self, db, monkeypatch):
-        """When patience genuinely runs out, the error must say the lock was
-        held by another process — not read like disk/permission damage."""
+        """Report measured SQLite contention without inventing holder identity
+        or asserting database health from a lock error alone."""
         monkeypatch.setattr(SessionDB, "_WRITE_PATIENCE_S", 0.2)
 
         started = threading.Event()
@@ -99,8 +99,15 @@ class TestTranscriptWritePatience:
             holder.join(timeout=10.0)
         assert not holder.is_alive()
         text = str(excinfo.value)
-        assert "another Clover process" in text
-        assert "healthy" in text
+        assert "database is locked" in text
+        assert "retry budget 0.2s exhausted" in text
+        assert "phase=begin" in text
+        assert "sqlite_errorname=SQLITE_BUSY" in text
+        assert "sqlite_errorcode=5" in text
+        assert "a reader or writer may be blocking" in text
+        assert "holder and database health are not established" in text
+        assert "another Clover process" not in text
+        assert "healthy" not in text
 
     def test_write_succeeds_immediately_when_uncontended(self, db):
         """Patience must cost nothing when there is no contention."""

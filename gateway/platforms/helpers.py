@@ -575,17 +575,41 @@ def compile_mention_patterns(
 # match the module's existing import style.
 
 
-def text_has_unclosed_fence(text: str) -> bool:
-    """Return True when *text* ends inside an unclosed ``` code fence.
+def fenced_code_regions(text: str):
+    """Yield (start, body_start, body_end, end, language, closed).
 
-    Scans line by line, toggling in/out state on lines starting with ```.
-    An odd number of toggles means the trailing fence is unclosed.
+    Inline openings remain compatible with the existing Telegram renderer.
+    A closing line allows 0–3 leading spaces; inline triple-backtick literals
+    remain data. Nonterminal closing indentation is syntax. Legacy terminal
+    delimiters keep preceding body whitespace (including whitespace-only split
+    tails) so a no-final-newline body remains lossless. Offsets refer to source.
     """
-    in_fence = False
-    for line in text.split('\n'):
-        if line.startswith('```'):
-            in_fence = not in_fence
-    return in_fence
+    opening = re.compile(r'(?<![\\`])```([^`\r\n]*)\r?\n')
+    closing = re.compile(r'(?m)^ {0,3}```(?=[ \t]*(?:\\?\(\d+/\d+\\?\))?\r?\n)|(?<![\\`])```(?=[ \t]*(?P<indicator>\\?\(\d+/\d+\\?\))?\Z)')
+    pos = 0
+    while match := opening.search(text, pos):
+        close = closing.search(text, match.end())
+        if close:
+            # Keep legacy inline terminal closings, including numbered split
+            # tails consisting only of code whitespace. Without a synthetic
+            # indicator, a deeply indented or tab-indented line remains data.
+            line_prefix = text[text.rfind('\n', 0, close.start()) + 1:close.start()]
+            if (line_prefix and not line_prefix.strip(' \t')
+                    and (len(line_prefix) > 3 or '\t' in line_prefix)
+                    and not close.group('indicator')):
+                close = None
+        end = close.end() if close else len(text)
+        tag = match.group(1).strip()
+        yield (match.start(), match.end(), close.start() if close else end,
+               end, tag.split()[0] if tag else '', close is not None)
+        if close is None:
+            break
+        pos = end
+
+
+def text_has_unclosed_fence(text: str) -> bool:
+    """True only when a source fenced region has no closing delimiter."""
+    return any(not region[5] for region in fenced_code_regions(text))
 
 
 def text_ends_with_table_row(text: str) -> bool:
@@ -853,6 +877,14 @@ def split_text_fence_aware(
 
     if not text:
         return []
+
+    if balance_fences and not prefer_paragraphs and '```' in text:
+        # The streaming fallback shares the canonical lossless code splitter.
+        # Keep the historical paragraph strategy for plain prose and Yuanbao.
+        from gateway.platforms.base import BasePlatformAdapter
+        return BasePlatformAdapter.truncate_message(
+            text, limit, len_fn=_len, add_indicators=False,
+        )
 
     if prefer_paragraphs:
         chunks = _chunk_markdown_paragraphs(text, limit, len_fn)

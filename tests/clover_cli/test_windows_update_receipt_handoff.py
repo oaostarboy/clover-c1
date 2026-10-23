@@ -170,6 +170,114 @@ def test_immutable_legacy_publisher_uses_proven_parent_phase_not_child_clock_tic
         assert not (handoff.directory / 'handoff_phases').exists()
 
 
+@pytest.mark.parametrize('raw', [True, float('nan'), 123.5])
+def test_raw_birth_must_be_finite_and_match_its_display_timestamp(handoff, raw):
+    from clover_cli import windows_update_receipt_handoff as bridge
+    chain = copy.deepcopy(handoff.chain)
+    chain[0]['created_unix'] = raw
+    parent = json.loads(handoff.parent_bytes)
+    current = {'pid': 202, 'started_at': datetime.fromtimestamp(handoff.phase['epoch'] + 1, timezone.utc).isoformat()}
+    with pytest.raises(bridge.Unverified):
+        bridge._witness(chain, current, parent, handoff.repo,
+            {'prefix': handoff.fake_sys.prefix, 'executable': handoff.fake_sys.executable,
+             'base_executable': handoff.fake_sys._base_executable}, lambda: handoff.phase['epoch'] + 2)
+
+
+def test_native_birth_roundtrip_does_not_make_a_current_beacon_stale(handoff):
+    """Replay native run39897711972's exact machine birth and refresh values."""
+    from clover_cli import windows_update_receipt_handoff as bridge
+    birth = 1792728134.7630808
+    iso = lambda value: datetime.fromtimestamp(value, timezone.utc).isoformat()
+    parent = {'pid': 101, 'started_at': iso(birth - 1),
+              'pre_update': {'sha': 'a' * 40}, 'pre_update_snapshot_id': None}
+    current = {'pid': 202, 'started_at': iso(birth + 1)}
+    chain = [{'pid': 202, 'parent_pid': 101, 'executable': handoff.fake_sys.executable,
+              'created_utc': iso(birth), 'created_unix': birth}]
+    owned = bridge._witness(chain, current, parent, handoff.repo,
+        {'prefix': handoff.fake_sys.prefix, 'executable': handoff.fake_sys.executable,
+         'base_executable': handoff.fake_sys._base_executable}, lambda: birth + 2)
+    beacon = {'updater_pid': 202, 'updater_create_time': birth, 'refreshed_at': birth,
+              'repo': str(handoff.repo), 'pre_pull_sha': 'a' * 40,
+              'pre_update_snapshot_id': None, 'ready_for_probe': False}
+    (handoff.home / '.clover-update-heartbeat.json').write_text(json.dumps(beacon))
+    assert bridge._beacon(handoff.directory, parent, owned, handoff.repo, lambda: birth + 2)
+    assert owned[0]['created'] == birth
+
+
+@pytest.mark.parametrize('owned_image', [True, False])
+def test_base_python_alias_binds_only_to_its_actual_file(handoff, tmp_path, owned_image):
+    """Managed Windows aliases and OS-reported image paths can differ."""
+    from clover_cli import windows_update_receipt_handoff as bridge
+    real = tmp_path / 'python-versioned/python.exe'
+    real.parent.mkdir()
+    real.write_bytes(b'owned-base-identity')
+    foreign = tmp_path / 'foreign-runtime/python.exe'
+    foreign.parent.mkdir()
+    foreign.write_bytes(b'other-base-identity')
+    alias_directory = tmp_path / 'python-current'
+    if sys.platform == 'win32':
+        import shutil
+        import subprocess
+        # The canonical runner does not promise COMSPEC. Resolve the real
+        # application instead; junctions need no symlink privilege.
+        command = shutil.which('cmd.exe')
+        assert command is not None, 'native command interpreter unavailable'
+        subprocess.run([command, '/c', 'mklink', '/J',
+                        str(alias_directory), str(real.parent)], check=True, capture_output=True)
+    else:
+        alias_directory.symlink_to(real.parent, target_is_directory=True)
+    alias = alias_directory / 'python.exe'
+    handoff.chain[0]['executable'] = str(real if owned_image else foreign)
+    handoff.phase.update(pid=202, epoch=handoff.phase['epoch'] + 1)
+    current = receipt.UpdateReceipt().data
+    path, status = bridge.resume(current, handoff.directory, handoff.repo,
+        process_chain=lambda *_args, **_kwargs: copy.deepcopy(handoff.chain),
+        interpreter={'prefix': handoff.fake_sys.prefix, 'executable': handoff.fake_sys.executable,
+        'base_executable': str(alias), 'argv': ['child-module', *handoff.arguments]},
+        now=lambda: handoff.phase['epoch'], wait_seconds=0)
+    if owned_image:
+        assert status == 'adopted', current.get(bridge.TAG)
+        assert path == handoff.parent and current['pre_update']['sha'] == 'a' * 40
+    else:
+        assert status == 'unverified' and path is None
+        assert current[bridge.TAG]['reason'] == 'foreign continuation executable'
+        assert handoff.parent.read_bytes() == handoff.parent_bytes
+
+
+def test_cold_process_query_can_retry_without_losing_original_receipt(handoff, monkeypatch):
+    """Native 39889573087 timed out its only CIM query after five seconds."""
+    from clover_cli import windows_update_receipt_handoff as bridge
+    import subprocess
+    clock = [0.0]
+    monkeypatch.setattr(bridge, 'time', SimpleNamespace(
+        monotonic=lambda: clock[0], sleep=lambda delay: clock.__setitem__(0, clock[0] + delay)))
+    calls = []
+
+    def cold_query(pid, *, timeout):
+        calls.append(timeout)
+        if len(calls) == 1:
+            clock[0] += timeout
+            raise subprocess.TimeoutExpired('private-process-command', timeout)
+        clock[0] += .1
+        return copy.deepcopy(handoff.chain)
+
+    handoff.phase.update(pid=202, epoch=handoff.phase['epoch'] + 1)
+    current = receipt.UpdateReceipt().data
+    path, status = bridge.resume(current, handoff.directory, handoff.repo,
+        process_chain=cold_query, interpreter={'prefix': handoff.fake_sys.prefix,
+        'executable': handoff.fake_sys.executable, 'base_executable': handoff.fake_sys._base_executable,
+        'argv': ['child-module', *handoff.arguments]}, now=lambda: handoff.phase['epoch'])
+    assert status == 'adopted', current.get(bridge.TAG)
+    assert path == handoff.parent
+    assert current['pid'] == 101 and current['pre_update']['sha'] == 'a' * 40
+    assert current['outcome'] == 'running'
+    diagnostics = current[bridge.TAG + '_probe']
+    assert diagnostics['attempt_count'] == 1
+    assert diagnostics['attempts'][0]['reason'] == 'TimeoutExpired'
+    assert 'private-process-command' not in json.dumps(diagnostics)
+    assert len(calls) == 2
+
+
 def test_refusal_retains_predicate_before_later_process_query_timeout(handoff, monkeypatch):
     from clover_cli import windows_update_receipt_handoff as bridge
     import subprocess

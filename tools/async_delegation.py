@@ -1783,6 +1783,7 @@ def _push_completion_event(
         "dispatched_at": dispatched_at,
         "completed_at": completed_at,
         "exit_reason": result.get("exit_reason"),
+        "task_outcome": result.get("task_outcome"),
     }
     # Routing origin captured at dispatch (see _capture_routing_origin):
     # additive, lets the gateway reconstruct a full SessionSource (incl.
@@ -2342,6 +2343,7 @@ def publish_batch_child_completion(
         "error": result.get("error"), "api_calls": result.get("api_calls", 0),
         "duration_seconds": result.get("duration_seconds"),
         "exit_reason": result.get("exit_reason"),
+        "task_outcome": result.get("task_outcome"),
         "dispatched_at": parent["dispatched_at"], "completed_at": now,
     }
     for key in _ROUTING_ORIGIN_KEYS:

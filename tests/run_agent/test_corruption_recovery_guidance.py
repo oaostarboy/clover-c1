@@ -42,11 +42,14 @@ def test_format_turn_completion_disk_still_advises_space():
 
 
 def test_format_turn_completion_locked_still_advises_retry():
-    """The 'locked' cause still advises retrying (unchanged)."""
+    """A lock explains the safe retry prerequisite, not blind action replay."""
     from run_agent import AIAgent
 
     explanation = AIAgent._format_turn_completion_explanation(
         "session_persistence_failed", "locked"
     )
     assert "busy" in explanation
-    assert "send it again" in explanation
+    assert "reader or writer" in explanation
+    assert "last tool may already have run" in explanation
+    assert "Check saved progress before retrying actions" in explanation
+    assert "send it again" not in explanation

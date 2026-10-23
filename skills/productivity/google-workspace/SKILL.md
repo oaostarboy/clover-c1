@@ -42,6 +42,21 @@ Define a shorthand first:
 GSETUP="python ${CLOVER_HOME:-$HOME/.clover}/skills/productivity/google-workspace/scripts/setup.py"
 ```
 
+Run `$GSETUP --preflight` before any auth operation. This check reads dependency
+metadata only; it never installs packages, reads tokens, or calls Google.
+`MISSING_DEPENDENCIES` (exit 2) is a setup gate. Select or create a dedicated
+environment for the current project, not the inherited terminal Python or an
+unrelated application's environment. Explicit installation requires running that
+environment's Python and passing the same absolute path:
+
+```bash
+/absolute/project/.venv/bin/python "${CLOVER_HOME:-$HOME/.clover}/skills/productivity/google-workspace/scripts/setup.py" --install-deps --python /absolute/project/.venv/bin/python
+```
+
+Use that interpreter for subsequent setup/API commands. `--check` can refresh an
+expired OAuth token; it is not the read-only preflight. Missing scopes, revoked
+tokens, and browser consent refusals require the owner's action, never bypasses.
+
 ### Step 0: Check if already set up
 
 ```bash

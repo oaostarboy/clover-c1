@@ -104,7 +104,9 @@ def test_explanation_persistence_locked_cause_says_busy_not_disk():
     lower = out.lower()
     assert "busy" in lower
     assert "saved" in lower
-    assert "send it again" in lower
+    assert "send it again" not in lower
+    assert "already have run" in lower
+    assert "reader or writer" in lower
     assert "disk" not in lower
     assert "permission" not in lower
 

@@ -87,6 +87,10 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
         clover_main, "_stash_local_changes_if_needed", lambda *a, **k: None
     )
     monkeypatch.setattr(clover_main, "_clear_bytecode_cache", lambda *a, **k: 0)
+    # This fixture models git/restart, not hot-reload. A real purge drops the
+    # gateway discovery stubs below and lets sibling CI processes look live.
+    # The real eviction contract remains covered by test_update_stale_module_purge.
+    monkeypatch.setattr(clover_main, "_purge_stale_clover_modules", lambda: None)
     monkeypatch.setattr(
         clover_main, "_record_bytecode_fingerprint", lambda *a, **k: None
     )
@@ -129,6 +133,19 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
 
 def _update_args():
     return SimpleNamespace(branch=None, yes=False, force=False, force_venv=False)
+
+
+def test_mocked_update_fixture_retains_process_discovery(monkeypatch, tmp_path):
+    """A simulated pull must not discard the no-live-gateway discovery stubs."""
+    import sys
+    import clover_cli.gateway as gateway
+
+    _patch_update_deps(monkeypatch, tmp_path, _make_head_moved_side_effect())
+    assert gateway.find_gateway_pids(all_profiles=True) == []
+    clover_main._purge_stale_clover_modules()
+    assert sys.modules.get("clover_cli.gateway") is gateway, (
+        "mocked updates must not purge the patched discovery module and reach live PIDs"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -469,6 +486,9 @@ def test_already_up_to_date_windows_resume_relaunch_satisfies_pending_restart(
 
 def test_pending_restart_on_windows_keeps_the_gateway_it_just_started(monkeypatch):
     """The leftover sweep kills only pre-restart survivors, never the new gateway."""
+    # Synthetic PIDs model a gateway whose compatibility gate already passed.
+    # Real legacy refusal is covered by test_update_delivery_guard and dev runs.
+    monkeypatch.setattr("clover_cli.update_delivery_guard._unsafe_gateways", lambda: [])
     import clover_cli.gateway as clover_gateway
     from clover_cli import gateway_windows
 
@@ -501,6 +521,7 @@ def test_pending_restart_on_windows_keeps_the_gateway_it_just_started(monkeypatc
 
 def test_pending_restart_on_windows_fails_when_no_gateway_comes_up(monkeypatch):
     """D1: never print "Pending fleet restart completed" over a dead gateway."""
+    monkeypatch.setattr("clover_cli.update_delivery_guard._unsafe_gateways", lambda: [])
     import clover_cli.gateway as clover_gateway
     from clover_cli import gateway_windows
 

@@ -91,7 +91,7 @@ def _api():
                 raise ValueError('audit drive is not a direct local volume')
             return target.value + '\\'
 
-        def open(self, parent, part, directory):
+        def open(self, parent, part, directory, *, read_control=False):
             buf = c.create_unicode_buffer(part)
             length = len(part.encode('utf-16-le'))
             if length > 65532:
@@ -102,6 +102,8 @@ def _api():
             handle, status = w.HANDLE(), IoStatus()
             # READ_ATTRIBUTES | SYNCHRONIZE | (TRAVERSE or READ_DATA).
             access = 0x80 | 0x100000 | (0x20 if directory else 1)
+            if read_control:
+                access |= 0x20000  # READ_CONTROL: inspect security on this exact handle.
             options = 0x200000 | 0x20 | (1 if directory else 0x40)
             result = nt.NtCreateFile(c.byref(handle), access, c.byref(attrs), c.byref(status),
                                      None, 0, 1, 1, options, None, 0)
@@ -134,23 +136,37 @@ def _api():
     return Api()
 
 
-def read_bytes(project: str, name: str, limit: int) -> bytes:
+def read_bytes(project: str, name: str, limit: int, *, verify_handle=None) -> bytes:
+    """Read pinned data; optional security verifier runs before/after any data read.
+
+    verify_handle(handle, directory, direct_parent) returns a stable security
+    snapshot or raises. Only this mode requests READ_CONTROL; existing audit
+    callers retain their original access requirements and behavior.
+    """
     import sys
     if sys.platform != 'win32':
         raise OSError('native Windows audit reader required')
     root, parts = validated_parts(project, name, limit)
     api = _api()
     handles = []
-    try:
-        handle = api.open(None, api.volume_root(root), True)
+    security = []
+
+    def opening(parent, part, directory, direct=False):
+        # No extra keyword reaches existing audit API wrappers in default mode.
+        handle = (api.open(parent, part, directory, read_control=True)
+                  if verify_handle is not None else api.open(parent, part, directory))
         handles.append(handle)
+        if verify_handle is not None:
+            security.append((handle, directory, direct, verify_handle(handle, directory, direct)))
+        return handle
+
+    try:
+        handle = opening(None, api.volume_root(root), True, len(parts) == 1)
         directories = [(handle, api.snapshot(handle, True))]
-        for part in parts[:-1]:
-            handle = api.open(handle, part, True)
-            handles.append(handle)
+        for index, part in enumerate(parts[:-1]):
+            handle = opening(handle, part, True, index == len(parts) - 2)
             directories.append((handle, api.snapshot(handle, True)))
-        leaf = api.open(handle, parts[-1], False)
-        handles.append(leaf)
+        leaf = opening(handle, parts[-1], False)
         before = api.snapshot(leaf, False)
         if before[3] > limit:
             raise ValueError('audit file exceeds size bound')
@@ -161,6 +177,9 @@ def read_bytes(project: str, name: str, limit: int) -> bytes:
         for directory, initial in directories:
             if api.snapshot(directory, True) != initial:
                 raise ValueError('audit directory changed during read')
+        for handle, directory, direct, initial in security:
+            if verify_handle(handle, directory, direct) != initial:
+                raise ValueError('audit security changed during read')
         return value
     finally:
         for handle in reversed(handles):

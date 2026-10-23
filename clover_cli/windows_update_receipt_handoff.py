@@ -1,13 +1,13 @@
 """Owned Windows shim receipt continuation; no gateway or service actions.
 
-Uses a separate system PowerShell CIM query rather than importing psutil into
-an updater that is about to replace venv extension modules. Missing ownership
+Uses a separate base-Python Win32 query rather than importing native extension
+modules into an updater that is about to replace its venv. Missing ownership
 is explicitly unverified. Only the current, proven handed-off logical run may
 be continued; ordinary historical success receipts are never adopted.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 import hashlib
 import json
 import math
@@ -50,6 +50,19 @@ def _stamp(value):
     return result.timestamp()
 
 
+def _birth(item):
+    display = _stamp(item.get('created_utc'))
+    if 'created_unix' not in item:
+        return display
+    raw = item['created_unix']
+    _require(type(raw) in (int, float) and math.isfinite(raw) and raw > 0, 'invalid native birth')
+    _require(datetime.fromtimestamp(raw, timezone.utc).isoformat() == item['created_utc'],
+             'inconsistent native birth representations')
+    # ISO rounds to microseconds; ownership must retain the original machine
+    # measurement, not make an exactly current beacon appear stale.
+    return raw
+
+
 def _read(path):
     _require(path.is_file() and not path.is_symlink(), 'missing or symlinked handoff record')
     raw = path.read_bytes()
@@ -77,29 +90,18 @@ def _json(value):
 
 
 def process_chain(pid, *, timeout=5):
-    """Read current ancestry, executable and creation time without loading pyds."""
+    """Read Win32 ancestry in an isolated base process, without updater pyd locks.
+
+    Native acceptance reproduced PowerShell/CIM not completing even after
+    two fifteen-second queries. Toolhelp32 + process handles provide the same
+    measured PID, parent edge, image path and creation-time facts without WMI.
+    ctypes stays in the disposable base-Python child, never this updater.
+    """
+    import sys
     _require(_pid(pid), 'invalid process identity')
-    command = r'''
-[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-$ErrorActionPreference = 'Stop'
-$all = @(Get-CimInstance Win32_Process)
-$cursor = CURRENT_PID
-$seen = @{}
-$chain = @()
-for ($i=0; $i -lt 8 -and $cursor -gt 0; $i++) {
-  if ($seen.ContainsKey($cursor)) { throw 'Cyclic process ancestry' }
-  $seen[$cursor] = $true
-  $item = @($all | Where-Object { $_.ProcessId -eq $cursor })
-  if ($item.Count -ne 1) { break }
-  $item = $item[0]
-  $chain += [pscustomobject]@{ pid=[int]$item.ProcessId; parent_pid=[int]$item.ParentProcessId;
-    executable=$item.ExecutablePath; created_utc=$item.CreationDate.ToUniversalTime().ToString('o') }
-  $cursor = [int]$item.ParentProcessId
-}
-ConvertTo-Json -InputObject $chain -Depth 4 -Compress
-'''.replace('CURRENT_PID', str(pid))
-    powershell = Path(os.environ.get('SystemRoot', r'C:\Windows')) / 'System32/WindowsPowerShell/v1.0/powershell.exe'
-    result = subprocess.run([str(powershell), '-NoProfile', '-NonInteractive', '-Command', command],
+    helper = Path(__file__).with_name('windows_process_witness.py')
+    interpreter = getattr(sys, '_base_executable', None) or sys.executable
+    result = subprocess.run([interpreter, '-I', str(helper), str(pid)],
                             stdin=subprocess.DEVNULL, capture_output=True, text=True, encoding='utf-8-sig', errors='strict',
                             timeout=timeout, check=True, creationflags=getattr(subprocess, 'CREATE_NO_WINDOW', 0))
     chain = json.loads(result.stdout)
@@ -114,6 +116,16 @@ def _witness(chain, current, parent, project_root, interpreter, now):
     venv_paths = {_key(venv / 'python.exe'), _key(venv / 'pythonw.exe')}
     _require(_key(interpreter['executable']) in venv_paths, 'foreign venv interpreter')
     allowed = venv_paths | {_key(interpreter['base_executable'])}
+    # uv's managed "current" directory is a real link to its versioned
+    # runtime. Win32 reports the physical image, while Python may preserve
+    # the configured alias. Admit only that locally resolved existing file,
+    # never a basename match or a different interpreter directory.
+    try:
+        base_image = Path(interpreter['base_executable']).resolve(strict=True)
+        if base_image.is_file():
+            allowed.add(_key(base_image))
+    except OSError:
+        pass
     root_pid = parent['pid']
     seen = set()
     owned = []
@@ -122,7 +134,7 @@ def _witness(chain, current, parent, project_root, interpreter, now):
         _require(item['pid'] not in seen, 'cyclic process witness')
         seen.add(item['pid'])
         _require(_key(item.get('executable')) in allowed, 'foreign continuation executable')
-        created = _stamp(item.get('created_utc'))
+        created = _birth(item)
         _require(_stamp(parent['started_at']) <= created <= now() + 1, 'process outside current run')
         if owned:
             _require(owned[-1]['parent_pid'] == item['pid'] and created <= owned[-1]['created'], 'broken ancestry')
@@ -134,7 +146,7 @@ def _witness(chain, current, parent, project_root, interpreter, now):
     _require(_stamp(current['started_at']) >= owned[0]['created'], 'receipt predates continuation')
     # A still-live original producer may overwrite latest after we return.
     for item in chain[len(owned):]:
-        if item.get('pid') == root_pid and _stamp(item.get('created_utc')) <= _stamp(parent['started_at']):
+        if item.get('pid') == root_pid and _birth(item) <= _stamp(parent['started_at']):
             raise Unverified('original producer still alive')
     return owned
 
@@ -292,8 +304,14 @@ def _recover_publication(parent, current, directory, owned, latest_raw):
     return _resume_existing(published, current, directory, owned, latest_raw=latest_raw)
 
 
-def resume(current, directory, project_root, *, process_chain, interpreter, now, wait_seconds=5):
-    """Adopt only an owned legacy parent; return canonical path or an explicit refusal."""
+def resume(current, directory, project_root, *, process_chain, interpreter, now, wait_seconds=30):
+    """Adopt only an owned parent within a bounded cold-CIM startup budget.
+
+    A five-second total budget allowed only one cold PowerShell/CIM timeout
+    on native Windows. Give each cold query at most fifteen seconds and allow
+    another measured query before declaring the receipt unverified. All
+    source, process-birth, ancestry and publication predicates remain strict.
+    """
     began = time.monotonic()
     deadline = began + wait_seconds
     probe = {'elapsed_seconds': 0.0, 'attempt_count': 0, 'attempts': []}
@@ -305,7 +323,7 @@ def resume(current, directory, project_root, *, process_chain, interpreter, now,
             parent, latest_raw = _read(directory / 'latest.json')
             _validate_parent(parent, current, project_root, interpreter)
             probe_phase = 'process_chain'
-            process_timeout = max(.1, min(5, deadline - time.monotonic()))
+            process_timeout = max(.1, min(15, deadline - time.monotonic()))
             chain = process_chain(current['pid'], timeout=process_timeout)
             probe_phase = 'process_witness'
             owned = _witness(chain, current, parent, project_root, interpreter, now)

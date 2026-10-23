@@ -64,6 +64,7 @@ def _make_runtime_install(
     bin_dir.mkdir(parents=True)
     python = bin_dir / ("python.exe" if windows else "python")
     python.write_text("live interpreter", encoding="utf-8")
+    (live / "pyvenv.cfg").write_text("include-system-site-packages = false\n", encoding="utf-8")
     sentinel = live / "sentinel"
     sentinel.write_text("live", encoding="utf-8")
     return root, live, sentinel

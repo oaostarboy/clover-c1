@@ -2139,7 +2139,7 @@ def _update_via_zip(args, *, had_desktop_app_before_update: bool = False) -> boo
         from clover_cli.managed_uv import managed_python_env
 
         uv_env = managed_python_env()
-        uv_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
+        uv_env["VIRTUAL_ENV"] = str(_update_venv_dir())
         if _m()._is_termux_env(uv_env):
             uv_env.pop("PYTHONPATH", None)
             uv_env.pop("PYTHONHOME", None)
@@ -3408,6 +3408,47 @@ def _restart_systemd_gateway_units_best_effort(failed: list) -> None:
             continue
 
         def process_unit(svc_name: str, _scope=scope, _cmd=scope_cmd) -> None:
+            # The already-current path is also used by a released updater's
+            # runtime continuation. Do not amputate a live turn with systemctl
+            # restart after the first half correctly preserved that gateway.
+            shown = subprocess.run(
+                _cmd + ["show", svc_name, "--property=MainPID", "--value"],
+                capture_output=True, text=True, encoding="utf-8", errors="replace",
+                timeout=5, stdin=subprocess.DEVNULL,
+            )
+            try:
+                main_pid = int(shown.stdout.strip()) if shown.returncode == 0 else -1
+            except (TypeError, ValueError):
+                main_pid = -1
+            if main_pid < 0:
+                failed.append(svc_name)
+                return
+            if main_pid > 0:
+                from gateway.status import looks_like_gateway_command_line
+                try:
+                    argv = [os.fsdecode(arg) for arg in
+                            _gateway_pid_cmdline_path(main_pid).read_bytes().split(b"\0") if arg]
+                except OSError:
+                    failed.append(svc_name)
+                    return
+                if looks_like_gateway_command_line(shlex.join(argv)):
+                    from clover_cli.gateway import (
+                        _graceful_restart_via_sigusr1, _get_restart_exit_wait_budget,
+                    )
+                    if _gateway_pid_install_verdict(main_pid) != "own":
+                        failed.append(svc_name)
+                        return
+                    budget = _get_restart_exit_wait_budget()
+                    print(f"  → {svc_name}: draining (up to {int(budget)}s)...")
+                    if not _graceful_restart_via_sigusr1(main_pid, drain_timeout=budget):
+                        # Leave the durable intent pending. An unproved drain
+                        # is not authority to hard-stop accepted work.
+                        failed.append(svc_name)
+                        return
+                    timeout = max(10.0, _service_restart_sec(_cmd, svc_name) + 10.0)
+                    if not _wait_for_service_active(_cmd, svc_name, timeout=timeout):
+                        failed.append(svc_name)
+                    return
             restart_cmd = list(_cmd) + ["--no-ask-password", "restart", svc_name]
             if (
                 _scope == "system"
@@ -3548,6 +3589,8 @@ def _run_pending_fleet_restart() -> bool:
     Returns True when restart completed or no services were running.
     Returns False if restart was incomplete. Never raises.
     """
+    from clover_cli.update_delivery_guard import require_delivery_safe_update
+    require_delivery_safe_update()
     print("→ Restarting gateways left on pre-update code...")
     try:
         _m()._purge_stale_clover_modules()
@@ -3596,6 +3639,11 @@ def _run_pending_fleet_restart() -> bool:
             except Exception as exc:
                 logger.debug("Pending fleet restart: Windows failed: %s", exc)
                 failed.append("windows-gateway")
+        if failed and sys.platform.startswith("linux") and not is_windows() and not is_macos():
+            # Failed drain/ownership verification must not be undone by the
+            # later manual survivor sweep. Retain all pending restart intent.
+            _warn_incomplete_gateway_fleet_restart(failed)
+            return False
         leftover: list = []
         try:
             live = _own_install_gateway_pids(find_gateway_pids(all_profiles=True))
@@ -3730,6 +3778,8 @@ def _apply_pending_fleet_restart_catchup() -> None:
     No-op when nothing is pending. Exits 1 when the catch-up restart is
     incomplete so automation does not treat the fleet as healthy.
     """
+    from clover_cli.update_delivery_guard import require_delivery_safe_update
+    require_delivery_safe_update()
     if not _pending_fleet_restart_needed():
         return
     # A durable Linux/systemd catch-up receipt names the profiles whose new
@@ -5214,6 +5264,13 @@ def _wait_for_windows_update_gateway_exit(
             pass
     return survivors
 
+def _update_venv_dir() -> Path:
+    """Use one owned install target for repair, sync and holder checks."""
+    from clover_cli.managed_uv import _default_live_venv
+
+    return _default_live_venv(Path(_m().PROJECT_ROOT))
+
+
 def _venv_core_imports_healthy() -> tuple[bool, str]:
     """Probe the project venv for the core imports the backend needs to boot.
 
@@ -5230,7 +5287,7 @@ def _venv_core_imports_healthy() -> tuple[bool, str]:
     Returns ``(healthy, detail)``. Never raises; unknown states report
     healthy so a probe failure can't force needless reinstalls.
     """
-    venv_dir = _m().PROJECT_ROOT / "venv"
+    venv_dir = _update_venv_dir()
     venv_python = venv_python_path(venv_dir, windows=_m()._is_windows())
     if not venv_python.exists():
         # No venv interpreter at all. In a dev checkout that's normal (the
@@ -5322,7 +5379,7 @@ def _detect_venv_python_processes(
     except Exception:
         return []
 
-    venv_dir = _m().PROJECT_ROOT / "venv"
+    venv_dir = _update_venv_dir()
     try:
         venv_prefix = str(venv_dir.resolve()).lower().rstrip(os.sep) + os.sep
     except OSError:
@@ -5886,7 +5943,7 @@ def _venv_launcher_ancestors(pids: list[int]) -> list[int]:
     except Exception:
         return []
 
-    venv_dir = _m().PROJECT_ROOT / "venv"
+    venv_dir = _update_venv_dir()
     try:
         venv_prefix = str(venv_dir.resolve()).lower().rstrip(os.sep) + os.sep
     except OSError:
@@ -8390,6 +8447,9 @@ def _rebuild_desktop_after_update(
 def _cmd_update_impl(args, gateway_mode: bool):
     """Body of ``cmd_update`` — kept separate so the wrapper can always
     restore stdio even on ``sys.exit``."""
+    from clover_cli.update_delivery_guard import require_delivery_safe_update
+    require_delivery_safe_update()
+
     # A managed-runtime refresh can replace site-packages before the normal
     # ``.[all]`` install runs. Snapshot while the old environment can still
     # prove which optional backends the user had activated.
@@ -9247,13 +9307,15 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 # recreated before dependencies can be installed into it.
                 venv_python_missing = not (
                     venv_python_path(
-                        _m().PROJECT_ROOT / "venv", windows=_m()._is_windows()
+                        _update_venv_dir(), windows=_m()._is_windows()
                     )
                 ).exists()
                 if venv_python_missing and repair_uv:
                     print("→ Recreating virtual environment...")
+                    repair_target = _update_venv_dir()
+                    recreate_arg = (repair_target.name if repair_target.parent == _m().PROJECT_ROOT else str(repair_target))
                     subprocess.run(
-                        [repair_uv, "venv", "venv"],
+                        [repair_uv, "venv", recreate_arg],
                         cwd=_m().PROJECT_ROOT,
                         check=False,
                         stdin=subprocess.DEVNULL,
@@ -9264,7 +9326,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     from clover_cli.managed_uv import managed_python_env
 
                     repair_env = managed_python_env()
-                    repair_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
+                    repair_env["VIRTUAL_ENV"] = str(_update_venv_dir())
                     _m()._install_python_dependencies_with_optional_fallback(
                         [repair_uv, "pip"], env=repair_env, group="all"
                     )
@@ -9707,7 +9769,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
             from clover_cli.managed_uv import managed_python_env
 
             uv_env = managed_python_env()
-            uv_env["VIRTUAL_ENV"] = str(_m().PROJECT_ROOT / "venv")
+            uv_env["VIRTUAL_ENV"] = str(_update_venv_dir())
             if _m()._is_termux_env(uv_env):
                 uv_env.pop("PYTHONPATH", None)
                 uv_env.pop("PYTHONHOME", None)

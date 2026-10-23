@@ -15,6 +15,14 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.7 | Clover C1.5.7 | 2026-10-23
+- Updates wait for complete reply delivery before restarting supported gateways.
+- Older gateways may need one terminal maintenance update before automatic updates work again.
+- Managed Python repair checks SQLite safety and preserves the latest saved work.
+- macOS updates recognize verified service wrappers without trusting unknown processes.
+- Windows updates verify their own process chain and recognize managed Python path aliases.
+- Busy storage and interrupted jobs now report uncertainty instead of claiming work did not run.
+
 ## 1.5.6 | Clover C1.5.6 | 2026-10-16
 - Optional work tracking keeps unfinished jobs, corrections and relevant context across chats; off by default.
 - Helper output stays unverified until required checks pass; release and delivery remain separate steps.

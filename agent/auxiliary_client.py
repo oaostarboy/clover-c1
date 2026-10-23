@@ -3181,7 +3181,7 @@ def _warn_paid_lane_once(model: str) -> None:
     )
 
 
-def _try_openrouter(explicit_api_key: str = None, model: str = None) -> Tuple[Optional[OpenAI], Optional[str]]:
+def _try_openrouter(explicit_api_key: str = None, model: str = None, *, allow_fallback: bool = True) -> Tuple[Optional[OpenAI], Optional[str]]:
     free_only, cfg_model = _aux_openrouter_settings()
     or_model = model or cfg_model
     if free_only and not _is_free_model(or_model):
@@ -3197,7 +3197,8 @@ def _try_openrouter(explicit_api_key: str = None, model: str = None) -> Tuple[Op
     if not _is_free_model(or_model):
         _warn_paid_lane_once(or_model)
 
-    pool_present, entry = _select_pool_entry("openrouter")
+    pool_present, entry = ((False, None) if not allow_fallback and explicit_api_key else
+                           _select_pool_entry("openrouter"))
     if pool_present:
         or_key = explicit_api_key or _pool_runtime_api_key(entry)
         if or_key:
@@ -3205,6 +3206,8 @@ def _try_openrouter(explicit_api_key: str = None, model: str = None) -> Tuple[Op
             logger.debug("Auxiliary client: OpenRouter via pool")
             return _create_openai_client(api_key=or_key, base_url=base_url,
                            default_headers=build_or_headers()), or_model
+        if not allow_fallback:
+            return None, None
         # Pool exists but is exhausted (no usable runtime key) — fall through to
         # the OPENROUTER_API_KEY env-var path rather than failing outright.
         logger.debug("Auxiliary client: OpenRouter pool exhausted, trying OPENROUTER_API_KEY")
@@ -3664,6 +3667,7 @@ def set_runtime_main(
     auth_mode: str = "",
     session_id: str = "",
     cache_scope: str = "",
+    credential_pool: Any = None,
 ) -> contextvars.Token:
     """Record the current context's live main runtime for auxiliary routing.
 
@@ -3692,6 +3696,7 @@ def set_runtime_main(
         "auth_mode": (auth_mode or "").strip().lower(),
         "session_id": (session_id or "").strip(),
         "cache_scope": (cache_scope or "").strip(),
+        "credential_pool": credential_pool,
     }
     # Publish authoritative context before updating locked compatibility
     # mirrors; concurrent sessions never read those mirrors at runtime.
@@ -3935,7 +3940,7 @@ def _build_xai_oauth_aux_client(model: str) -> Tuple[Optional[Any], Optional[str
     return CodexAuxiliaryClient(real_client, model), model
 
 
-def _build_codex_client(model: str) -> Tuple[Optional[Any], Optional[str]]:
+def _build_codex_client(model: str, *, allow_fallback: bool = True) -> Tuple[Optional[Any], Optional[str]]:
     """Build a CodexAuxiliaryClient for an explicitly-requested model.
 
     There is no auto-selection of the Codex model: the ChatGPT-account
@@ -3953,6 +3958,8 @@ def _build_codex_client(model: str) -> Tuple[Optional[Any], Optional[str]]:
         )
         return None, None
     pool_present, entry = _select_pool_entry("openai-codex")
+    if pool_present and not allow_fallback and (entry is None or not _pool_runtime_api_key(entry)):
+        return None, None
     if pool_present:
         codex_token = _pool_runtime_api_key(entry)
         if codex_token:
@@ -4090,13 +4097,16 @@ def _try_azure_foundry(
     return client, final_model
 
 
-def _try_anthropic(explicit_api_key: str = None) -> Tuple[Optional[Any], Optional[str]]:
+def _try_anthropic(explicit_api_key: str = None, *, allow_fallback: bool = True, model: Optional[str] = None) -> Tuple[Optional[Any], Optional[str]]:
     try:
         from agent.anthropic_adapter import build_anthropic_client, resolve_anthropic_token
     except ImportError:
         return None, None
 
-    pool_present, entry = _select_pool_entry("anthropic")
+    pool_present, entry = ((False, None) if not allow_fallback and explicit_api_key else
+                           _select_pool_entry("anthropic"))
+    if pool_present and not allow_fallback and (entry is None or not _pool_runtime_api_key(entry)):
+        return None, None
     if pool_present and entry is not None:
         token = explicit_api_key or _pool_runtime_api_key(entry)
     else:
@@ -4141,7 +4151,7 @@ def _try_anthropic(explicit_api_key: str = None) -> Tuple[Optional[Any], Optiona
 
     from agent.anthropic_adapter import _is_oauth_token
     is_oauth = _is_oauth_token(token)
-    model = _get_aux_model_for_provider("anthropic") or "claude-haiku-4-5-20251001"
+    model = model or _get_aux_model_for_provider("anthropic") or "claude-haiku-4-5-20251001"
     if _aux_probe_active():
         # Availability probe — token + SDK adapter import resolved; skip
         # real client construction.
@@ -4187,6 +4197,8 @@ def _normalize_main_runtime(main_runtime: Optional[Dict[str, Any]]) -> Dict[str,
     if not isinstance(main_runtime, dict):
         return {}
     normalized: Dict[str, Any] = {}
+    if main_runtime.get("credential_pool") is not None:
+        normalized["credential_pool"] = main_runtime["credential_pool"]
     for field in _MAIN_RUNTIME_CONTEXT_FIELDS:
         value = main_runtime.get(field)
         # Preserve a callable api_key (Entra ID bearer provider) unchanged.
@@ -6469,6 +6481,7 @@ def resolve_provider_client(
     main_runtime: Optional[Dict[str, Any]] = None,
     is_vision: bool = False,
     task: Optional[str] = None,
+    allow_fallback: bool = True,
 ) -> Tuple[Optional[Any], Optional[str]]:
     """Central router: given a provider name and optional model, return a
     configured client with the correct auth, base URL, and API format.
@@ -6627,6 +6640,8 @@ def resolve_provider_client(
 
     # ── Auto: try all providers in priority order ────────────────────
     if provider == "auto":
+        if not allow_fallback:
+            return None, None
         client, resolved, effective_provider = _resolve_auto_route(
             main_runtime=main_runtime,
             task=task,
@@ -6652,14 +6667,13 @@ def resolve_provider_client(
 
     # ── OpenRouter ───────────────────────────────────────────
     if provider == "openrouter":
-        client, default = _try_openrouter(
-            explicit_api_key=explicit_api_key,
-            model=model,
-        )
+        client, default = (_try_openrouter(explicit_api_key=explicit_api_key, model=model)
+                           if allow_fallback else _try_openrouter(
+                               explicit_api_key=explicit_api_key, model=model, allow_fallback=False))
         if client is None:
             logger.warning(
                 "resolve_provider_client: openrouter requested but %s",
-                _describe_openrouter_unavailable(model=model),
+                _describe_openrouter_unavailable(model=model) if allow_fallback else "unavailable without credential fallback",
             )
             return None, None
         final_model = _normalize_resolved_model(model or default, provider)
@@ -6678,6 +6692,9 @@ def resolve_provider_client(
         if raw_codex:
             # Return the raw OpenAI client for callers that need direct
             # access to responses.stream() (e.g., the main agent loop).
+            if not allow_fallback:
+                wrapper, resolved = _build_codex_client(model, allow_fallback=False)
+                return (wrapper._real_client, resolved) if wrapper is not None else (None, None)
             codex_token = _read_codex_access_token()
             if not codex_token:
                 logger.warning("resolve_provider_client: openai-codex requested "
@@ -6691,7 +6708,8 @@ def resolve_provider_client(
             )
             return (raw_client, final_model)
         # Standard path: wrap in CodexAuxiliaryClient adapter
-        client, default = _build_codex_client(model)
+        client, default = (_build_codex_client(model) if allow_fallback else
+                           _build_codex_client(model, allow_fallback=False))
         if client is None:
             logger.warning("resolve_provider_client: openai-codex requested "
                            "but no Codex OAuth token found (run: clover model)")
@@ -6795,6 +6813,8 @@ def resolve_provider_client(
             client = _wrap_if_needed(client, final_model, wrap_base or custom_base, custom_key)
             return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode
                     else (client, final_model))
+        if not allow_fallback:
+            return None, None
         # Try custom first, then API-key providers (Codex excluded here:
         # falling through to Codex with no model is a stale-constant trap).
         for try_fn in (_try_custom_endpoint, _resolve_api_key_provider):
@@ -6991,14 +7011,17 @@ def resolve_provider_client(
 
     if pconfig.auth_type == "api_key":
         if provider == "anthropic":
-            client, default_model = _try_anthropic(explicit_api_key=explicit_api_key)
+            client, default_model = (_try_anthropic(explicit_api_key=explicit_api_key) if allow_fallback else
+                                     _try_anthropic(explicit_api_key=explicit_api_key, allow_fallback=False, model=model))
             if client is None:
                 logger.warning("resolve_provider_client: anthropic requested but no Anthropic credentials found")
                 return None, None
             final_model = _normalize_resolved_model(model or default_model, provider)
             return (_to_async_client(client, final_model, is_vision=is_vision) if async_mode else (client, final_model))
 
-        creds = resolve_api_key_provider_credentials(provider)
+        creds = (resolve_api_key_provider_credentials(provider) if allow_fallback else
+                 resolve_api_key_provider_credentials(provider, allow_fallback=False, explicit_api_key=explicit_api_key,
+                                                      explicit_base_url=explicit_base_url))
         api_key = str(creds.get("api_key", "")).strip()
         # Honour an explicit api_key override (e.g. from a fallback_model entry
         # or a custom_providers entry) so callers that pass an explicit
@@ -7050,7 +7073,7 @@ def resolve_provider_client(
         if explicit_base_url:
             base_url = _to_openai_base_url(explicit_base_url.strip().rstrip("/"))
 
-        default_model = _get_aux_model_for_provider(provider)
+        default_model = None if not allow_fallback and model else _get_aux_model_for_provider(provider)
         final_model = _normalize_resolved_model(model or default_model, provider)
 
         if provider == "gemini":
@@ -8176,9 +8199,7 @@ def _get_cached_client(
 # silently fell back to the user's main provider, sending OpenAI model names
 # to e.g. DeepSeek and producing cryptic ``unknown variant 'image_url'``
 # errors (issue #31179).
-_AUX_DIRECT_API_BASE_URLS: Dict[str, str] = {
-    "openai": "https://api.openai.com/v1",
-}
+from agent.bounded_provider_metadata import DIRECT_API_BASE_URLS as _AUX_DIRECT_API_BASE_URLS
 
 
 def _resolve_task_provider_model(

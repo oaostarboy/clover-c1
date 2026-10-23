@@ -196,3 +196,16 @@ def test_resumed_leg_runs_in_child_safety_context(monkeypatch):
     assert seen["child_ctx"] is True
     assert seen["thread"] is not caller
     assert seen["approval"] is sentinel
+
+
+def test_storage_failure_preserves_checkpoint_without_spawning_another_leg(monkeypatch):
+    monkeypatch.setattr(dt, "_load_config", lambda: {"auto_continue": 2})
+    receipt = {"path": "/private/progress.json", "automatic_replay_allowed": False}
+    failure = {"final_response": "storage busy", "failed": True, "completed": False,
+               "turn_exit_reason": "session_persistence_failed", "storage_recovery": receipt,
+               "messages": [{"role": "tool", "tool_call_id": "effect1", "content": "already ran"}]}
+    child = _Child([failure])
+    entry = _run_single_child(0, "approved task", child, _Parent())
+    assert entry["status"] == "failed"
+    assert entry["storage_recovery"] == receipt
+    assert len(child.calls) == 1  # no new prompt, owner, budget, or provider

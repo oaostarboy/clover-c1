@@ -512,7 +512,7 @@ def _separate_chunk_indicator_from_fence(text: str) -> str:
     back to plain text. Put the indicator on its own line immediately after the
     closing fence.
     """
-    return _CHUNK_INDICATOR_ON_FENCE_RE.sub(r'```\n\g<indicator>', text)
+    return _CHUNK_INDICATOR_ON_FENCE_RE.sub(r'```\n \g<indicator>', text)
 
 
 # ---------------------------------------------------------------------------
@@ -782,6 +782,15 @@ class TelegramAdapter(BasePlatformAdapter):
     def message_len_fn(self):
         """Telegram measures message length in UTF-16 code units."""
         return utf16_len
+
+    def streaming_message_len(self, content: str) -> int:
+        """Budget both raw previews and the actual MarkdownV2 final payload.
+
+        A logical chunk must fit one physical message in either form. Counting
+        only raw UTF-16 lets formatting escape expansion split a preview send,
+        after which editing its first id with the whole chunk duplicates tails.
+        """
+        return max(utf16_len(content), utf16_len(self.format_message(content)))
 
     def __init__(self, config: PlatformConfig):
         super().__init__(config, Platform.TELEGRAM)
@@ -2022,6 +2031,19 @@ class TelegramAdapter(BasePlatformAdapter):
         except ImportError:
             pass
         return isinstance(error, OSError)
+
+    @staticmethod
+    def _looks_like_connect_failure(error: Exception) -> bool:
+        """Typed causal proof that no connection was established, not prose."""
+        import httpx
+        seen = set()
+        current = error
+        while current is not None and id(current) not in seen:
+            seen.add(id(current))
+            if isinstance(current, (httpx.ConnectError, httpx.ConnectTimeout)):
+                return True
+            current = current.__cause__
+        return False
 
     @staticmethod
     def _looks_like_connect_timeout(error: Exception) -> bool:
@@ -5700,6 +5722,7 @@ class TelegramAdapter(BasePlatformAdapter):
         if not content or not content.strip():
             return SendResult(success=True, message_id=None)
         
+        delivery_uncertain = False
         try:
             # Bot API 10.1 rich fast-path: send the raw agent markdown via
             # sendRichMessage so tables/task lists/etc. render natively. Falls
@@ -5739,6 +5762,13 @@ class TelegramAdapter(BasePlatformAdapter):
                     for chunk in chunks
                 ]
             
+            # Editable previews must remain one physical message, just like
+            # edit_message(finalize=False). A rich-capability fallback can
+            # reach here with a logical budget larger than the legacy cap.
+            # Keep the rest in the consumer, which commits ALL text on final.
+            preview_only = bool((metadata or {}).get("expect_edits") and len(chunks) > 1)
+            if preview_only:
+                chunks = chunks[:1]
             message_ids = []
             thread_id = self._metadata_thread_id(metadata)
             requested_thread_id = self._message_thread_id_for_send(thread_id)
@@ -5818,7 +5848,8 @@ class TelegramAdapter(BasePlatformAdapter):
                             )
                         except Exception as md_error:
                             # Markdown parsing failed, try plain text
-                            if "parse" in str(md_error).lower() or "markdown" in str(md_error).lower():
+                            if (_BadReq and isinstance(md_error, _BadReq)
+                                    and ("parse" in str(md_error).lower() or "markdown" in str(md_error).lower())):
                                 logger.warning("[%s] MarkdownV2 parse failed, falling back to plain text: %s", self.name, md_error)
                                 plain_chunk = _strip_mdv2(chunk)
                                 msg = await self._bot.send_message(
@@ -5918,12 +5949,16 @@ class TelegramAdapter(BasePlatformAdapter):
                         # Telegram" -- retrying through the loop is safe and
                         # prevents silent drops when the pool frees up.
                         is_pool_timeout = self._looks_like_pool_timeout(send_err)
-                        if (
-                            _TimedOut
-                            and isinstance(send_err, _TimedOut)
-                            and not self._looks_like_connect_timeout(send_err)
-                            and not is_pool_timeout
-                        ):
+                        definitely_unsent = (
+                            self._looks_like_connect_failure(send_err)
+                            or self._looks_like_connect_timeout(send_err)
+                            or is_pool_timeout
+                        )
+                        if not definitely_unsent:
+                            # Read/write/reset/protocol failures can lose only
+                            # the ACK after Telegram accepted the request. No
+                            # silent retry here or in the outer send wrapper.
+                            delivery_uncertain = True
                             raise
                         if is_pool_timeout:
                             await self._drain_general_connections_after_pool_timeout()
@@ -5993,6 +6028,7 @@ class TelegramAdapter(BasePlatformAdapter):
                     "message_ids": message_ids,
                     "requested_thread_id": requested_thread_id,
                     "thread_fallback": used_thread_fallback,
+                    "preview_only": preview_only,
                 },
             )
             
@@ -6018,11 +6054,17 @@ class TelegramAdapter(BasePlatformAdapter):
             is_timeout = (_to and isinstance(e, _to)) or "timed out" in err_str
             is_connect_timeout = self._looks_like_connect_timeout(e)
             is_pool_timeout = self._looks_like_pool_timeout(e)
+            sent_ids = locals().get("message_ids", [])
             return SendResult(
                 success=False,
                 error=safe_error,
-                retryable=(is_connect_timeout or is_pool_timeout or not is_timeout),
+                retryable=(not delivery_uncertain and not sent_ids
+                           and (is_connect_timeout or is_pool_timeout or not is_timeout)),
                 error_kind=error_kind,
+                raw_response=(
+                    {"delivery_uncertain": delivery_uncertain, "message_ids": list(sent_ids)}
+                    if delivery_uncertain or sent_ids else None
+                ),
             )
 
     async def send_or_update_status(
@@ -6120,7 +6162,8 @@ class TelegramAdapter(BasePlatformAdapter):
             # Any saturation state for this message is finished with — the
             # final edit always delivers real (full) content.
             self._last_overflow_preview.pop(_preview_key, None)
-        if utf16_len(content) > self.MAX_MESSAGE_LENGTH:
+        measured = self.streaming_message_len(content) if finalize else utf16_len(content)
+        if measured > self.MAX_MESSAGE_LENGTH:
             if finalize:
                 return await self._edit_overflow_split(
                     chat_id, message_id, content, finalize=finalize, metadata=metadata,
@@ -6309,8 +6352,11 @@ class TelegramAdapter(BasePlatformAdapter):
         Falls back to ``SendResult(success=False)`` only if even the first-
         chunk edit fails — that's a real adapter problem, not an overflow.
         """
+        # Measure the final transformation before splitting raw logical text.
+        # Leave room for fence balancing and the escaped (N/M) decoration.
         chunks = self.truncate_message(
-            content, self.MAX_MESSAGE_LENGTH, len_fn=utf16_len,
+            content, self.MAX_MESSAGE_LENGTH - 100,
+            len_fn=self.streaming_message_len if finalize else utf16_len,
         )
         if len(chunks) <= 1:
             # Defensive: shouldn't happen given the caller's pre-flight, but
@@ -6486,6 +6532,7 @@ class TelegramAdapter(BasePlatformAdapter):
             success=True,
             message_id=last_id,
             continuation_message_ids=tuple(continuation_ids),
+            raw_response={"message_ids": [str(message_id), *continuation_ids]},
         )
 
     async def delete_message(self, chat_id: str, message_id: str) -> bool:
@@ -9238,29 +9285,27 @@ class TelegramAdapter(BasePlatformAdapter):
         #    before the normal MarkdownV2 conversions run.
         text = _wrap_markdown_tables(text)
 
-        # 1) Protect fenced code blocks (``` ... ```)
-        #    Per MarkdownV2 spec, \ and ` inside pre/code must be escaped.
-        def _protect_fenced(m):
-            raw = m.group(0)
-            # Split off opening ``` (with optional language) and closing ```
-            open_end = raw.index('\n') + 1 if '\n' in raw[3:] else 3
-            opening = raw[:open_end]
-            body_and_close = raw[open_end:]
-            body = body_and_close[:-3]
-            body = body.replace('\\', '\\\\').replace('`', '\\`')
-            return _ph(opening + body + '```')
+        # 1) Protect source fenced bodies before any inline Markdown handling.
+        #    Use the same fence grammar as the splitter, so inline ``` literals
+        #    cannot terminate a block or become inline-code delimiters.
+        from gateway.platforms.helpers import fenced_code_regions
 
-        text = re.sub(
-            r'(```(?:[^\n]*\n)?[\s\S]*?```)',
-            _protect_fenced,
-            text,
-        )
+        parts = []
+        pos = 0
+        for start, body_start, body_end, end, language, _closed in fenced_code_regions(text):
+            parts.append(text[pos:start])
+            body = text[body_start:body_end].replace('\\', '\\\\').replace('`', '\\`')
+            parts.append(_ph(f'```{language}\n{body}```'))
+            pos = end
+        parts.append(text[pos:])
+        text = ''.join(parts)
 
-        # 2) Protect inline code (`...`)
-        #    Escape \ inside inline code per MarkdownV2 spec.
+        # 2) Protect inline code. Match a whole delimiter run, never a
+        #    single pair inside ``...`` / ```...``` (phantom visible ticks).
+        #    Source delimiters are syntax; Telegram uses one backtick pair.
         text = re.sub(
-            r'(`[^`]+`)',
-            lambda m: _ph(m.group(0).replace('\\', '\\\\')),
+            r'(?<!`)(`+)(?!`)([^`]+)\1(?!`)',
+            lambda m: _ph('`' + m.group(2).replace('\\', '\\\\').replace('`', '\\`') + '`'),
             text,
         )
 

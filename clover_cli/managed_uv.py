@@ -45,6 +45,9 @@ _VENV_NAME = "venv"
 _ALT_VENV_NAME = ".venv"
 _REPAIR_LOCK_NAME = "runtime-repair.lock"
 _MACOS_MANAGED_PYTHON_IDENTIFIER = "com.cloverc1.clover.managed-python"
+# The updater still runs in the old interpreter after a successful cutover.
+# Its sysconfig may name a removed minor-version site-packages directory.
+_REPAIRED_VENV_TARGETS: dict[Path, Path] = {}
 
 # ---------------------------------------------------------------------------
 # Public helpers
@@ -213,6 +216,96 @@ class _RepairLock:
     fd: int
 
 
+class RuntimeRepairIncomplete(SystemExit):
+    """A normal update cannot certify a known-vulnerable unrepaired runtime."""
+
+    def __init__(self) -> None:
+        super().__init__(1)
+
+
+def _failed_update_runtime_attempt(detail: str) -> RuntimeRepairResult:
+    """Re-probe after a failed provisioner; unknown is not measured unsafe."""
+    try:
+        live = _default_live_venv(_PROJECT_ROOT)
+        python = _venv_python(live)
+        if (live.is_symlink() or not (live / "pyvenv.cfg").is_file()
+                or not python.is_file()):
+            python = Path(sys.executable)
+        current = probe_sqlite_runtime(python)
+    except Exception:
+        current = None
+    return RuntimeRepairResult(
+        "failed", detail,
+        sqlite_before=current.sqlite_version_string if current is not None else "",
+    )
+
+
+def _finish_update_runtime_attempt(
+    repair: RuntimeRepairResult,
+    observer: Callable[[RuntimeRepairResult], None] | None,
+    *,
+    report_failure: bool = True,
+) -> None:
+    if observer is not None:
+        try:
+            observer(repair)
+        except Exception:
+            logger.debug("runtime repair observer failed", exc_info=True)
+    if repair.status == "refused":
+        # Ownership refusal forbids mutation, not an otherwise safe update.
+        # Inspect our already-loaded SQLite; never execute an unowned target.
+        import sqlite3
+        from clover_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable
+
+        try:
+            version = tuple(int(part) for part in sqlite3.sqlite_version.split("."))
+            vulnerable = len(version) == 3 and is_sqlite_wal_reset_vulnerable(version)
+        except (TypeError, ValueError):
+            vulnerable = False
+        if not vulnerable:
+            print("  ⚠ Runtime repair skipped: the target is not a proved owned virtual environment.")
+            return
+        print("  ✗ Update stopped: the runtime target is not a proved owned virtual environment.")
+        try:
+            from clover_cli.update_receipt import record_step
+            record_step("sqlite_runtime", False, "runtime ownership could not be established")
+        except Exception:
+            logger.debug("could not record runtime ownership refusal", exc_info=True)
+        raise RuntimeRepairIncomplete()
+    if repair.status not in {"failed", "skipped"}:
+        return
+    if not repair.sqlite_before:
+        if repair.status == "failed" and report_failure:
+            _report_runtime_repair_failure(repair)
+        return
+    try:
+        version = tuple(int(part) for part in repair.sqlite_before.split("."))
+        if len(version) != 3:
+            return
+        from clover_cli.sqlite_runtime import is_sqlite_wal_reset_vulnerable
+
+        vulnerable = is_sqlite_wal_reset_vulnerable(version)
+    except (TypeError, ValueError):
+        return  # an unknown probe result is not a fabricated unsafe diagnosis
+    if not vulnerable:
+        return
+    if repair.status == "failed" and report_failure:
+        _report_runtime_repair_failure(repair)
+    print("  ✗ Update incomplete: the known-vulnerable SQLite runtime was not repaired.")
+    print("    No unsafe WAL override was applied. Resolve the reported repair failure and retry `clover update`.")
+    try:
+        from clover_cli.update_receipt import record_step
+
+        record_step("sqlite_runtime", False,
+                    f"unrepaired SQLite {repair.sqlite_before}; status={repair.status}")
+    except Exception:
+        logger.debug("could not record runtime repair failure", exc_info=True)
+    # This is a command-boundary failure, not a changed ensure_uv return shape.
+    # BaseException inheritance also survives older update callers' broad
+    # `except Exception` warning paths; cmd_update records this nonzero exit.
+    raise RuntimeRepairIncomplete()
+
+
 def _report_runtime_repair_failure(repair: RuntimeRepairResult) -> None:
     if repair.backup_venv is None:
         print(
@@ -307,10 +400,10 @@ def _ensure_uv_path(
         # a second ``clover update``.
         try:
             repair = repair_vulnerable_runtime(result)
-            if repair_observer is not None:
-                repair_observer(repair)
             if repair.status == "failed":
                 _report_runtime_repair_failure(repair)
+            if repair_observer is not None:
+                repair_observer(repair)
         except Exception as exc:
             logger.warning("Managed Python runtime repair failed: %s", exc)
     else:
@@ -406,10 +499,44 @@ def update_managed_uv(
     vulnerable-runtime repair probe below ALWAYS runs — CVE-driven runtime
     repair must never be gated behind the freshness stamp.
     """
+    # This API is also used outside updates (e.g. setup). Only a real updater
+    # invocation can owe a fleet restart; keep ordinary uv maintenance read-only
+    # with respect to gateway discovery.
+    if 'update' in sys.argv[1:]:
+        from clover_cli.update_delivery_guard import require_delivery_safe_update
+        require_delivery_safe_update()
+
+    # This long-standing post-pull API also runs inside released gateways'
+    # PATH-selected updater. Continue under the proved requesting runtime before
+    # repairing the wrong venv or applying its unrelated restart ownership.
+    if sys.platform.startswith("linux") and "--gateway" in sys.argv[1:]:
+        from clover_cli.linux_gateway_update_bootstrap import continue_requesting_gateway_update
+        continue_requesting_gateway_update(_PROJECT_ROOT, _running_editable_venv(_PROJECT_ROOT))
+
     existing = resolve_uv()
     if not existing:
-        # Not installed yet — ensure_uv() will handle that elsewhere.
-        return None
+        # The legacy update API owns this attempt, including a fresh bootstrap.
+        # A later ensure_uv() call must not hide a failed unsafe-runtime repair.
+        repair_seen = False
+
+        def observe_bootstrap(repair: RuntimeRepairResult) -> None:
+            nonlocal repair_seen
+            repair_seen = True
+            if repair.status == "not-applicable":
+                repair = _failed_update_runtime_attempt("no supported owned runtime target was identified")
+                _finish_update_runtime_attempt(repair, repair_observer)
+            else:
+                _finish_update_runtime_attempt(repair, repair_observer, report_failure=False)
+
+        result = ensure_uv(repair_observer=observe_bootstrap)
+        if not repair_seen:
+            # Bootstrap can return a usable uv after catching a repair error.
+            # A truthy binary path is not evidence that runtime repair ran.
+            _finish_update_runtime_attempt(
+                _failed_update_runtime_attempt("managed uv bootstrap did not produce a verified runtime repair result"),
+                repair_observer,
+            )
+        return str(result) if result else None
 
     if force or not _uv_self_update_is_fresh():
         try:
@@ -446,15 +573,21 @@ def update_managed_uv(
     # what makes the migration happen on that first update.
     try:
         repair = repair_vulnerable_runtime(existing)
-        if repair_observer is not None:
-            repair_observer(repair)
-        if repair.status == "failed":
-            _report_runtime_repair_failure(repair)
     except Exception as exc:
-        # Runtime refresh is deliberately non-fatal. The live venv was not
-        # touched unless a fully prepared candidate reached cutover.
-        logger.warning("Managed Python runtime repair failed: %s", exc)
-        print(f"  ⚠ Managed Python runtime repair skipped: {exc}")
+        # Preserve the ordinary uv/dependency fallback for unknown failures.
+        # A measured unrepaired vulnerable runtime is handled below, outside
+        # this warning-only catch and before callers can report completion.
+        logger.warning("Managed Python runtime repair failed (%s)", type(exc).__name__)
+        _finish_update_runtime_attempt(
+            _failed_update_runtime_attempt("runtime repair failed before a verified result"),
+            repair_observer,
+        )
+    else:
+        if repair.status == "not-applicable":
+            # Custom installed layouts must not evade the runtime safety gate
+            # merely because checkout-local venv names are absent.
+            repair = _failed_update_runtime_attempt("no supported owned runtime target was identified")
+        _finish_update_runtime_attempt(repair, repair_observer)
     return existing
 
 
@@ -990,6 +1123,11 @@ def _cut_over_candidate(
 ) -> tuple[bool, Path | None, SQLiteRuntimeInfo | None, str]:
     live = live if live is not None else project_root / _VENV_NAME
     runtime_root = project_root / _RUNTIME_DIR_NAME
+    try:
+        if candidate.stat().st_dev != live.parent.stat().st_dev:
+            return False, None, None, "replacement and live environment are on different filesystems; no cutover attempted"
+    except OSError:
+        return False, None, None, "could not verify replacement filesystem; no cutover attempted"
     token = f"{int(time.time())}-{os.getpid()}-{uuid.uuid4().hex[:8]}"
     backup = live.with_name(f"{live.name}.stale.runtime-{token}")
     rejected = runtime_root / f"venv-rejected-{token}"
@@ -1178,22 +1316,61 @@ def _refresh_managed_uv_catalog(uv_bin: str) -> bool:
     return after != before
 
 
-def _default_live_venv(root: Path) -> Path:
-    """Return the venv that runtime repair should target for *root*.
+def _running_editable_venv(root: Path) -> Path | None:
+    """Prove the invoking venv belongs to this checkout, without guessing paths.
 
-    Managed installs create ``<checkout>/venv``, but uv-default and dev
-    checkouts use ``<checkout>/.venv``.  Historically only ``venv`` was
-    probed, so a ``.venv`` install linking a vulnerable SQLite returned
-    ``not-applicable`` on every ``clover update`` and stayed on
-    journal_mode=DELETE forever — even though the WAL fallback warning
-    promises that ``clover update`` repairs the runtime (issue class:
-    2,600x slower ``state.db`` appends under DELETE).
-
-    ``venv`` wins when it holds an interpreter (managed layout takes
-    precedence); otherwise fall back to ``.venv`` when that one does.
-    When neither has an interpreter, return the ``venv`` path so the
-    caller's existing ``not-applicable`` handling fires unchanged.
+    Inspect only this prefix's installed distribution metadata: source egg-info
+    can shadow ``metadata.distribution`` and a shared base Python is not install
+    identity. Ambient VIRTUAL_ENV/PYTHONPATH never select a mutation target.
     """
+    if sys.prefix == sys.base_prefix:
+        return None
+    live = Path(sys.prefix)
+    try:
+        if live.is_symlink() or not (live / "pyvenv.cfg").is_file():
+            return None
+        if not _venv_python(live).is_file():
+            return None
+        if not Path(sys.executable).parent.samefile(_venv_python(live).parent):
+            return None
+        if Path(sys.base_prefix).resolve().is_relative_to(live.resolve()):
+            return None  # never park a directory containing the base runtime
+        if not Path(__file__).resolve().parents[1].samefile(root):
+            return None
+        import sysconfig
+        from importlib import metadata
+        from clover_cli.update_preflight import editable_dir_from_direct_url
+
+        site = Path(sysconfig.get_path("purelib"))
+        if not site.resolve().is_relative_to(live.resolve()):
+            return None
+        owned = []
+        for dist in metadata.distributions(path=[str(site)]):
+            if (dist.metadata.get("Name") or "").lower().replace("_", "-") != "clover-c1":
+                continue
+            source = editable_dir_from_direct_url(dist.read_text("direct_url.json") or "")  # windows-footgun: ok — Distribution.read_text decodes UTF-8
+            # Ambiguous duplicate installation metadata is not ownership proof.
+            owned.append(source is not None and source.samefile(root))
+        return live if owned == [True] else None
+    except (OSError, ValueError, TypeError):
+        return None
+
+
+def _default_live_venv(root: Path) -> Path:
+    """Return an owned invoking venv, then the supported checkout-local layouts.
+
+    An out-of-tree editable installation keeps the same venv pathname through
+    repair, so its existing console scripts and service bindings select the new
+    interpreter on the next supported owner-invoked restart. Never infer that
+    target from a neighboring directory or a resolved base-interpreter symlink.
+    """
+    repaired = _REPAIRED_VENV_TARGETS.get(root.resolve())
+    if (repaired is not None and not repaired.is_symlink()
+            and (repaired / "pyvenv.cfg").is_file() and _venv_python(repaired).is_file()):
+        return repaired
+    running = _running_editable_venv(root)
+    if running is not None:
+        return running
     primary = root / _VENV_NAME
     if _venv_python(primary).is_file():
         return primary
@@ -1242,6 +1419,82 @@ def _sweep_stale_runtime_backups(
         _remove_tree(candidate, boundary=root)
 
 
+def _runtime_restart_pending_path(root: Path) -> Path:
+    return root / _RUNTIME_DIR_NAME / "restart-pending.json"
+
+
+def _runtime_restart_obligation_pending(root: Path) -> bool:
+    """All profiles importing this install share its runtime restart boundary.
+
+    The pointer does not create another restart mechanism. The existing owner
+    marker remains authoritative and is cleared only by the fleet verifier.
+    """
+    path = _runtime_restart_pending_path(root)
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+        owner = Path(data["owner_marker"])
+        if not owner.is_absolute() or owner.name != "fleet_restart_pending":
+            return True
+        return owner.is_file()
+    except FileNotFoundError:
+        return False
+    except (OSError, ValueError, KeyError, TypeError):
+        return True  # An unreadable obligation must not authorize new WAL.
+
+
+@dataclass
+class _RuntimeRestartObligation:
+    snapshots: list[tuple[Path, bytes | None, bytes]]
+
+    def restore(self) -> None:
+        """Undo only our writes, preserving any pre-existing pull obligation."""
+        for path, before, written in reversed(self.snapshots):
+            try:
+                if path.read_bytes() != written:
+                    continue  # Never erase a newer owner's obligation.
+                if before is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(before)
+            except OSError:
+                logger.debug("Could not restore runtime restart obligation", exc_info=True)
+
+
+def _arm_runtime_restart_obligation(
+    project_root: Path | None = None,
+) -> _RuntimeRestartObligation | None:
+    """Publish the existing owner breadcrumb to every same-install profile."""
+    obligation = _RuntimeRestartObligation([])
+    root = project_root if project_root is not None else _PROJECT_ROOT
+    try:
+        from clover_cli.update_cmd import (
+            _current_checkout_sha,
+            _fleet_restart_pending_marker_path,
+            _write_fleet_restart_pending_marker,
+        )
+        owner = _fleet_restart_pending_marker_path()
+        before_owner = owner.read_bytes() if owner.exists() else None
+        _write_fleet_restart_pending_marker(expected_sha=_current_checkout_sha())
+        written_owner = owner.read_bytes()
+        obligation.snapshots.append((owner, before_owner, written_owner))
+        shared = _runtime_restart_pending_path(root)
+        before_shared = shared.read_bytes() if shared.exists() else None
+        shared.parent.mkdir(parents=True, exist_ok=True)
+        written_shared = json.dumps({"owner_marker": str(owner.absolute())}).encode("utf-8")
+        temporary = shared.with_name(f"{shared.name}.tmp-{uuid.uuid4().hex}")
+        try:
+            temporary.write_bytes(written_shared)
+            temporary.replace(shared)
+        finally:
+            temporary.unlink(missing_ok=True)
+        obligation.snapshots.append((shared, before_shared, written_shared))
+        return obligation
+    except Exception:
+        obligation.restore()
+        logger.debug("Could not record runtime restart obligation", exc_info=True)
+        return None
+
+
 def repair_vulnerable_runtime(
     uv_bin: str,
     *,
@@ -1258,6 +1511,13 @@ def repair_vulnerable_runtime(
     live_python = _venv_python(live)
     if not (root / "pyproject.toml").is_file() or not live_python.is_file():
         return RuntimeRepairResult("not-applicable")
+    local_targets = {root.absolute() / _VENV_NAME, root.absolute() / _ALT_VENV_NAME}
+    if live.is_symlink() or not (live / "pyvenv.cfg").is_file():
+        return RuntimeRepairResult("refused", "virtual environment ownership could not be established")
+    if live.absolute() not in local_targets:
+        owned = _running_editable_venv(root) or _REPAIRED_VENV_TARGETS.get(root.resolve())
+        if owned is None or not owned.samefile(live):
+            return RuntimeRepairResult("refused", "external virtual environment ownership could not be established")
 
     current = probe_sqlite_runtime(live_python)
     if current is None:
@@ -1359,6 +1619,16 @@ def repair_vulnerable_runtime(
                 sqlite_after=candidate_info.sqlite_version_string,
             )
 
+        restart_obligation = _arm_runtime_restart_obligation(root)
+        if restart_obligation is None:
+            _remove_tree(candidate, boundary=runtime_root)
+            _remove_tree(generation, boundary=managed_python_install_dir(root))
+            return RuntimeRepairResult(
+                "failed",
+                "could not record the required owner gateway restart; live runtime unchanged",
+                sqlite_before=current.sqlite_version_string,
+                sqlite_after=candidate_info.sqlite_version_string,
+            )
         cut_over, backup, final_info, cutover_detail = _cut_over_candidate(
             candidate,
             project_root=root,
@@ -1366,6 +1636,9 @@ def repair_vulnerable_runtime(
         )
         if not cut_over:
             if backup is None:
+                # The old runtime is unchanged or restored. Undo our marker
+                # writes, not an earlier pull's independent restart obligation.
+                restart_obligation.restore()
                 _remove_tree(candidate, boundary=runtime_root)
                 _remove_tree(generation, boundary=managed_python_install_dir(root))
             return RuntimeRepairResult(
@@ -1378,6 +1651,10 @@ def repair_vulnerable_runtime(
                 backup_venv=backup,
             )
 
+        if live.absolute() not in local_targets:
+            # Retain the already-proved target for this updater only; do not
+            # rediscover ownership through the old minor's stale sysconfig.
+            _REPAIRED_VENV_TARGETS[root.resolve()] = live
         final_version = (
             final_info.sqlite_version_string
             if final_info is not None
@@ -1454,7 +1731,14 @@ def _install_uv_posix(env: dict[str, str]) -> None:
 
 
 def _install_uv_windows(env: dict[str, str]) -> None:
-    """Invoke the PowerShell installer."""
+    """Invoke the Windows PowerShell installer with its own module search path."""
+    # A pwsh -> Python -> powershell launch preserves Core's PSModulePath.
+    # Desktop PowerShell can then autoload Core's incompatible Security module
+    # and fail at Get-ExecutionPolicy before the official installer runs.
+    # Let the child reconstruct its native defaults; leave the caller, install
+    # destination and execution-policy settings untouched. Windows env keys are
+    # case-insensitive, including dictionaries copied from os.environ.
+    env = {key: value for key, value in env.items() if key.upper() != "PSMODULEPATH"}
     cmd = "irm https://astral.sh/uv/install.ps1 | iex"
     subprocess.run(
         ["powershell", "-ExecutionPolicy", "Bypass", "-c", cmd],
