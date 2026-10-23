@@ -150,3 +150,35 @@ def require_delivery_safe_update() -> dict:
     except Exception:
         pass  # the receipt is evidence, not a gate
     return record
+
+
+def disarm_owned_restart_watcher() -> bool:
+    """Stand down THIS updater's detached rollback watcher. Returns True if it was disarmed.
+
+    Used when the updater stops after the pull but before any restart. The
+    frozen watcher would otherwise see "updater gone, HEAD moved, gateway still
+    old", probe the intentionally still-old gateway, roll the checkout back and
+    relaunch it. Only a beacon bound to our own live PID and create time is
+    removed; another updater's beacon, the fleet restart marker, the snapshot
+    and the database are never touched.
+    """
+    import os
+    from clover_cli import update_restart_watcher as watcher
+
+    beacon = watcher.beacon_path()
+    try:
+        raw = beacon.read_bytes()
+        data = json.loads(raw)
+    except (OSError, ValueError):
+        return False
+    if not (data.get('updater_pid') == os.getpid()
+            and data.get('updater_create_time') is not None
+            and watcher._updater_identity_alive(data) is True):
+        return False
+    try:
+        if beacon.read_bytes() != raw:
+            return False
+        beacon.unlink()
+    except OSError:
+        return False
+    return True

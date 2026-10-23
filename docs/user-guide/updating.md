@@ -1,50 +1,65 @@
 # Updating Clover
 
-## Legacy gateway maintenance
+Run `/update` in chat, or `clover update` in a terminal. Both work the same way
+on every version, including Clover 1.5.6 and older. You do not need to stop the
+gateway or schedule a maintenance window first.
 
-A gateway started before the delivery-aware restart repair cannot prove that
-all replies have finished when its agent count reaches zero. Updating its
-files does not change its already-loaded restart code.
+## Updating from Clover 1.5.6 or older
 
-The normal updater therefore refuses automatic restart with exit status 2
-when a running gateway does not advertise the delivery-aware restart contract.
-This check is mandatory, including with `--skip-preflight` or `--force`.
-The running gateway and unresolved delivery records remain intact. A refusal
-is **not** a successful upgrade. A released updater may already have pulled
-new files and created a consistent pre-update snapshot before it reaches the
-new check. Those files are staged; the process still runs its old code.
-The pending restart marker remains so this state is not mistaken for activation.
+A gateway started before 1.5.7 has the old restart code loaded, and an update
+cannot change code that is already running. The update therefore handles that
+one gateway with extra care:
 
-A one-time maintenance window is required:
+1. The update downloads the new files and installs the new version.
+2. Before the old gateway is restarted, the updater waits for a quiet moment:
+   no agent is working and no reply of that gateway is still being sent. It
+   waits up to 90 seconds, then restarts anyway, so an update is never stuck.
+3. The gateway restarts on the new version. From then on it uses the normal
+   delivery-aware restart and none of this applies again.
 
-1. From outside the gateway, pause every incoming and internal producer,
-   including automation, queued follow-ups, and connected clients. Do not use
-   an agent-count sample or an empty delivery ledger as proof of quiescence.
-   The old external-drain control gates human turns only; it does not fence
-   every internal producer.
-2. Let all previously accepted work finish. Establish that every transport
-   carrier has completed and every applicable durable delivery acknowledgement
-   belongs to the original process. If any delivery is uncertain, or you cannot
-   establish that boundary, **defer maintenance**. Do not forge acknowledgements,
-   suppress recovery, rely on a timeout, or force-kill the process.
-3. Only after that boundary is established, use the supported commands from
-   the installation's terminal: `clover gateway stop`, then `clover update --yes`.
-   Always run `clover gateway start` afterward, even if the update fails.
-   Check `clover gateway status` and the update receipt before resuming producers.
-4. Keep the pre-update source pin and consistent state snapshot. If source
-   rollback is needed, stop the quiescent service, restore the prior code and
-   compatible environment, preserve the latest database and unresolved delivery
-   records, and always start the gateway again. Never overwrite newer work with
-   an older database snapshot merely to undo a code update.
+What you can see the first time, only if a reply was being sent at the exact
+moment of the restart:
 
-There is no universal automatic first-transition guarantee for this legacy
-process. A controlled maintenance trial does not prove arbitrary live traffic
-is quiescent. Repaired gateways retain the normal automatic update path; they
-track outer reply carriers through transport completion and durable ACK.
+- **One reply may arrive twice.** The second copy starts with
+  "Recovered reply ... may be a duplicate". Only ordinary reply text is ever
+  sent again. Tools, scheduled jobs, payments and messages to other people are
+  not run a second time.
+- Slash-command answers (for example the `/update` result itself) are not
+  tracked by the old gateway, so they cannot be recovered if the restart lands
+  exactly while they are being sent.
+- Your saved sessions and data are not changed or replaced by the update. The
+  database format is the same in 1.5.6 and later, so rolling back the code
+  still reads it.
 
-The compatibility hook is reached by released Git updaters that freshly import
-`managed_uv.update_managed_uv` after pulling. A released entry point that stops
-its gateway **before** that import cannot be retroactively protected by this
-hook (notably old Windows pause-before-pull flows). Use acknowledged maintenance
-for those installations; do not treat a candidate-only check as first-update
-coverage on an untested old entry point.
+If the update cannot finish (for example, it is offline and cannot repair an
+old SQLite library while a database is in WAL mode), it says so plainly: the
+new files were downloaded, the running version was **not** restarted, and
+`clover update` can be run again to finish. It never reports "nothing was
+changed" after files were downloaded.
+
+When the Python runtime's SQLite is too old and cannot be replaced right now
+(no network, no `uv`), but every Clover database is already in the safe
+rollback-journal mode, the update continues with a warning instead of failing.
+Clover keeps its databases out of WAL mode on that runtime, and the next
+`clover update` retries the repair.
+
+## Windows: the first update from 1.5.6
+
+On Windows the 1.5.6 updater pauses and may stop the gateway **before** it
+downloads the new files, so none of the steps above can protect that single
+update. Expect the gateway to be down for a short time while the update runs,
+and any chat message being answered at that moment may be interrupted. Your
+data is kept, and the gateway comes back on the new version at the end. Every
+later update uses the safe path.
+
+If the gateway is not running after a Windows update, run
+`clover gateway start`.
+
+## Rolling back
+
+The update takes a consistent snapshot of your state before changing anything,
+and a watcher restores the previous code and configuration if the new gateway
+does not become healthy within about 90 seconds. The database is never rolled
+back automatically; the format has not changed, so the older version reads the
+latest data. Do not overwrite a newer database with an older snapshot just to
+undo a code update.

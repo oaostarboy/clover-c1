@@ -235,3 +235,48 @@ def test_kanban_connect_uses_the_vulnerable_sqlite_fallback():
     import inspect
     from clover_cli import kanban_db
     assert 'apply_wal_with_fallback' in inspect.getsource(kanban_db)
+
+
+@pytest.mark.parametrize('status,sqlite_before', [('failed', '3.50.4'), ('refused', '')])
+def test_remaining_stop_is_truthful_about_pulled_files(tmp_path, monkeypatch, capsys, status, sqlite_before):
+    """A WAL database on a vulnerable runtime still stops the update. The message must
+    say the files were downloaded and nothing was restarted, never 'nothing was changed'."""
+    import sqlite3
+    monkeypatch.setattr(sqlite3, 'sqlite_version', '3.50.4')
+    uv = tmp_path / 'uv'
+    uv.write_text('synthetic', encoding='utf-8')
+    repair = m.RuntimeRepairResult(status, 'provisioning unavailable', sqlite_before=sqlite_before)
+    with (patch.object(m, 'resolve_uv', return_value=str(uv)),
+          patch.object(m, '_uv_self_update_is_fresh', return_value=True),
+          patch.object(m, 'repair_vulnerable_runtime', return_value=repair)):
+        with pytest.raises(SystemExit):
+            m.update_managed_uv()
+    out = capsys.readouterr().out
+    assert 'already downloaded' in out and 'NOT restarted' in out
+    assert 'nothing was changed' not in out.lower()
+
+
+@pytest.mark.parametrize('owned', [True, False])
+def test_remaining_stop_stands_down_only_its_own_watcher(tmp_path, monkeypatch, capsys, owned):
+    import json
+    import os
+    import sqlite3
+    from clover_cli import update_restart_watcher as watcher
+    monkeypatch.setattr(sqlite3, 'sqlite_version', '3.50.4')
+    owner = os.getpid() if owned else os.getpid() + 1
+    beacon = watcher.beacon_path()
+    beacon.write_text(json.dumps({
+        'updater_pid': owner, 'updater_create_time': watcher._process_create_time(owner),
+        'pre_pull_sha': 'old', 'repo': 'staged-source'}))
+    marker = beacon.parent / 'fleet_restart_pending'
+    marker.write_text('owed')
+    uv = tmp_path / 'uv'
+    uv.write_text('synthetic', encoding='utf-8')
+    repair = m.RuntimeRepairResult('failed', 'offline', sqlite_before='3.50.4')
+    with (patch.object(m, 'resolve_uv', return_value=str(uv)),
+          patch.object(m, '_uv_self_update_is_fresh', return_value=True),
+          patch.object(m, 'repair_vulnerable_runtime', return_value=repair)):
+        with pytest.raises(SystemExit):
+            m.update_managed_uv()
+    assert beacon.exists() is (not owned)
+    assert marker.read_text() == 'owed'          # a restart really is owed; keep it

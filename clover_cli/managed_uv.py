@@ -240,6 +240,21 @@ def _failed_update_runtime_attempt(detail: str) -> RuntimeRepairResult:
     )
 
 
+def _print_pulled_not_restarted() -> None:
+    """Say what this stop actually left behind (never "nothing was changed")."""
+    try:
+        from clover_cli.update_delivery_guard import disarm_owned_restart_watcher
+
+        # Without this the detached watcher would roll the checkout back and
+        # relaunch the gateway behind our back, which is a second half-state.
+        disarm_owned_restart_watcher()
+    except Exception:
+        logger.debug("could not stand down the restart watcher", exc_info=True)
+    print("    The new files were already downloaded, but the running version was NOT restarted and keeps")
+    print("    running the version it had. Your data was not changed. Run `clover update` again to finish:")
+    print("    the restart that is still owed is kept and will be completed then.")
+
+
 def _clover_databases_in_wal_mode() -> list[str]:
     """Names of Clover SQLite files whose on-disk header says WAL. Read-only.
 
@@ -334,6 +349,7 @@ def _finish_update_runtime_attempt(
         if _repair_failure_is_safe_to_continue(repair):
             return
         print("  ✗ Update stopped: the runtime target is not a proved owned virtual environment.")
+        _print_pulled_not_restarted()
         try:
             from clover_cli.update_receipt import record_step
             record_step("sqlite_runtime", False, "runtime ownership could not be established")
@@ -363,6 +379,7 @@ def _finish_update_runtime_attempt(
         return
     print("  ✗ Update incomplete: the known-vulnerable SQLite runtime was not repaired.")
     print("    No unsafe WAL override was applied. Resolve the reported repair failure and retry `clover update`.")
+    _print_pulled_not_restarted()
     try:
         from clover_cli.update_receipt import record_step
 
