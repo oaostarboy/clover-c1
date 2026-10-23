@@ -12,6 +12,49 @@ from pathlib import Path
 CAPABILITY = 'reply-carriers-through-ack-v1'
 
 
+def _proved_stderr_wrapper(pid: int, admitted: dict[int, tuple[Path, int]]) -> bool:
+    """Recognize only our exact wrapper around an already admitted direct child.
+
+    A parent relationship alone is not evidence: another gateway, an unreadable
+    parent, or a wrapper whose worker lacks capability must still block update.
+    """
+    import psutil
+    from gateway.status import _get_process_start_time
+    from clover_cli.stderr_timestamp import _is_clover_gateway_run_argv, _prepare_child_command
+
+    try:
+        start = _get_process_start_time(pid)
+        if start is None:
+            return False
+        wrapper = psutil.Process(pid)
+        argv = wrapper.cmdline()
+        if (len(argv) < 7 or not Path(argv[0]).is_absolute()
+                or argv[1:4] != ['-m', 'clover_cli.stderr_timestamp', '--error-log']
+                or argv[5] != '--'):
+            return False
+        command = argv[6:]
+        if command[0] != argv[0] or not _is_clover_gateway_run_argv(command):
+            return False
+        for child_pid, (home, child_start) in admitted.items():
+            child = psutil.Process(child_pid)
+            if child.ppid() != pid:
+                continue
+            child_command = child.cmdline()
+            if child_command != command:
+                # Historical launchd plists omit the flag which the loaded
+                # wrapper adds. Require its real environment, not ambient env.
+                if child_command != _prepare_child_command(command, wrapper.environ()):
+                    continue
+            if (Path(argv[4]).resolve() == (home/'logs/gateway.error.log').resolve()
+                    and _get_process_start_time(child_pid) == child_start
+                    and child.ppid() == pid
+                    and _get_process_start_time(pid) == start):
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _unsafe_gateways() -> list[str]:
     from clover_cli.gateway import find_gateway_pids, find_profile_gateway_processes
     from clover_cli.update_cmd import _gateway_pid_install_verdict
@@ -20,6 +63,8 @@ def _unsafe_gateways() -> list[str]:
     processes = find_profile_gateway_processes(strict=True)
     by_pid = {p.pid: p for p in processes}
     reasons = []
+    admitted = {}
+    unmapped = []
     for pid in set(find_gateway_pids(all_profiles=True)) | set(by_pid):
         verdict = _gateway_pid_install_verdict(pid)
         proc = by_pid.get(pid)
@@ -28,7 +73,7 @@ def _unsafe_gateways() -> list[str]:
         if proc is None and verdict == 'other':
             continue
         if proc is None:
-            reasons.append(f'PID {pid}: no owner-bound gateway status')
+            unmapped.append(pid)
             continue
         try:
             row = json.loads((proc.path/'gateway_state.json').read_text(encoding='utf-8'))
@@ -48,6 +93,11 @@ def _unsafe_gateways() -> list[str]:
             valid = False
         if not valid:
             reasons.append(f'{proc.profile} (PID {pid}): delivery-aware restart is not established')
+        else:
+            admitted[pid] = (proc.path, row['start_time'])
+    for pid in unmapped:
+        if not _proved_stderr_wrapper(pid, admitted):
+            reasons.append(f'PID {pid}: no owner-bound gateway status')
     return reasons
 
 
