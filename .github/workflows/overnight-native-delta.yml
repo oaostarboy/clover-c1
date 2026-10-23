@@ -10,8 +10,8 @@ concurrency:
 env:
   PYTHONUTF8: '1'
   PYTHONIOENCODING: utf-8
-  TARGET_SHA: 6267ef819660df0947ee94a78bcc9d3cbcdc8c64
-  TARGET_TREE: 3f4ce3464f4dd7d17ee88d2244e00ceb984c8d5e
+  TARGET_SHA: 0f073c982443d9cb3f7ed5c4271100a148ae6c69
+  TARGET_TREE: 85ab9094f93aedd955e178f59d0f0eb9c67a543f
 jobs:
   delta:
     name: Exact source delta / ${{ matrix.os }}
@@ -28,7 +28,7 @@ jobs:
           GIT_CONFIG_KEY_0: core.autocrlf
           GIT_CONFIG_VALUE_0: 'false'
         with:
-          ref: 6267ef819660df0947ee94a78bcc9d3cbcdc8c64
+          ref: 0f073c982443d9cb3f7ed5c4271100a148ae6c69
           fetch-depth: 1
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
