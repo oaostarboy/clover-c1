@@ -188,8 +188,10 @@ def legacy_install(tmp_path):
     origin = tmp_path / "origin.git"
     _git("init", "--bare", "-q", str(origin))
     # Explicit refs (not FETCH_HEAD): the CI checkout is shallow and detached.
-    _git("fetch", "--no-tags", "-q", str(REPO), f"{V156_SHA}:refs/heads/base156", cwd=origin)
-    _git("fetch", "--no-tags", "-q", str(REPO), "HEAD:refs/heads/under-test", cwd=origin)
+    # Depth 1 on both: the CI checkout is shallow, and a shallow install is the
+    # installer's default shape, so the released updater must handle it anyway.
+    _git("fetch", "--no-tags", "--depth=1", "-q", str(REPO), f"{V156_SHA}:refs/heads/base156", cwd=origin)
+    _git("fetch", "--no-tags", "--depth=1", "-q", str(REPO), "HEAD:refs/heads/under-test", cwd=origin)
     head_tree = _git("rev-parse", "refs/heads/under-test^{tree}", cwd=origin)
     ident = {**os.environ, "GIT_AUTHOR_NAME": "t", "GIT_AUTHOR_EMAIL": "t@example.invalid",
              "GIT_COMMITTER_NAME": "t", "GIT_COMMITTER_EMAIL": "t@example.invalid"}
@@ -200,10 +202,10 @@ def legacy_install(tmp_path):
     install = tmp_path / "clover-c1"
     install.mkdir()
     _git("init", "-q", "-b", "main", cwd=install)
-    _git("fetch", "--no-tags", "-q", str(origin), V156_SHA, cwd=install)
+    _git("fetch", "--no-tags", "--depth=1", "-q", str(origin), V156_SHA, cwd=install)
     _git("checkout", "-q", "-B", "main", V156_SHA, cwd=install)
     _git("remote", "add", "origin", str(origin), cwd=install)
-    _git("fetch", "--no-tags", "-q", "origin", "main", cwd=install)
+    _git("fetch", "--no-tags", "--depth=1", "-q", "origin", "main", cwd=install)
     _git("branch", "--set-upstream-to=origin/main", "main", cwd=install)
     assert _git("rev-parse", "HEAD", cwd=install) == V156_SHA
     assert (install / "clover_cli" / "update_cmd.py").read_text(encoding="utf-8").rstrip() == \
