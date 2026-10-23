@@ -6133,7 +6133,7 @@ class BasePlatformAdapter(ABC):
             yield
             return
         carriers[task] = session_key
-        if getattr(runner, "_reply_delivery_closing", False):
+        if getattr(runner, "_reply_delivery_closing", False) is True:
             # A predecessor's finally may have spawned us after forced cleanup
             # took its snapshot (or even exhausted its bound). Inherit shutdown
             # cancellation at the first suspension, without dropping ownership
