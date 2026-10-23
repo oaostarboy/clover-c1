@@ -51,7 +51,11 @@ def test_plugin_db_opens_wal_sqlite_in_the_data_dir(clover_home):
         conn.commit()
 
         mode = conn.execute("PRAGMA journal_mode").fetchone()[0]
-        assert mode == "wal"
+        # plugin_db follows the shared WAL policy: WAL on a SQLite with the
+        # WAL-reset fix, rollback journal on a vulnerable build.
+        from clover_state import is_sqlite_wal_reset_vulnerable
+
+        assert mode == ("delete" if is_sqlite_wal_reset_vulnerable() else "wal")
     finally:
         conn.close()
 
