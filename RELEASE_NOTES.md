@@ -20,7 +20,7 @@ HOW TO EDIT (by hand, at release time)
 - Older gateways may need one terminal maintenance update before automatic updates work again.
 - Managed Python repair checks SQLite safety and preserves the latest saved work.
 - macOS updates recognize verified service wrappers without trusting unknown processes.
-- Windows updates allow cold process checks to finish before rejecting their result record.
+- Windows updates verify their own process chain and recognize managed Python path aliases.
 - Busy storage and interrupted jobs now report uncertainty instead of claiming work did not run.
 
 ## 1.5.6 | Clover C1.5.6 | 2026-10-16
