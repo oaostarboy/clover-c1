@@ -22,6 +22,7 @@ import time
 import uuid
 import weakref
 from abc import ABC, abstractmethod
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 
 from utils import normalize_proxy_url
@@ -3406,6 +3407,16 @@ class BasePlatformAdapter(ABC):
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
+        # Overrides (e.g. Photon) must retain the base retry method's delivery
+        # ownership even when they intentionally replace its retry policy.
+        retry = cls.__dict__.get("_send_with_retry")
+        if retry is not None:
+            @functools.wraps(retry)
+            async def _tracked_retry(self, *args: Any, **kw: Any):
+                with self._reply_delivery_carrier():
+                    return await retry(self, *args, **kw)
+
+            cls._send_with_retry = _tracked_retry
         # Every new message the bot posts lets running subagent cards in that
         # chat follow it (gateway.delegation_activity.note_outbound).
         send = cls.__dict__.get("send")
@@ -6101,7 +6112,56 @@ class BasePlatformAdapter(ABC):
                 and (raw.get("delivery_uncertain") or raw.get("message_ids")))
         )
 
+    @contextmanager
+    def _reply_delivery_carrier(self, session_key: Optional[str] = None):
+        """Keep delivery owned by the runner even if this adapter is replaced.
+
+        Nested sends in a normal turn reuse its session-keyed carrier. Inline
+        bypass-command replies have no session task, so track their send task
+        independently. No await may separate registration from the operation.
+        """
+        runner = getattr(self, "gateway_runner", None)
+        task = asyncio.current_task()
+        if runner is None or task is None:
+            yield
+            return
+        carriers = getattr(runner, "_reply_delivery_tasks", None)
+        if not isinstance(carriers, dict):
+            carriers = {}
+            runner._reply_delivery_tasks = carriers
+        if task in carriers:
+            yield
+            return
+        carriers[task] = session_key
+        if getattr(runner, "_reply_delivery_closing", False):
+            # A predecessor's finally may have spawned us after forced cleanup
+            # took its snapshot (or even exhausted its bound). Inherit shutdown
+            # cancellation at the first suspension, without dropping ownership
+            # or pretending an uncertain send was acknowledged.
+            from agent.async_utils import consume_detached_task_result
+
+            task.add_done_callback(consume_detached_task_result)
+            task.cancel()
+        try:
+            yield
+        finally:
+            carriers.pop(task, None)
+
     async def _send_with_retry(
+        self,
+        chat_id: str,
+        content: str,
+        reply_to: Optional[str] = None,
+        metadata: Any = None,
+        max_retries: int = 2,
+        base_delay: float = 2.0,
+    ) -> "SendResult":
+        with self._reply_delivery_carrier():
+            return await self._send_with_retry_inner(
+                chat_id, content, reply_to, metadata, max_retries, base_delay
+            )
+
+    async def _send_with_retry_inner(
         self,
         chat_id: str,
         content: str,
@@ -6964,6 +7024,10 @@ class BasePlatformAdapter(ABC):
         return random.uniform(min_ms / 1000.0, max_ms / 1000.0)
 
     async def _process_message_background(self, event: MessageEvent, session_key: str) -> None:
+        with self._reply_delivery_carrier(session_key):
+            await self._process_message_background_inner(event, session_key)
+
+    async def _process_message_background_inner(self, event: MessageEvent, session_key: str) -> None:
         """Background task that actually processes the message."""
         # Track delivery outcomes for the processing-complete hook
         delivery_attempted = False
