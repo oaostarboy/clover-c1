@@ -35,6 +35,9 @@ def test_catchup_drains_owned_gateway_before_systemd_can_stop_it(tmp_path,monkey
 
 
 def test_failed_catchup_drain_is_not_killed_by_later_survivor_sweep(monkeypatch):
+    # This fixture tests the post-admission survivor policy, not compatibility.
+    from clover_cli import update_delivery_guard
+    monkeypatch.setattr(update_delivery_guard, 'require_delivery_safe_update', lambda: None)
     monkeypatch.setattr(u,'_m',lambda:SimpleNamespace(_purge_stale_clover_modules=lambda:None))
     monkeypatch.setattr(u,'_own_install_gateway_pids',lambda pids:list(pids))
     monkeypatch.setattr(g,'find_gateway_pids',lambda **kw:[4321])
