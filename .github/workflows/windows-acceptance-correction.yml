@@ -19,7 +19,7 @@ jobs:
     steps:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 8b39d09cb38a7d06d220030e69554b884a1f25e3
+          ref: 801aea63f7d5d60b73e4dea1889ab315723a17c1
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
@@ -51,7 +51,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 8b39d09cb38a7d06d220030e69554b884a1f25e3
+          ref: 801aea63f7d5d60b73e4dea1889ab315723a17c1
           path: source
           persist-credentials: false
       - name: Diagnose actual npm under the fixture environment
@@ -88,7 +88,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 8b39d09cb38a7d06d220030e69554b884a1f25e3
+          ref: 801aea63f7d5d60b73e4dea1889ab315723a17c1
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -107,8 +107,8 @@ jobs:
           if [[ $BASE == fixed ]]; then old=e1eac70b63afcbf4152cb7c8e965f997d93cca32; fi
           uv run --no-project --with psutil python helpers/.github/native-proof/guard_native_upgrade.py \
             --source "$GITHUB_WORKSPACE/source" --old "$old" --entry "$ENTRY" \
-            --target 8b39d09cb38a7d06d220030e69554b884a1f25e3 \
-            --tree 684ac141267eca41d5a5b2f94c83f768ea0a76d8 \
+            --target 801aea63f7d5d60b73e4dea1889ab315723a17c1 \
+            --tree d0846579f4bfff28f651ca29979a6a69cc356310 \
             --fixed-base e1eac70b63afcbf4152cb7c8e965f997d93cca32 \
             --evidence "$RUNNER_TEMP/evidence"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -133,7 +133,7 @@ jobs:
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 8b39d09cb38a7d06d220030e69554b884a1f25e3
+          ref: 801aea63f7d5d60b73e4dea1889ab315723a17c1
           path: source
           fetch-depth: 0
           persist-credentials: false
@@ -147,7 +147,7 @@ jobs:
       - name: Actual failed promotion preserves newest state
         shell: pwsh
         run: |
-          python helpers/.github/windows-external-runtime/probe.py --source source --target-sha 8b39d09cb38a7d06d220030e69554b884a1f25e3 --target-tree 684ac141267eca41d5a5b2f94c83f768ea0a76d8 --old-sha 9535350bee1d57cf7e466672e6f416403886bec1 --case smoke-rollback --evidence "$env:RUNNER_TEMP/evidence"
+          python helpers/.github/windows-external-runtime/probe.py --source source --target-sha 801aea63f7d5d60b73e4dea1889ab315723a17c1 --target-tree d0846579f4bfff28f651ca29979a6a69cc356310 --old-sha 9535350bee1d57cf7e466672e6f416403886bec1 --case smoke-rollback --evidence "$env:RUNNER_TEMP/evidence"
           if ($LASTEXITCODE -ne 0) { throw 'Native rollback probe failed' }
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
