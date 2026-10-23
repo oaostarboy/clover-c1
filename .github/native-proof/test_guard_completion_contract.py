@@ -43,6 +43,31 @@ def test_absent_marker_remains_a_failed_observation(tmp_path, monkeypatch):
     assert not (tmp_path / 'gateway-update-exit.json').exists()
 
 
+def test_receipt_observer_waits_for_logical_child_and_retains_failure(tmp_path, monkeypatch):
+    from datetime import datetime, timezone
+    receipt_dir = tmp_path / 'logs/update_receipts'
+    receipt_dir.mkdir(parents=True)
+    path = receipt_dir / 'latest.json'
+    running = {'outcome': 'running', 'finished_at': None}
+    path.write_text(json.dumps(running))
+    final = {'outcome': 'success', 'started_at': datetime.fromtimestamp(1, timezone.utc).isoformat(),
+             'finished_at': datetime.fromtimestamp(2, timezone.utc).isoformat(),
+             'pre_update': {'sha': 'a' * 40}, 'post_update': {'sha': 'b' * 40}}
+    clock = [0.0]
+    def sleep(delay):
+        clock[0] += delay
+        if clock[0] >= 3:
+            path.write_text(json.dumps(final))
+    monkeypatch.setattr(module, 'time', SimpleNamespace(monotonic=lambda: clock[0], sleep=sleep))
+    assert module.wait_update_receipt(tmp_path, tmp_path, 0, 'a' * 40, 'b' * 40) == final
+    assert clock[0] == 3
+    final['outcome'] = 'failed'
+    path.write_text(json.dumps(final))
+    with pytest.raises(ValueError, match='receipt'):
+        module.wait_update_receipt(tmp_path, tmp_path, 0, 'a' * 40, 'b' * 40)
+    assert json.loads((tmp_path / 'update-receipt.json').read_text())['outcome'] == 'failed'
+
+
 def test_legacy_boundary_requires_old_source_at_actual_original_death():
     death = {'state': {'pid': 42, 'code_sha': 'a' * 40}, 'pid_alive': False, 'disk_sha': 'a' * 40}
     assert module.legacy_stop_witness([death], 42, 'a' * 40) == death

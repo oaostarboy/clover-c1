@@ -77,6 +77,20 @@ def wait_update_exit(home, update, evidence, *, seconds=1800):
     return rc
 
 
+def wait_update_receipt(home, evidence, began, old, target, *, seconds=1800):
+    """Wait for the logical run, not a shim parent's provisional exit zero."""
+    path = home / 'logs/update_receipts/latest.json'
+    def completed():
+        data = read_json(path)
+        return data if data.get('finished_at') and data.get('outcome') != 'running' else None
+    data = wait_for(completed, seconds)
+    # Preserve the actual terminal failure/partial receipt before rejecting it.
+    shutil.copy2(path, evidence / 'update-receipt.json')
+    import proof
+    proof.check_receipt(data, began, old, target)
+    return data
+
+
 def legacy_stop_witness(trace, original_pid, old):
     died = next((x for x in trace if x.get('state', {}).get('pid') == original_pid
                  and x.get('pid_alive') is False), None)
@@ -515,6 +529,10 @@ def main(a):
             assert a.old != a.fixed_base, 'capability-aware fixed base falsely refused the automatic update'
             return
         assert rc==0
+        logical_receipt = wait_update_receipt(home, evidence, began, a.old, a.target)
+        dump(evidence / 'logical-update-completion.json', dict(outcome=logical_receipt['outcome'],
+            pre_sha=logical_receipt['pre_update']['sha'], post_sha=logical_receipt['post_update']['sha'],
+            started_at=logical_receipt['started_at'], finished_at=logical_receipt['finished_at']))
         if WINDOWS and a.old != a.fixed_base:
             died = legacy_stop_witness(trace, before['state']['pid'], a.old)
             assert git('rev-parse', 'HEAD') == a.target, 'target did not land after legacy stop'
