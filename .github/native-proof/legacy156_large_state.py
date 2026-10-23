@@ -105,11 +105,29 @@ def rollback(source, home, evidence, python, old, target, supervisor):
     dump(evidence/'rollback-newest-product-record.json',newest)
     before=saved()
     dump(evidence/'rollback-newest-state-before.json',before)
-    # Deliberate post-acceptance cold-start failure injection. This is not a
-    # restart performed to rescue an unsuccessful ordinary updater row.
+    # An explicitly stopped systemd unit is intentionally excluded by the
+    # released watcher. Use an actual bad-start descendant in the disposable
+    # clone instead of mislabelling deliberate deactivation as startup failure.
+    if supervisor == 'systemd':
+        gateway=source/'clover_cli/gateway.py'
+        gateway.write_text(gateway.read_text()+
+            "\n\ndef run_gateway(*args, **kwargs):\n"
+            "    raise RuntimeError('NATIVE_FIXTURE_ONLY: candidate gateway startup fails')\n")
+        subprocess.run(['git','-C',str(source),'add','clover_cli/gateway.py'],check=True)
+        subprocess.run(['git','-C',str(source),'-c','user.name=Native verifier',
+                        '-c','user.email=native-verifier@example.invalid','commit','-m',
+                        'test-only bad-start descendant; never publish'],check=True,
+                       capture_output=True,text=True)
+        dump(evidence/'rollback-bad-start-pin.json',dict(parent=target,
+             sha=git('rev-parse','HEAD'),tree=git('rev-parse','HEAD^{tree}'),
+             patch=git('diff',target,'HEAD','--','clover_cli/gateway.py')))
+        command=['systemctl','--user','restart','clover-gateway.service']
+    else:
+        command=[str(python),'-m','clover_cli.main','gateway','stop']
+    # Driver fault injection follows happy-path acceptance; it is never rescue.
     with (evidence/'rollback-fault-stop.log').open('w') as log:
-        subprocess.run([str(python),'-m','clover_cli.main','gateway','stop'],cwd=source,
-                       stdout=log,stderr=subprocess.STDOUT,check=True,timeout=180)
+        subprocess.run(command,cwd=source,stdout=log,stderr=subprocess.STDOUT,
+                       check=True,timeout=180)
     import psutil
     deadline=time.monotonic()+90
     while psutil.pid_exists(state['pid']):
@@ -154,7 +172,8 @@ def rollback(source, home, evidence, python, old, target, supervisor):
     dump(evidence/'rollback-result.json',dict(status='PASS_FROZEN_156_FAULT_STOP_ROLLBACK',
         target=target,restored=old,newest_committed_rows_preserved=True,
         pending_content_retained_or_recovered=True,normal_update_pass_was_completed_first=True,
-        failure_injection='post-acceptance gateway stop; real frozen health failure and rollback',
+        failure_injection=('private bad-start descendant and failed registered unit' if supervisor=='systemd'
+                           else 'post-acceptance gateway stop; real frozen health failure and rollback'),
         corrupted_database_restore_tested=False))
 
 

@@ -454,7 +454,10 @@ def main(a):
         began = time.time()
         if large_lane:
             health_log = (evidence/'large-state-health-watch.log').open('w')
-            health_watch = subprocess.Popen([str(live_python), str(HELPERS/'legacy156_large_state.py'),
+            # The observer must not hold the product venv open: released
+            # Windows preflight correctly rejects unrelated venv processes.
+            # This driver's isolated uv interpreter already provides psutil.
+            health_watch = subprocess.Popen([str(sys.executable), str(HELPERS/'legacy156_large_state.py'),
                 'watch', '--home',str(home),'--evidence',str(evidence),'--target',a.target],
                 env=env,stdout=health_log,stderr=subprocess.STDOUT)
         update = None
