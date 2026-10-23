@@ -1,0 +1,59 @@
+name: Exact final native integration delta tests
+on:
+  push:
+    branches: [ci/overnight-native-delta-20261023]
+permissions:
+  contents: read
+concurrency:
+  group: overnight-native-delta-${{ github.run_id }}
+  cancel-in-progress: false
+env:
+  PYTHONUTF8: '1'
+  PYTHONIOENCODING: utf-8
+  TARGET_SHA: c5409e93646f770c3cad0d74de2431212bc89845
+  TARGET_TREE: 79523af814bf36e86628a971dfaf5c138fd6b9ed
+jobs:
+  delta:
+    name: Exact source delta / ${{ matrix.os }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        env:
+          GIT_CONFIG_COUNT: '1'
+          GIT_CONFIG_KEY_0: core.autocrlf
+          GIT_CONFIG_VALUE_0: 'false'
+        with:
+          ref: c5409e93646f770c3cad0d74de2431212bc89845
+          fetch-depth: 1
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+          enable-cache: false
+      - name: Install pinned dev dependencies on actual native OS
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$TARGET_SHA"
+          test "$(git rev-parse 'HEAD^{tree}')" = "$TARGET_TREE"
+          uv python install 3.11
+          uv sync --locked --python 3.11 --extra dev
+      - name: Canonical actual-source integration regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          export CLOVER_PYTHON="$(uv run --no-sync python -c 'import sys; print(sys.executable)')"
+          export CLOVER_TEST_WORKERS=1 CLOVER_TEST_FILE_RETRIES=0
+          "$CLOVER_PYTHON" -c 'import json,sys,platform,clover_cli; print(json.dumps(dict(python=sys.executable,os=platform.platform(),source=clover_cli.__file__)))'
+          bash scripts/run_tests.sh tests/gateway/test_workstream_ui_ingress.py tests/clover_cli/test_update_fleet_restart_pending.py tests/clover_cli/test_update_stale_module_purge.py tests/clover_cli/test_windows_update_receipt_handoff.py tests/clover_cli/test_update_delivery_guard.py tests/clover_cli/test_update_delivery_guard_wrappers.py -vv --tb=short 2>&1 | tee "$RUNNER_TEMP/native-delta.log"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: native-delta-${{ matrix.os }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/native-delta.log
+          if-no-files-found: error
