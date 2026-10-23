@@ -1,0 +1,123 @@
+name: Exact final recovered native fresh installers
+'on':
+  push:
+    branches:
+    - ci/overnight-fresh-v3-20261023
+permissions:
+  contents: read
+concurrency:
+  group: overnight-fresh-v3-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  macos-fresh:
+    name: macOS-15 full fresh installer, installed health and contracts
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+        path: helpers
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: 6267ef819660df0947ee94a78bcc9d3cbcdc8c64
+        persist-credentials: false
+        fetch-depth: 0
+        path: source
+    - name: Bounded native Electron network cause probe
+      shell: bash
+      run: node helpers/.github/native-proof/electron_network_probe.mjs "$RUNNER_TEMP/evidence/electron-network-before.json"
+    - name: Clean normal full installer, actual health and native feature contracts
+      shell: bash
+      run: bash helpers/.github/native-proof/posix.sh fresh
+    - name: Read installed components and packaged desktop identity
+      shell: bash
+      run: 'set -euo pipefail
+
+        export CLOVER_HOME="$HOME/.clover"
+
+        "$HOME/.clover/clover-c1/venv/bin/python" helpers/.github/native-proof/macos_components.py
+
+        '
+    - name: Preserve bounded network causes after failed install
+      if: failure()
+      shell: bash
+      run: node helpers/.github/native-proof/electron_network_probe.mjs "$RUNNER_TEMP/evidence/electron-network-after-failure.json"
+    - name: Preserve exact row outcome
+      if: always()
+      shell: bash
+      env:
+        ROW_STATUS: ${{ job.status }}
+      run: python helpers/.github/native-proof/row.py
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: macos-full-fresh-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
+    env:
+      OLD_REF: v1.5.6
+      TARGET_REF: 6267ef819660df0947ee94a78bcc9d3cbcdc8c64
+      TARGET_TREE: 3f4ce3464f4dd7d17ee88d2244e00ceb984c8d5e
+      NEXT_REF: ci/native-next/overnight-fresh-v3-20261023
+      NEXT_SHA: c69e2431c6b5a6887ba39c19e808053793f42738
+      NEXT_TREE: ee6859a0761a0acdfdffe1937116dd3fca6fa05f
+      OLD_SHA: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+      SETUP: zyra
+      UPDATE_PATH: cli
+  windows-fresh:
+    name: Exact final native Windows fresh install and feature contracts
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+        - windows-2025
+    env:
+      OLD_REF: v1.5.6
+      TARGET_REF: 6267ef819660df0947ee94a78bcc9d3cbcdc8c64
+      TARGET_TREE: 3f4ce3464f4dd7d17ee88d2244e00ceb984c8d5e
+      NEXT_REF: ci/native-next/overnight-fresh-v3-20261023
+      NEXT_SHA: c69e2431c6b5a6887ba39c19e808053793f42738
+      NEXT_TREE: ee6859a0761a0acdfdffe1937116dd3fca6fa05f
+      OLD_SHA: 32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+      SETUP: zyra
+      UPDATE_PATH: cli
+    steps:
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: ${{ github.sha }}
+        persist-credentials: false
+        path: helpers
+    - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+      with:
+        ref: 6267ef819660df0947ee94a78bcc9d3cbcdc8c64
+        fetch-depth: 0
+        persist-credentials: false
+        path: source
+    - name: macOS/Linux fresh native installer and installed feature contracts
+      if: runner.os != 'Windows'
+      shell: bash
+      run: bash helpers/.github/native-proof/posix.sh fresh
+    - name: Windows fresh native installer and installed feature contracts
+      if: runner.os == 'Windows'
+      shell: pwsh
+      run: ./helpers/.github/native-proof/windows.ps1 -Mode fresh
+    - name: Preserve actual evidence and row outcome
+      if: always()
+      shell: bash
+      env:
+        ROW_STATUS: ${{ job.status }}
+      run: 'mkdir -p "$RUNNER_TEMP/evidence"
+
+        python helpers/.github/native-proof/row.py
+
+        '
+    - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+      if: always()
+      with:
+        name: fresh-${{ matrix.os }}-${{ github.run_id }}-${{ github.run_attempt }}
+        path: ${{ runner.temp }}/evidence
+        if-no-files-found: error
