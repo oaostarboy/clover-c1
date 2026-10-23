@@ -17,6 +17,10 @@ pytestmark = pytest.mark.skipif(not sys.platform.startswith('linux'), reason='Li
 
 @pytest.fixture
 def runtime_layout(tmp_path, monkeypatch):
+    # These synthetic venv/process fixtures exercise runtime handoff after
+    # compatibility admission; the guard's owner/capability cases live separately.
+    from clover_cli import update_delivery_guard
+    monkeypatch.setattr(update_delivery_guard, 'require_delivery_safe_update', lambda: None)
     root = tmp_path/'source'; root.mkdir()
     (root/'pyproject.toml').write_text('[project]\nname="clover-c1"\nversion="1.5.6"\n')
     local, external = root/'venv', tmp_path/'external'
