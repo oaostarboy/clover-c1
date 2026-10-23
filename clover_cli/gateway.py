@@ -13,6 +13,7 @@ import shlex
 import shutil
 import signal
 import socket
+import sqlite3
 import subprocess
 import sys
 import textwrap
@@ -302,6 +303,115 @@ def _request_gateway_self_restart(pid: int) -> bool:
     return True
 
 
+# A gateway older than the carrier-through-ACK drain (every release <= 1.5.6)
+# counts only running agents when it decides it is drained, so it can exit while
+# a final reply is still being sent and the successor then replays that reply,
+# marked as a possible duplicate. We cannot change the loaded process, but the
+# updater that restarts it runs THIS file, so it can wait for a quiet moment
+# first. 90 s: a normal reply send takes seconds, the old gateway's own
+# after-turn drain already covers running turns once it is signalled, and the
+# frozen 1.5.6 watcher only starts its health clock after the updater exits, so
+# this wait cannot trigger a rollback. Always bounded; the restart happens anyway.
+LEGACY_GATEWAY_IDLE_WAIT_SECONDS = 90.0
+_LEGACY_IDLE_POLL_SECONDS = 1.0
+_LEGACY_IDLE_STABLE_SECONDS = 3.0
+
+
+def _legacy_gateway_status(pid: int) -> dict | None:
+    """Return the runtime status row owned by *pid*, searching every profile."""
+    homes: list[Path] = []
+    try:
+        from clover_constants import get_clover_home
+        homes.append(Path(get_clover_home()))
+    except Exception:
+        pass
+    try:
+        homes.extend(p.path for p in find_profile_gateway_processes() if p.pid == pid)
+    except Exception:
+        pass
+    for home in homes:
+        try:
+            row = json.loads((home / "gateway_state.json").read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(row, dict) and row.get("pid") == pid:
+            row["_home"] = str(home)
+            return row
+    return None
+
+
+def _in_flight_delivery_rows(home: str, pid: int) -> int:
+    """Count pending/attempting ledger rows owned by *pid*. Read-only; 0 if unreadable."""
+    db = Path(home) / "state.db"
+    if not db.is_file():
+        return 0
+    conn = None
+    try:
+        conn = sqlite3.connect(f"{db.as_uri()}?mode=ro", uri=True, timeout=2)
+        row = conn.execute(
+            "SELECT COUNT(*) FROM delivery_obligations "
+            "WHERE owner_pid = ? AND state IN ('pending', 'attempting')", (pid,)
+        ).fetchone()
+        return int(row[0]) if row else 0
+    except (sqlite3.Error, OSError, ValueError):
+        return 0
+    finally:
+        if conn is not None:
+            conn.close()
+
+
+def wait_for_legacy_gateway_idle(
+    pid: int,
+    max_wait: float | None = None,
+    *,
+    poll: float = _LEGACY_IDLE_POLL_SECONDS,
+    stable_seconds: float = _LEGACY_IDLE_STABLE_SECONDS,
+    sleep=time.sleep,
+    clock=time.monotonic,
+) -> str:
+    """Wait (bounded) until a legacy gateway has no active agent and no reply in flight.
+
+    Returns ``"not-legacy"`` (no wait needed), ``"idle"`` or ``"timeout"``. The
+    caller restarts the gateway in every case; this only picks the moment.
+    Reads gateway_state.json and the delivery ledger; writes nothing.
+    """
+    from clover_cli.update_delivery_guard import CAPABILITY
+
+    row = _legacy_gateway_status(pid)
+    if (row is None or row.get("update_restart_capability") == CAPABILITY
+            or row.get("restart_requested") or row.get("gateway_state") in ("draining", "stopping")):
+        return "not-legacy"
+    try:
+        if _is_pid_ancestor_of_current_process(pid):
+            return "not-legacy"  # the update runs inside this gateway; it would wait on itself
+    except Exception:
+        pass
+    budget = LEGACY_GATEWAY_IDLE_WAIT_SECONDS if max_wait is None else float(max_wait)
+    start = clock()
+    quiet_since = None
+    announced = False
+    while True:
+        row = _legacy_gateway_status(pid)
+        if row is None:
+            return "idle"  # gone or status unreadable: nothing left to wait for
+        busy = int(row.get("active_agents") or 0) > 0 or _in_flight_delivery_rows(row["_home"], pid) > 0
+        now = clock()
+        if busy:
+            quiet_since = None
+            if not announced:
+                print(f"→ Waiting for the running gateway (PID {pid}) to finish sending "
+                      f"before restarting it (up to {budget:.0f}s)...", flush=True)
+                announced = True
+        else:
+            if quiet_since is None:
+                quiet_since = now
+            if now - quiet_since >= stable_seconds:
+                return "idle"
+        if now - start >= budget:
+            return "timeout"
+        sleep(min(poll, max(budget - (now - start), 0.01)))
+
+
 def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
     """Send SIGUSR1 to a gateway PID and wait for it to exit gracefully.
 
@@ -332,6 +442,10 @@ def _graceful_restart_via_sigusr1(pid: int, drain_timeout: float) -> bool:
         return False
     if pid <= 0:
         return False
+    try:
+        wait_for_legacy_gateway_idle(pid)
+    except Exception:
+        logger.debug("legacy gateway idle wait failed; restarting anyway", exc_info=True)
     try:
         os.kill(pid, signal.SIGUSR1)  # windows-footgun: ok — POSIX signal, guarded by hasattr(signal, 'SIGUSR1') above
     except ProcessLookupError:

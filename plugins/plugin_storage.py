@@ -75,6 +75,10 @@ def plugin_db(name: str, filename: str = "data.db") -> sqlite3.Connection:
         raise ValueError(f"invalid plugin db filename: {filename!r}")
 
     conn = sqlite3.connect(plugin_data_dir(name) / filename, check_same_thread=False)
-    conn.execute("PRAGMA journal_mode=WAL")
+    # Shared helper: stays out of WAL on a SQLite build with the WAL-reset bug
+    # and never live-downgrades a database that is already WAL.
+    from clover_state import apply_wal_with_fallback
+
+    apply_wal_with_fallback(conn, db_label=f"plugin-data/{name}/{filename}")
     conn.execute("PRAGMA foreign_keys=ON")
     return conn

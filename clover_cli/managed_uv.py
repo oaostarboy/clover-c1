@@ -240,6 +240,72 @@ def _failed_update_runtime_attempt(detail: str) -> RuntimeRepairResult:
     )
 
 
+def _clover_databases_in_wal_mode() -> list[str]:
+    """Names of Clover SQLite files whose on-disk header says WAL. Read-only.
+
+    Reads bytes 18/19 of the 100-byte header (file-format versions: 1 = rollback
+    journal, 2 = WAL). The updater holds no connection to these files, so the
+    byte read cannot cancel a lock of its own. A running gateway's locks are in
+    another process and unaffected. Unreadable or non-SQLite files are ignored.
+    """
+    from clover_constants import get_clover_home
+    from clover_cli.sqlite_safe_read import read_header_bytes_preopen
+
+    home = Path(get_clover_home())
+    patterns = ("*.db", "kanban/**/*.db", "plugin-data/*/*.db", "profiles/*/*.db", "profiles/*/kanban/**/*.db")
+    seen: set[Path] = set()
+    wal: list[str] = []
+    for pattern in patterns:
+        for path in home.glob(pattern):
+            if path in seen or not path.is_file():
+                continue
+            seen.add(path)
+            if len(seen) > 200:
+                return wal
+            try:
+                header = read_header_bytes_preopen(path, length=100)
+            except OSError:
+                continue
+            if header and header[:16] == b"SQLite format 3\x00" and len(header) >= 20 and header[18] == 2:
+                wal.append(str(path.relative_to(home)))
+    return wal
+
+
+def _repair_failure_is_safe_to_continue(repair: RuntimeRepairResult) -> bool:
+    """True when a failed runtime repair cannot expose a WAL-reset corruption.
+
+    The corruption needs a database in WAL mode on a vulnerable SQLite. Clover's
+    own openers (``clover_state.apply_wal_with_fallback``) keep every database
+    out of WAL on a vulnerable runtime, so when no database is in WAL mode right
+    now, continuing is safe and the repair is retried by the next update.
+    Failing the whole update here (after the new files were already pulled) only
+    strands offline / no-uv users in a half-updated state.
+    """
+    try:
+        wal = _clover_databases_in_wal_mode()
+    except Exception:
+        return False
+    if wal:
+        return False
+    print(
+        "  \u26a0 The Python runtime's SQLite is older than the safe version and could not be "
+        f"replaced now ({repair.detail or repair.status})."
+    )
+    print(
+        "    Continuing: Clover keeps its databases out of WAL mode on this runtime, and "
+        "the next `clover update` will retry the repair."
+    )
+    try:
+        from clover_cli.update_receipt import record_step
+
+        record_step("sqlite_runtime", True,
+                    f"unrepaired SQLite {repair.sqlite_before or 'unknown'} continued in DELETE journal mode; "
+                    f"repair status={repair.status}")
+    except Exception:
+        logger.debug("could not record runtime repair warning", exc_info=True)
+    return True
+
+
 def _finish_update_runtime_attempt(
     repair: RuntimeRepairResult,
     observer: Callable[[RuntimeRepairResult], None] | None,
@@ -264,6 +330,8 @@ def _finish_update_runtime_attempt(
             vulnerable = False
         if not vulnerable:
             print("  ⚠ Runtime repair skipped: the target is not a proved owned virtual environment.")
+            return
+        if _repair_failure_is_safe_to_continue(repair):
             return
         print("  ✗ Update stopped: the runtime target is not a proved owned virtual environment.")
         try:
@@ -291,6 +359,8 @@ def _finish_update_runtime_attempt(
         return
     if repair.status == "failed" and report_failure:
         _report_runtime_repair_failure(repair)
+    if _repair_failure_is_safe_to_continue(repair):
+        return
     print("  ✗ Update incomplete: the known-vulnerable SQLite runtime was not repaired.")
     print("    No unsafe WAL override was applied. Resolve the reported repair failure and retry `clover update`.")
     try:

@@ -1,8 +1,10 @@
-"""Fail closed before restarting a gateway with an unproved drain contract.
+"""Classify running gateways by their restart-drain contract (never a refusal).
 
-This is a compatibility gate, NOT a quiescence detector. Empty ledgers and zero
-agents cannot prove an old process has no pre-ledger or initiating slash reply.
-The loaded runner must advertise the carrier-through-ACK drain implementation.
+This is NOT a quiescence detector. Empty ledgers and zero agents cannot prove an
+old process has no pre-ledger or initiating slash reply. A gateway that does not
+advertise the carrier-through-ACK drain implementation (every Clover <= 1.5.6
+gateway) is restarted after a bounded idle wait; see
+``clover_cli.gateway.wait_for_legacy_gateway_idle``.
 """
 from __future__ import annotations
 
@@ -101,63 +103,50 @@ def _unsafe_gateways() -> list[str]:
     return reasons
 
 
-def require_delivery_safe_update() -> None:
-    """Refuse without stopping anything; old callers must unwind via SystemExit.
+def require_delivery_safe_update() -> dict:
+    """Record how the running gateways will be restarted; never refuse.
 
-    Invoked at modern entry, catch-up, and the long-standing freshly imported
-    managed_uv post-pull API. The last hook protects a released updater without
-    modifying its loaded code. Do not catch this as an ordinary optional error.
+    Historical behavior refused (exit 2) whenever a running gateway did not
+    advertise ``CAPABILITY``. Every Clover 1.5.6 gateway is in that state, and
+    the refusal came AFTER the released updater had already pulled the new
+    files: the old gateway kept running, the restart marker stayed set, every
+    retry refused again and chat said "nothing was changed". A refusal does not
+    protect a delivery here, it only strands the user.
+
+    Instead the update proceeds with a ``legacy-proceed`` receipt. The restart
+    helpers in ``clover_cli.gateway`` then wait (bounded) for the legacy
+    gateway to go idle before signalling it, which narrows -- it cannot close --
+    the window in which a reply that is mid-send is re-sent once with the
+    visible "may be a duplicate" marker. Tools and actions are never replayed
+    by this path.
+
+    Returns the receipt record. Callers (released updaters included) may ignore
+    it; this function never raises SystemExit.
     """
     try:
         reasons = _unsafe_gateways()
+        status = 'legacy-proceed' if reasons else 'capable'
     except Exception:
         reasons = ['gateway discovery could not establish delivery-aware restart']
+        status = 'unverified-proceed'
+    record = {'status': status, 'required_capability': CAPABILITY, 'reasons': reasons}
     if not reasons:
-        return
-    detail = (
-        'Automatic update deferred: the running gateway cannot prove it waits '
-        'for complete reply delivery. No gateway was stopped or restarted. '
-        'If source was already pulled, it is staged only; this is NOT a completed upgrade. '
-        'Do not retry /update or force-stop it. Arrange one-time terminal maintenance: '
-        'pause all inbound and internal producers, let accepted work and transport '
-        'delivery finish, and verify their durable acknowledgements. An empty agent '
-        'count or ledger alone is insufficient. Then run clover gateway stop; '
-        'clover update --yes; always run clover gateway start even if update fails. '
-        'Keep unresolved deliveries and the pre-update snapshot for recovery. '
-        'See docs/user-guide/updating.md#legacy-gateway-maintenance.'
+        return record
+    print(
+        '\n\u2139 The running gateway predates restart-safe reply delivery. The update '
+        'continues: the gateway is restarted when it is idle (waiting up to a '
+        'couple of minutes). A reply that is still being sent at that moment may be '
+        'delivered once more, marked as recovered.',
+        flush=True,
     )
-    print('\n✗ ' + detail, flush=True)
     for reason in reasons:
         print('  ' + reason, flush=True)
-    from clover_cli import update_receipt
-    if update_receipt._current is None:
-        update_receipt.begin_update_receipt()
-    if update_receipt._current is not None:
-        update_receipt._current.data['delivery_restart_guard'] = {
-            'status': 'refused', 'required_capability': CAPABILITY,
-            'reasons': reasons, 'maintenance_required': True,
-        }
-    # An old detached watcher otherwise probes the intentionally still-old
-    # gateway and may roll back/relaunch after this refusal. Retire only OUR
-    # live updater's beacon before unwinding; retain the fleet restart marker
-    # and rollback snapshot. A missing beacon is the legacy watcher's supported
-    # stand-down signal, not a delivery acknowledgement.
-    from clover_cli import update_restart_watcher as watcher
-    import os
-    beacon = watcher.beacon_path()
     try:
-        raw = beacon.read_bytes()
-    except FileNotFoundError:
-        raw = None
-    if raw is not None:
-        data = json.loads(raw)
-        if (data.get('updater_pid') == os.getpid()
-                and data.get('updater_create_time') is not None
-                and watcher._updater_identity_alive(data) is True):
-            if beacon.read_bytes() != raw:
-                raise RuntimeError('Update watcher ownership changed during refusal')
-            beacon.unlink()
-            if update_receipt._current is not None:
-                update_receipt._current.data['delivery_restart_guard']['owned_watcher_disarmed'] = True
-    update_receipt.finalize_update_receipt('refused', stop_reason=detail)
-    raise SystemExit(2)
+        from clover_cli import update_receipt
+        if update_receipt._current is None:
+            update_receipt.begin_update_receipt()
+        if update_receipt._current is not None:
+            update_receipt._current.data['delivery_restart_guard'] = record
+    except Exception:
+        pass  # the receipt is evidence, not a gate
+    return record
