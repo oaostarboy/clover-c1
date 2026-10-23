@@ -87,6 +87,10 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
         clover_main, "_stash_local_changes_if_needed", lambda *a, **k: None
     )
     monkeypatch.setattr(clover_main, "_clear_bytecode_cache", lambda *a, **k: 0)
+    # This fixture models git/restart, not hot-reload. A real purge drops the
+    # gateway discovery stubs below and lets sibling CI processes look live.
+    # The real eviction contract remains covered by test_update_stale_module_purge.
+    monkeypatch.setattr(clover_main, "_purge_stale_clover_modules", lambda: None)
     monkeypatch.setattr(
         clover_main, "_record_bytecode_fingerprint", lambda *a, **k: None
     )
@@ -129,6 +133,19 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
 
 def _update_args():
     return SimpleNamespace(branch=None, yes=False, force=False, force_venv=False)
+
+
+def test_mocked_update_fixture_retains_process_discovery(monkeypatch, tmp_path):
+    """A simulated pull must not discard the no-live-gateway discovery stubs."""
+    import sys
+    import clover_cli.gateway as gateway
+
+    _patch_update_deps(monkeypatch, tmp_path, _make_head_moved_side_effect())
+    assert gateway.find_gateway_pids(all_profiles=True) == []
+    clover_main._purge_stale_clover_modules()
+    assert sys.modules.get("clover_cli.gateway") is gateway, (
+        "mocked updates must not purge the patched discovery module and reach live PIDs"
+    )
 
 
 # ---------------------------------------------------------------------------
