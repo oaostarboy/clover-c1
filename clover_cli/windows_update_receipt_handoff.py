@@ -292,8 +292,14 @@ def _recover_publication(parent, current, directory, owned, latest_raw):
     return _resume_existing(published, current, directory, owned, latest_raw=latest_raw)
 
 
-def resume(current, directory, project_root, *, process_chain, interpreter, now, wait_seconds=5):
-    """Adopt only an owned legacy parent; return canonical path or an explicit refusal."""
+def resume(current, directory, project_root, *, process_chain, interpreter, now, wait_seconds=30):
+    """Adopt only an owned parent within a bounded cold-CIM startup budget.
+
+    A five-second total budget allowed only one cold PowerShell/CIM timeout
+    on native Windows. Give each cold query at most fifteen seconds and allow
+    another measured query before declaring the receipt unverified. All
+    source, process-birth, ancestry and publication predicates remain strict.
+    """
     began = time.monotonic()
     deadline = began + wait_seconds
     probe = {'elapsed_seconds': 0.0, 'attempt_count': 0, 'attempts': []}
@@ -305,7 +311,7 @@ def resume(current, directory, project_root, *, process_chain, interpreter, now,
             parent, latest_raw = _read(directory / 'latest.json')
             _validate_parent(parent, current, project_root, interpreter)
             probe_phase = 'process_chain'
-            process_timeout = max(.1, min(5, deadline - time.monotonic()))
+            process_timeout = max(.1, min(15, deadline - time.monotonic()))
             chain = process_chain(current['pid'], timeout=process_timeout)
             probe_phase = 'process_witness'
             owned = _witness(chain, current, parent, project_root, interpreter, now)
