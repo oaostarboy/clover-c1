@@ -1,0 +1,99 @@
+name: Windows corrected updater and legacy boundary
+on:
+  push:
+    branches: ['ci/windows-acceptance-correction-20261023']
+permissions:
+  contents: read
+concurrency:
+  group: windows-correction-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  updater:
+    name: windows / ${{ matrix.base }} / ${{ matrix.entry }}
+    runs-on: windows-2025
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        base: [release, main, fixed]
+        entry: [terminal, gateway]
+    env:
+      PYTHONIOENCODING: utf-8
+      PYTHONUTF8: '1'
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9054c1a4dfd1f188b16addfa7b848a9f212b3f3d
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          enable-cache: false
+      - name: Execute original installed updater with held work; no driver restart
+        shell: bash
+        env:
+          BASE: ${{ matrix.base }}
+          ENTRY: ${{ matrix.entry }}
+        run: |
+          set -euo pipefail
+          old=32d3e6728c71d1f7c8684b7b41ac1785cb8117a9
+          if [[ $BASE == main ]]; then old=9535350bee1d57cf7e466672e6f416403886bec1; fi
+          if [[ $BASE == fixed ]]; then old=e1eac70b63afcbf4152cb7c8e965f997d93cca32; fi
+          uv run --no-project --with psutil python helpers/.github/native-proof/guard_native_upgrade.py \
+            --source "$GITHUB_WORKSPACE/source" --old "$old" --entry "$ENTRY" \
+            --target 9054c1a4dfd1f188b16addfa7b848a9f212b3f3d \
+            --tree 8a6c69381a87436328d2b5d4196aafcd84fff5e3 \
+            --fixed-base e1eac70b63afcbf4152cb7c8e965f997d93cca32 \
+            --evidence "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-${{ matrix.base }}-${{ matrix.entry }}-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+  windows-rollback:
+    runs-on: windows-2025
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          ref: 9054c1a4dfd1f188b16addfa7b848a9f212b3f3d
+          path: source
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-python@a309ff8b426b58ec0e2a45f0f869d46889d02405
+        with:
+          python-version: '3.11.9'
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+          enable-cache: false
+      - name: Actual failed promotion preserves newest state
+        shell: pwsh
+        run: |
+          python helpers/.github/windows-external-runtime/probe.py --source source --target-sha 9054c1a4dfd1f188b16addfa7b848a9f212b3f3d --target-tree 8a6c69381a87436328d2b5d4196aafcd84fff5e3 --old-sha 9535350bee1d57cf7e466672e6f416403886bec1 --case smoke-rollback --evidence "$env:RUNNER_TEMP/evidence"
+          if ($LASTEXITCODE -ne 0) { throw 'Native rollback probe failed' }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: windows-rollback-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
