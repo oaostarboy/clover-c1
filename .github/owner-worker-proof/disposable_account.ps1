@@ -29,7 +29,7 @@ $childExit = -1; $passed = $false; $cleanupPassed = $false
 $cleanupInventory = [ordered]@{
     phase='owned_cleanup'; owned_sid=$null; state='incomplete'
     processes=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null; unresolved_owners=$null;
-        query_status='not_checked'; query_count=0; observed_count=0; foreign_sid_count=0; observations=@(); owned_processes=@() }
+        query_status='not_checked'; query_count=0; observed_count=0; foreign_sid_count=0; kernel_pseudo_process_count=0; observations=@(); owned_processes=@() }
     tasks=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null; unresolved_principals=$null;
         query_status='not_checked'; query_count=0; observed_count=0; foreign_sid_count=0; observations=@(); owned_tasks=@() }
     profile=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null;
@@ -212,6 +212,7 @@ public static class CloverDisposableProfile {
                 foreach ($candidate in $candidates) {
                     $owner = Get-AccountProcessOwnerObservation $candidate
                     if ($owner.category -eq 'resolved' -and $owner.sid -eq $sid) {
+                        if ($candidate.ProcessId -in @(0,4)) { throw 'Reserved kernel PID cannot be an owned removal target' }
                         $cleanupInventory.processes.found = $true
                         $ownedProcess = $null
                         try {
@@ -249,7 +250,15 @@ public static class CloverDisposableProfile {
                 foreach ($candidate in $candidates) {
                     $cleanupInventory.processes.observed_count++
                     $owner = Get-AccountProcessOwnerObservation $candidate
-                    if ($owner.category -ne 'resolved') {
+                    if ($owner.classification -eq 'kernel_pseudo_process') {
+                        # Explicit non-user role, NOT a successful SID query or a
+                        # foreign SID. Preserve the access-denied evidence.
+                        $cleanupInventory.processes.kernel_pseudo_process_count++
+                        $cleanupInventory.processes.observations += @{
+                            process_id=$candidate.ProcessId; category=$owner.category; return_code=$owner.return_code
+                            classification=$owner.classification; classification_reason=$owner.classification_reason; sid_query_succeeded=$false
+                        }
+                    } elseif ($owner.category -ne 'resolved') {
                         $cleanupInventory.processes.unresolved_owners++
                         $cleanupInventory.processes.observations += @{
                             process_id=$candidate.ProcessId; category=$owner.category; return_code=$owner.return_code

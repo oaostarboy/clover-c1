@@ -96,6 +96,31 @@ function Get-AccountExceptionObservation {
     return $observation
 }
 
+# DoNotVerify supplies only an OS registration, never ownership or write authority.
+# Reject traversal and existing redirects before creating anything at that location.
+function Test-AccountOwnedStartupLocation {
+    param([string]$Startup, [string]$AppData, [string]$Profile)
+    try {
+        foreach ($path in @($Startup,$AppData,$Profile)) {
+            if ([string]::IsNullOrWhiteSpace($path) -or -not [IO.Path]::IsPathFullyQualified($path) -or
+                [IO.Path]::GetFullPath($path) -cne $path) { return $false }
+        }
+        if ($AppData -ne (Join-Path $Profile 'AppData/Roaming') -or
+            -not $Startup.StartsWith($AppData + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) { return $false }
+        $cursor = $Startup
+        while ($true) {
+            if (Test-Path -LiteralPath $cursor -ErrorAction Stop) {
+                $entry = Get-Item -LiteralPath $cursor -Force -ErrorAction Stop
+                if (-not $entry.PSIsContainer -or ($entry.Attributes -band [IO.FileAttributes]::ReparsePoint)) { return $false }
+            }
+            if ($cursor -eq $Profile) { break }
+            $cursor = [IO.Path]::GetDirectoryName($cursor)
+            if ([string]::IsNullOrEmpty($cursor)) { return $false }
+        }
+        return $true
+    } catch { return $false }
+}
+
 function Assert-AccountChildPredicate {
     param([bool]$Condition)
     if (-not $Condition) {
@@ -138,9 +163,39 @@ function Set-AccountChildStage {
 
 # Observation helpers do not grant deletion authority. A failed query is unknown,
 # never evidence that a live process or task belongs to somebody else.
+# Reserved Windows kernel roles cannot be user-created processes. Require both
+# native CIM metadata and independent .NET process metadata; denial alone proves
+# nothing. Unsupported/missing/changed identity stays unknown, without privilege.
+function Get-AccountKernelProcessRole {
+    param($Candidate)
+    $native = $null
+    try {
+        $platform = [Environment]::OSVersion
+        if (-not $IsWindows -or $platform.Platform -ne [PlatformID]::Win32NT -or $platform.Version.Major -lt 10) { return 'unknown' }
+        foreach ($field in @('ProcessId','Name','SessionId','CimClass','CimSystemProperties')) {
+            if (-not $Candidate.PSObject.Properties[$field] -or $null -eq $Candidate.$field) { return 'unknown' }
+        }
+        if ($Candidate.CimClass.CimClassName -cne 'Win32_Process' -or
+            $Candidate.CimSystemProperties.Namespace -ine 'root/cimv2' -or
+            $Candidate.SessionId -ne 0) { return 'unknown' }
+        $role = switch ($Candidate.ProcessId) {
+            0 { if ($Candidate.Name -ceq 'System Idle Process') { 'windows_reserved_idle' } else { 'unknown' } }
+            4 { if ($Candidate.Name -ceq 'System') { 'windows_reserved_system' } else { 'unknown' } }
+            default { 'unknown' }
+        }
+        if ($role -eq 'unknown') { return 'unknown' }
+        $native = [Diagnostics.Process]::GetProcessById([int]$Candidate.ProcessId)
+        $expectedName = if ($Candidate.ProcessId -eq 0) { 'Idle' } else { 'System' }
+        if ($native.Id -ne $Candidate.ProcessId -or $native.ProcessName -cne $expectedName -or $native.SessionId -ne 0) { return 'unknown' }
+        return $role
+    } catch { return 'unknown' }
+    finally { if ($native) { $native.Dispose() } }
+}
+
 function Get-AccountProcessOwnerObservation {
     param($Candidate)
-    $result = @{ category='unknown'; return_code=$null; sid=$null; exception_category='none'; hresult_signed=$null; native_code=$null }
+    $result = @{ category='unknown'; return_code=$null; sid=$null; exception_category='none'; hresult_signed=$null; native_code=$null;
+        classification='unknown'; classification_reason='unresolved_owner' }
     try {
         $owner = Invoke-CimMethod -InputObject $Candidate -MethodName GetOwnerSid -ErrorAction Stop
         if ($null -eq $owner) { $result.category = 'no_result' }
@@ -155,7 +210,15 @@ function Get-AccountProcessOwnerObservation {
                 21 { 'invalid_parameter' }
                 default { 'other_return' }
             }
-            if ($result.category -eq 'resolved') { $result.sid = $owner.Sid }
+            if ($result.category -eq 'resolved') {
+                $result.sid = $owner.Sid
+                $result.classification = 'sid'; $result.classification_reason = 'owner_sid_query'
+            } elseif ($result.category -eq 'access_denied') {
+                $role = Get-AccountKernelProcessRole $Candidate
+                if ($role -ne 'unknown') {
+                    $result.classification = 'kernel_pseudo_process'; $result.classification_reason = $role
+                }
+            }
         }
     } catch {
         $result.category = 'query_failed'

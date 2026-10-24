@@ -10,6 +10,7 @@ $exitCode = 1
 $script:childStage = [ordered]@{
     phase='credential_isolation'; state='unknown'; predicate_id='credential_isolation'; predicate_passed=$null
     reason='none'; exception_category='none'; hresult_signed=$null; native_code=$null
+    startup=@{default_empty=$null; resolved_owned=$null; exists=$null; readback_agrees=$null}
     states=[ordered]@{
         credential_isolation='unknown'; identity='unknown'; token='unknown'; acl_denial='unknown'
         profile_userprofile='unknown'; profile_home='unknown'; profile_known_userprofile='unknown'
@@ -72,11 +73,21 @@ try {
     Set-AccountChildStage -Phase 'home_read' -State 'passed'
     # Registration readiness only: no gateway, installer, update or task is run.
     Set-AccountChildStage -Phase 'startup_location' -State 'entered'
-    $startup = [Environment]::GetFolderPath('Startup')
-    Assert-AccountChildPredicate ($startup.StartsWith($env:APPDATA + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))
+    $startupDefault = [Environment]::GetFolderPath('Startup')
+    $script:childStage.startup.default_empty = [string]::IsNullOrEmpty($startupDefault)
+    $startup = [Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::DoNotVerify)
+    # Earlier stages bind this identity/profile to the exact created SID. Verify
+    # the OS location under that profile's APPDATA before any Startup creation.
+    $script:childStage.startup.resolved_owned = Test-AccountOwnedStartupLocation -Startup $startup -AppData $env:APPDATA -Profile $c.profile
+    Assert-AccountChildPredicate ($script:childStage.startup.resolved_owned -and
+        ($script:childStage.startup.default_empty -or $startupDefault -eq $startup))
     Set-AccountChildStage -Phase 'startup_location' -State 'passed'
     Set-AccountChildStage -Phase 'startup_create' -State 'entered'
     $null = New-Item -ItemType Directory -Path $startup -Force
+    $script:childStage.startup.exists = Test-Path -LiteralPath $startup -PathType Container
+    $script:childStage.startup.readback_agrees = [Environment]::GetFolderPath('Startup') -eq $startup
+    Assert-AccountChildPredicate ($script:childStage.startup.exists -and $script:childStage.startup.readback_agrees -and
+        (Test-AccountOwnedStartupLocation -Startup $startup -AppData $env:APPDATA -Profile $c.profile))
     $readiness = Join-Path $startup 'clover-fixture-readiness.txt'
     Set-AccountChildStage -Phase 'startup_create' -State 'passed'
     Set-AccountChildStage -Phase 'startup_write' -State 'entered'

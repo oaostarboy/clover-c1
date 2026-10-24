@@ -23,7 +23,8 @@ PHASES = ('credential_isolation identity token acl_denial profile_userprofile '
 @unittest.skipUnless(PWSH, 'PowerShell required for portable fixture execution')
 class ChildStageDiagnostics(unittest.TestCase):
     def run_child_body(self, phase=None, predicate=False, diagnostic_failure=False,
-                       fallback_failure=False, real_write_failure=False, boundary_failure=None):
+                       fallback_failure=False, real_write_failure=False, boundary_failure=None,
+                       startup_case=None):
         with tempfile.TemporaryDirectory(dir=HERE) as directory:
             assert PWSH is not None
             root = Path(directory)
@@ -39,10 +40,20 @@ class ChildStageDiagnostics(unittest.TestCase):
             body = body.replace('[Security.Principal.WindowsIdentity]::GetCurrent()',
                                 "([pscustomobject]@{User=[pscustomobject]@{Value='owned-sid'}})")
             body = body.replace('([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)', '$false')
+            if startup_case:
+                body = body.replace("[Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::DoNotVerify)",
+                                    '(Get-PortableStartup -DoNotVerify)')
+                body = body.replace("[Environment]::GetFolderPath('Startup')", '(Get-PortableStartup)')
             folders = {'UserProfile': '$c.profile', 'ApplicationData': '$env:APPDATA',
                        'LocalApplicationData': '$env:LOCALAPPDATA', 'Startup': "Join-Path $env:APPDATA 'Startup'"}
             for name, value in folders.items():
                 body = body.replace(f"[Environment]::GetFolderPath('{name}')", f'({value})')
+            if not startup_case:
+                body = body.replace("[Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::DoNotVerify)",
+                                    "(Join-Path $env:APPDATA 'Startup')")
+            if startup_case == 'appdata-mismatch':
+                marker = "Set-AccountChildStage -Phase 'startup_location' -State 'entered'"
+                body = body.replace(marker, marker + "\n    $env:APPDATA=Join-Path $c.profile 'foreign-appdata'")
             if phase:
                 marker = f"Set-AccountChildStage -Phase '{phase}' -State 'entered'"
                 self.assertEqual(body.count(marker), 1)
@@ -101,12 +112,89 @@ function Observe-PortableToken {
     $global:LASTEXITCODE=0
 }
 """.replace('COMMON', str(HERE / 'account_common.ps1').replace("'", "''")).replace('ROOT', str(root).replace("'", "''"))
+            startup_prelude = r"""
+$script:startupCase='CASE'
+$script:registeredStartup=Join-Path $env:APPDATA 'OS-registered-startup'
+switch ($script:startupCase) {
+    'existing' { $null=New-Item -ItemType Directory -Path $script:registeredStartup }
+    'empty' { $script:registeredStartup='' }
+    'foreign' { $script:registeredStartup=Join-Path (Split-Path $c.profile) 'foreign-startup' }
+    'relative' { $script:registeredStartup='relative-startup' }
+    'traversal' { $script:registeredStartup=Join-Path $env:APPDATA '../escape-startup' }
+    'prefix-collision' { $script:registeredStartup=Join-Path ($env:APPDATA+'-foreign') 'new' }
+    'reparse' {
+        $target=Join-Path (Split-Path $c.profile) 'foreign-target';$null=New-Item -ItemType Directory -Path $target
+        $link=Join-Path $env:APPDATA 'redirect';$null=New-Item -ItemType SymbolicLink -Path $link -Target $target
+        $script:registeredStartup=Join-Path $link 'new'
+    }
+    'file-collision' { [IO.File]::WriteAllText($script:registeredStartup,'not a directory') }
+}
+function Get-PortableStartup {
+    param([switch]$DoNotVerify)
+    if ($DoNotVerify) { return $script:registeredStartup }
+    if ($script:startupCase -eq 'default-disagrees') { return (Join-Path $env:APPDATA 'other-registration') }
+    if ($script:startupCase -eq 'readback-empty') { return '' }
+    if ($script:startupCase -eq 'readback-disagrees' -and (Test-Path -LiteralPath $script:registeredStartup)) { return (Join-Path $env:APPDATA 'other-registration') }
+    if ($script:startupCase -eq 'empty') { return '' }
+    if (Test-Path -LiteralPath $script:registeredStartup -PathType Container) { return $script:registeredStartup }
+    return ''
+}
+""".replace('CASE', startup_case or '')
             script = root / 'body.ps1'
-            script.write_text(prelude + body)
+            script.write_text(prelude + startup_prelude + body)
             result = subprocess.run([PWSH, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(script)],
                                     capture_output=True, text=True, timeout=25)
             receipts = {p.name: p.read_text(encoding='utf-8-sig') for p in evidence.iterdir() if p.is_file()}
+            if startup_case:
+                receipts['portable-startup-state.json'] = json.dumps({
+                    'registered_created': (root / 'profile/AppData/Roaming/OS-registered-startup').is_dir(),
+                    'foreign_created': any((root / p).exists() for p in (
+                        'foreign-startup', 'foreign-target/new', 'profile/AppData/escape-startup',
+                        'profile/AppData/Roaming-foreign/new', 'relative-startup')),
+                    'readiness_count': len(list(root.rglob('clover-fixture-readiness.txt'))),
+                })
             return result, receipts
+
+    def test_missing_startup_uses_os_resolution_then_requires_normal_readback(self):
+        result, receipts = self.run_child_body(startup_case='missing')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr + str(receipts))
+        access = json.loads(receipts['access.json'])
+        self.assertTrue(access['startup'].endswith('OS-registered-startup'))
+        self.assertTrue(access['registration_directory_ready'])
+        d = json.loads(receipts['child-stage.json'])
+        self.assertEqual(d['states'], dict.fromkeys(PHASES, 'passed'))
+        self.assertEqual(d['startup'], dict(default_empty=True, resolved_owned=True,
+                                          exists=True, readback_agrees=True))
+
+    def test_startup_rejects_unowned_or_unresolved_paths_before_creation(self):
+        for case in ('empty', 'foreign', 'relative', 'traversal', 'prefix-collision',
+                     'appdata-mismatch', 'reparse', 'file-collision', 'default-disagrees'):
+            with self.subTest(startup_case=case):
+                result, receipts = self.run_child_body(startup_case=case)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('access.json', receipts)
+                d = json.loads(receipts['child-stage.json'])
+                self.assertEqual((d['phase'], d['state']), ('startup_location', 'failed'))
+                self.assertEqual(d['states']['startup_create'], 'unknown')
+                state = json.loads(receipts['portable-startup-state.json'])
+                self.assertEqual(state, dict(registered_created=False, foreign_created=False, readiness_count=0))
+
+    def test_startup_requires_postcreate_default_readback_and_keeps_existing_folder_control(self):
+        for case in ('readback-empty', 'readback-disagrees', 'existing'):
+            with self.subTest(startup_case=case):
+                result, receipts = self.run_child_body(startup_case=case)
+                d = json.loads(receipts['child-stage.json'])
+                if case == 'existing':
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                    self.assertIn('access.json', receipts)
+                    self.assertIs(d['startup']['default_empty'], False)
+                else:
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertNotIn('access.json', receipts)
+                    self.assertEqual(d['phase'], 'startup_create')
+                    self.assertIs(d['startup']['exists'], True)
+                    self.assertIs(d['startup']['readback_agrees'], False)
+                self.assertEqual(json.loads(receipts['portable-startup-state.json'])['readiness_count'], 0)
 
     def test_every_actual_phase_failure_keeps_exit_one_and_success_receipt_absent(self):
         for phase in PHASES:
@@ -133,7 +221,9 @@ function Observe-PortableToken {
                     self.assertNotIn('credential', json.dumps(d).replace('credential_isolation', ''))
                     self.assertEqual(set(d), {'phase', 'state', 'predicate_id', 'predicate_passed',
                                              'reason', 'exception_category', 'hresult_signed',
-                                             'native_code', 'states'})
+                                             'native_code', 'states', 'startup'})
+                    self.assertEqual(set(d['startup']), {'default_empty', 'resolved_owned', 'exists', 'readback_agrees'})
+                    self.assertTrue(all(v is None or type(v) is bool for v in d['startup'].values()))
 
     def test_real_predicates_and_io_fail_at_the_named_actual_boundaries(self):
         for phase in PHASES:
