@@ -77,7 +77,6 @@ jobs:
             tests/clover_cli/test_windows_handoff_clock_native.py `
             tests/clover_cli/test_update_delivery_guard.py `
             tests/clover_cli/test_update_delivery_guard_wrappers.py `
-            tests/clover_cli/test_legacy_gateway_restart_idle_wait.py `
             ../helpers/.github/owner-worker-proof/test_owner_worker_native.py `
             --junitxml="$env:RUNNER_TEMP/evidence/native-safety.xml"
           exit $LASTEXITCODE

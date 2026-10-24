@@ -52,7 +52,8 @@ def test_native_venv_launcher_and_worker_have_distinct_owner_witnesses(real_chil
     record_property('worker_birth', worker.create_time())
 
 
-def test_real_reporter_preserves_live_owner_identity_and_restart_contract(tmp_path, monkeypatch, record_property):
+@pytest.mark.parametrize('reporter_count', [1, 4])
+def test_real_reporter_preserves_live_owner_identity_and_restart_contract(tmp_path, monkeypatch, record_property, reporter_count):
     home = tmp_path / 'owner-reporter-home'
     home.mkdir()
     monkeypatch.setenv('CLOVER_HOME', str(home))
@@ -72,19 +73,23 @@ def test_real_reporter_preserves_live_owner_identity_and_restart_contract(tmp_pa
         path = home / 'gateway_state.json'
         before = json.loads(path.read_text())
         assert before['pid'] == ready['worker']
-        reporter = subprocess.run([sys.executable, '-I', '-c',
+        reporters = [subprocess.Popen([sys.executable, '-I', '-c',
             'from gateway import status; status.write_runtime_status('
-            'platform="native-reporter",platform_state="connected")'],
-            env=env, capture_output=True, text=True, timeout=30)
-        assert reporter.returncode == 0, reporter.stderr
+            f'platform="native-reporter-{index}",platform_state="connected")'],
+            env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+            for index in range(reporter_count)]
+        for reporter in reporters:
+            _, error = reporter.communicate(timeout=30)
+            assert reporter.returncode == 0, error
         after = json.loads(path.read_text())
         record_property('owner_worker_pid', ready['worker'])
         record_property('top_level_pid_after_reporter', after['pid'])
         for field in ['pid', 'start_time', 'kind', 'clover_home', 'argv', 'code_sha', 'update_restart_capability']:
             assert after.get(field) == before.get(field), (field, before, after)
-        entry = after['platforms']['native-reporter']
-        assert entry['state'] == 'connected'
-        assert entry['writer_pid'] != ready['worker']
+        for index in range(reporter_count):
+            entry = after['platforms'][f'native-reporter-{index}']
+            assert entry['state'] == 'connected'
+            assert entry['writer_pid'] != ready['worker']
         assert owner.poll() is None
     finally:
         owner.communicate(timeout=15)

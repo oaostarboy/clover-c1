@@ -393,8 +393,13 @@ def main(a):
     customization_sha = sha(customization)
     receipt_dir = home / 'logs' / 'update_receipts'
     receipt_dir.mkdir(parents=True, exist_ok=True)
-    stale_receipt = dict(run_id='stale-native-proof-not-this-run', outcome='failed',
-                         started_at=1, finished_at=2, stop_reason='prior nonsecret refusal')
+    stale_receipt = dict(schema=1, run_id='stale-native-proof-not-this-run', outcome='refused',
+                         started_at='2000-01-01T00:00:01+00:00',
+                         finished_at='2000-01-01T00:00:02+00:00',
+                         argv=['clover', 'update'], pid=2147483644,
+                         pre_update=dict(sha=a.old), post_update=dict(sha=a.old),
+                         steps=[], skips=[], gateway_restart={}, fleet=[],
+                         stop_reason='prior nonsecret refusal')
     dump(receipt_dir / 'latest.json', stale_receipt)
     dump(evidence / 'seeded-stale-receipt.json', stale_receipt)
     (home / 'fleet_restart_pending').write_text('prior native fixture restart intent\n')
