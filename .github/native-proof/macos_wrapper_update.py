@@ -165,14 +165,20 @@ def main() -> int:
             chat_started = True
             wait_until(lambda: (clover_home / '.update_pending.json').is_file(), 'real chat update handler did not accept command')
             (evidence / 'chat-pending-origin.json').write_bytes((clover_home / '.update_pending.json').read_bytes())
-            from macos_updater_checkpoint import live_updater
+            from macos_updater_checkpoint import live_updater, live_os_updater
             checkpoint = {}
+            began = json.loads((evidence / 'begin.json').read_text())['began']
             def updater_started():
-                identity = live_updater(clover_home / '.clover-update-heartbeat.json', install,
-                                        clover_home, os.getuid(), psutil.Process)
+                beacon = clover_home / '.clover-update-heartbeat.json'
+                identity = live_updater(beacon, install, clover_home, os.getuid(), psutil.Process)
+                if identity is None:
+                    identity = live_os_updater(install, clover_home, os.getuid(), began,
+                                               psutil.process_iter(), psutil.Process)
                 if identity is None:
                     return False
                 checkpoint.update(identity)
+                checkpoint['beacon_exists'] = beacon.is_file()
+                checkpoint.setdefault('checkpoint_source', 'beacon')
                 return True
             wait_until(updater_started, 'chat updater did not establish a live PID/start/repo checkpoint')
             (evidence / 'live-chat-updater.json').write_text(json.dumps(checkpoint, indent=2) + '\n')

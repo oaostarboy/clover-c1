@@ -68,6 +68,36 @@ class ChatWireTests(unittest.TestCase):
         check, beacon, proc = self.checkpoint(updater_create_time=None)
         self.assertIsNone(check(beacon, self.root / 'install', self.root, 501, lambda pid: proc))
 
+    def test_kernel_checkpoint_needs_no_beacon_or_receipt(self):
+        from macos_updater_checkpoint import live_os_updater
+        _, _, proc = self.checkpoint()
+        identity = live_os_updater(self.root / 'install', self.root, 501, 10.0, [proc], lambda pid: proc)
+        assert identity is not None
+        self.assertEqual(identity['pid'], 42)
+        self.assertEqual(identity['checkpoint_source'], 'kernel-process')
+
+    def test_kernel_checkpoint_rejects_multiple_private_updaters(self):
+        import copy
+        from macos_updater_checkpoint import live_os_updater
+        _, _, proc = self.checkpoint()
+        other = copy.copy(proc)
+        other.pid = 43
+        self.assertIsNone(live_os_updater(self.root / 'install', self.root, 501, 10.0, [proc, other], lambda pid: proc))
+
+    def test_kernel_checkpoint_rebinds_pid_start(self):
+        import copy
+        from macos_updater_checkpoint import live_os_updater
+        _, _, proc = self.checkpoint()
+        reused = copy.copy(proc)
+        reused.create_time = lambda: 99.0
+        self.assertIsNone(live_os_updater(self.root / 'install', self.root, 501, 10.0, [proc], lambda pid: reused))
+
+    def test_kernel_checkpoint_rejects_older_or_cross_uid_actor(self):
+        from macos_updater_checkpoint import live_os_updater
+        _, _, proc = self.checkpoint()
+        self.assertIsNone(live_os_updater(self.root / 'install', self.root, 501, 18.0, [proc], lambda pid: proc))
+        self.assertIsNone(live_os_updater(self.root / 'install', self.root, 502, 10.0, [proc], lambda pid: proc))
+
     def test_sdk_nonstream_requests_one_file_tool_without_faking_its_effect(self):
         reply = self.client.chat.completions.create(model='native-fixture', messages=self.messages, tools=self.tools)
         call = reply.choices[0].message.tool_calls[0]

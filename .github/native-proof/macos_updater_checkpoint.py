@@ -28,5 +28,40 @@ def live_updater(beacon: Path, install: Path, home: Path, uid: int, process_fact
         if proc.create_time() != row['updater_create_time']:
             return None
         return dict(pid=proc.pid, create_time=proc.create_time(), argv=argv, repo=str(install))
-    except (OSError, ValueError, TypeError, KeyError, AttributeError, ProcessLookupError):
+    except Exception:
         return None
+
+
+def live_os_updater(install: Path, home: Path, uid: int, not_before: float, processes, process_factory):
+    """The no-pull branch need not arm a rollback beacon. Prove its real actor.
+
+    This only releases our own held model response; it authorizes no process
+    mutation. Require a unique kernel-observed private console-script actor,
+    not a base-Python name or a claimed environment alone.
+    """
+    matches = []
+    script = str(install / 'venv/bin/clover')
+    for proc in processes:
+        try:
+            argv = proc.cmdline()
+            if len(argv) < 4 or argv[1:3] != [script, 'update'] or '--gateway' not in argv:
+                continue
+            created = proc.create_time()
+            if (created < not_before or tuple(proc.uids()) != (uid, uid, uid)
+                    or proc.environ().get('CLOVER_HOME') != str(home)):
+                continue
+            matches.append(dict(pid=proc.pid, create_time=created, argv=argv, repo=str(install)))
+        except Exception:
+            continue
+    if len(matches) != 1:
+        return None
+    identity = matches[0]
+    try:
+        current = process_factory(identity['pid'])
+        if (current.create_time() != identity['create_time'] or current.cmdline() != identity['argv']
+                or tuple(current.uids()) != (uid, uid, uid)
+                or current.environ().get('CLOVER_HOME') != str(home)):
+            return None
+    except Exception:
+        return None
+    return dict(identity, checkpoint_source='kernel-process', beacon_required=False)
