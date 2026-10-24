@@ -20,6 +20,7 @@ function Event-Xml($Channel, $Data) {
 $task = Event-Xml 'Microsoft-Windows-TaskScheduler/Operational' '<Data Name="TaskName">\Clover_Gateway</Data><Data Name="EnginePID">300</Data>'
 $collector.OnXml($task)
 if ($collector.Records.Count -ne 1 -or $collector.Records[0].Xml -cne $task -or -not $collector.Records[0].OriginalXml) { throw 'Exact callback XML not retained' }
+if ($collector.Records[0].NativeCallback -or $collector.Records[0].OriginalXmlSha256.Length -ne 64) { throw 'Replay provenance or original XML integrity missing' }
 if ($collector.Records[0].LivePid -ne 0) { throw 'EnginePID was incorrectly mapped to an action PID' }
 $collector.OnXml((Event-Xml 'Microsoft-Windows-TaskScheduler/Operational' '<Data Name="TaskName">\foreign</Data>'))
 if ($collector.Records.Count -ne 1) { throw 'Foreign Task payload retained' }
@@ -28,6 +29,16 @@ $secretTask = [TaskOriginCallbacks]::new('\Clover_Gateway', @('C:\fixture\python
 $secretTask.OnXml((Event-Xml 'Microsoft-Windows-TaskScheduler/Operational' ('<Data Name="TaskName">\Clover_Gateway</Data><Data Name="ActionName">' + $secret + '</Data>')))
 if ($secretTask.Records.Count -ne 1 -or $secretTask.Records[0].OriginalXml -or $secretTask.Records[0].Xml.Contains($secret)) { throw 'Unexpected Task action exposed' }
 $secretTask.Dispose()
+$schemaOnly = [TaskOriginCallbacks]::new('\Clover_Gateway', @(), @())
+$schemaOnly.CaptureForeignTaskSchemas = $true
+$foreignXml = Event-Xml 'Microsoft-Windows-TaskScheduler/Operational' '<Data Name="TaskName">\private-foreign-task</Data><Data Name="UnknownField">PRIVATE-VALUE</Data>'
+$schemaOnly.OnXml($foreignXml)
+if ($schemaOnly.Records.Count -ne 1 -or $schemaOnly.Records[0].OriginalXml -or $schemaOnly.Records[0].NativeCallback -or $schemaOnly.Records[0].Xml.Contains('PRIVATE-VALUE') -or $schemaOnly.Records[0].Xml.Contains('private-foreign-task')) { throw 'Foreign Task schema inventory exposed payload or claimed native provenance' }
+$sha = [Security.Cryptography.SHA256]::Create()
+try { $digest = [BitConverter]::ToString($sha.ComputeHash([Text.Encoding]::UTF8.GetBytes($foreignXml))).Replace('-', '').ToLowerInvariant() }
+finally { $sha.Dispose() }
+if ($schemaOnly.Records[0].OriginalXmlSha256 -cne $digest) { throw 'Original SDK XML integrity was not preserved before redaction' }
+$schemaOnly.Dispose()
 $collector.OnXml((Event-Xml 'Security' ('<Data Name="NewProcessName">C:\fixture\python.exe</Data><Data Name="CommandLine">' + $secret + '</Data>')))
 if ($collector.Records.Count -ne 2 -or $collector.Records[1].OriginalXml -or $collector.Records[1].Xml.Contains($secret)) { throw 'Unexpected command line exposed' }
 $collector.OnXml((Event-Xml 'Security' '<Data Name="NewProcessName">C:\foreign\python.exe</Data><Data Name="CommandLine">private</Data>'))

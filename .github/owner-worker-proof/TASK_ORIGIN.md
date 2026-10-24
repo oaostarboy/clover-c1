@@ -32,6 +32,45 @@ limited-account lane. Its terminal status is
 The existing public account request validator rejects this selector; it is not
 silently added to the public matrix. Native execution of this diagnostic is UNRUN.
 
+## Authorized 159 environment/schema capture (not a Task run)
+
+`windows-task-origin-capture-159.yml` is a dedicated, first-attempt-only push job
+on `proof/windows-task-origin-capture-159`. The parent authorized one capture.
+It does not dispatch the updater, install the product, create an account, log on,
+register a Task, change audit/log policy, use a linked token, or stop anything.
+The full-driver refusal above is unchanged. Exit 3 is deliberately nonqualifying.
+
+The new `task_origin_session.cs` reads WTS sessions/SIDs and the observer's real
+current/linked tokens. It queries token SID/session/elevation/integrity/groups,
+then uses the actual authentication LUID with `LsaGetLogonSessionData` for native
+logon type, SID and session. It never constructs, duplicates or impersonates a
+token. No usernames, domains, passwords or environment dumps are published.
+
+`task_origin_capture.ps1` captures these facts and installed SDK templates before
+subscription or any eligibility refusal. It independently subscribes only the
+already-enabled EventLog channels, stimulates a single inert PowerShell child,
+and seals after an eight-second drain and unchanged Schedule PID/creation
+readback. Foreign Task callback payloads are fully redacted; only native System
+metadata, field names and the original XML SHA256 are retained. The normal sink
+still filters the exact public Task and safe images. SDK callbacks now retain
+provider GUID, native record ID/time, raw-XML integrity hash and callback/replay
+provenance. Replay cannot set `NativeCallback=true`. Neither mode maps EnginePID
+or event numbers to action PID or process creation identity.
+
+`session_diagnostic` requires a matching active WTS session, native LSA interactive
+or remote-interactive logon, same SID/session and an actual medium token. It is
+only a prerequisite classifier, not an adapter or permission grant. Reuse of a
+runner's real linked medium token requires separate review; finding one never
+triggers public registration automatically. A genuine medium caller still needs
+real public UAC approval for Task installation in the frozen product. This
+capture therefore observes the environment first rather than faking that handoff.
+
+The upload contains `capture.json` (`DIAGNOSTIC_ONLY`), actual environment and
+readback, channel states, provider templates, callback records, Schedule readback,
+inert-child identity/exit and a per-file integrity manifest. It reports absent
+native callbacks as absent, never fills modeled process rows. No Task acceptance
+or positive/adversarial **native origin** controls are claimed by this job.
+
 ## One bounded native probe, once account ownership is resolved
 
 No native/CI dispatch is authorized by this patch. The account-prerequisite

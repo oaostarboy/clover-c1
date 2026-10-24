@@ -8,6 +8,11 @@ using System.Xml;
 
 public sealed class TaskOriginCallback {
     public long Sequence;
+    public bool NativeCallback;
+    public string OriginalXmlSha256;
+    public string ProviderGuid;
+    public string RecordId;
+    public string SystemTime;
     public string Channel;
     public string Provider;
     public int EventId;
@@ -30,6 +35,7 @@ public sealed class TaskOriginCallbacks : IDisposable {
     readonly string task;
     readonly string[] images;
     readonly string[] commands;
+    public bool CaptureForeignTaskSchemas { get; set; }
     long sequence;
     int dropped;
     bool disposed;
@@ -42,7 +48,12 @@ public sealed class TaskOriginCallbacks : IDisposable {
     public void Subscribe() {
         // EventLogWatcher(query) is future events only (no read-existing mode).
         // No audit/log policy is changed. A missing/disabled channel is a blocker.
-        foreach (string channel in new string[] {"Microsoft-Windows-TaskScheduler/Operational", "Security"}) {
+        SubscribeChannels(new string[] {"Microsoft-Windows-TaskScheduler/Operational", "Security"});
+    }
+    public void SubscribeChannels(string[] channels) {
+        foreach (string channel in channels) {
+            if (channel != "Microsoft-Windows-TaskScheduler/Operational" && channel != "Security")
+                throw new ArgumentException("unsupported channel");
             var query = new EventLogQuery(channel, PathType.LogName,
                 channel == "Security" ? "*[System[EventID=4688]]" : "*");
             var watcher = new EventLogWatcher(query);
@@ -59,11 +70,12 @@ public sealed class TaskOriginCallbacks : IDisposable {
             }
             using (EventRecord record = args.EventRecord) {
                 if (record == null) throw new InvalidOperationException("empty SDK callback");
-                OnXml(record.ToXml());
+                OnXml(record.ToXml(), true);
             }
         } catch (Exception exc) { lock (gate) errors.Add(exc.GetType().Name); }
     }
-    public void OnXml(string xml) {
+    public void OnXml(string xml) { OnXml(xml, false); }
+    void OnXml(string xml, bool native) {
         // This exact sink also runs against explicitly modeled XML on Linux.
         // That replay cannot enable Subscribe() or native acceptance.
         lock (gate) {
@@ -82,23 +94,33 @@ public sealed class TaskOriginCallbacks : IDisposable {
                 string channel = doc.SelectSingleNode("/e:Event/e:System/e:Channel", ns).InnerText;
                 bool taskEvent = channel == "Microsoft-Windows-TaskScheduler/Operational";
                 if (taskEvent) {
-                    if (!fields.ContainsKey("TaskName") || fields["TaskName"] != task) return;
+                    if (!CaptureForeignTaskSchemas && (!fields.ContainsKey("TaskName") || fields["TaskName"] != task)) return;
                 } else if (channel == "Security") {
                     if (!fields.ContainsKey("NewProcessName") || !Contains(images, fields["NewProcessName"])) return;
                 } else throw new InvalidOperationException("unexpected-channel");
                 if (records.Count >= 256) { dropped++; return; }
                 bool original = true;
+                string digest;
+                using (var sha = System.Security.Cryptography.SHA256.Create())
+                    digest = BitConverter.ToString(sha.ComputeHash(System.Text.Encoding.UTF8.GetBytes(xml))).Replace("-", "").ToLowerInvariant();
                 // Retain exact raw XML only for bounded, non-secret values.
                 // Unexpected actions/argv/unknown payload fields are diagnostic
                 // schema-only evidence and can NEVER be a complete witness.
                 foreach (XmlNode node in doc.SelectNodes("/e:Event/e:EventData/e:Data", ns)) {
-                    if (!SafeValue(node.Attributes["Name"].Value, node.InnerText, taskEvent)) {
+                    if ((taskEvent && CaptureForeignTaskSchemas) || !SafeValue(node.Attributes["Name"].Value, node.InnerText, taskEvent)) {
                         node.InnerText = "REDACTED_UNEXPECTED_PAYLOAD";
                         original = false;
                     }
                 }
                 var item = new TaskOriginCallback();
                 item.Sequence = ++sequence; item.Channel = channel;
+                item.NativeCallback = native; item.OriginalXmlSha256 = digest;
+                var providerNode = doc.SelectSingleNode("/e:Event/e:System/e:Provider", ns);
+                item.ProviderGuid = providerNode.Attributes["Guid"] == null ? null : providerNode.Attributes["Guid"].Value;
+                var recordIdNode = doc.SelectSingleNode("/e:Event/e:System/e:EventRecordID", ns);
+                item.RecordId = recordIdNode == null ? null : recordIdNode.InnerText;
+                var timeNode = doc.SelectSingleNode("/e:Event/e:System/e:TimeCreated", ns);
+                item.SystemTime = timeNode == null ? null : timeNode.Attributes["SystemTime"].Value;
                 item.Provider = doc.SelectSingleNode("/e:Event/e:System/e:Provider", ns).Attributes["Name"].Value;
                 item.EventId = Int32.Parse(doc.SelectSingleNode("/e:Event/e:System/e:EventID", ns).InnerText);
                 item.Version = Int32.Parse(doc.SelectSingleNode("/e:Event/e:System/e:Version", ns).InnerText);

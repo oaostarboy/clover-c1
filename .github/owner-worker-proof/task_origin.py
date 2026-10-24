@@ -143,6 +143,45 @@ def sdk_schema(raw):
         raise OriginRefused('unsupported SDK event XML schema') from exc
 
 
+def session_diagnostic(environment):
+    """Classify measured native facts only; never authorize a token or a Task.
+
+    WTSActive (0), an actual matching LSA interactive/remote-interactive logon,
+    matching session/SID, and an actual medium token are all necessary. Merely
+    possessing INTERACTIVE in TokenGroups or specifying LOGON_INTERACTIVE is not
+    proof. Reusing the runner's linked token requires separate parent review.
+    """
+    def medium_interactive(token):
+        if not isinstance(token, dict) or token.get('errors') != []:
+            return False
+        sid, session = token.get('sid'), token.get('session_id')
+        return (isinstance(sid, str) and sid.startswith('S-1-5-21-') and
+                type(session) is int and session > 0 and
+                token.get('elevated') is False and
+                token.get('elevation_type') in (1, 3) and
+                token.get('integrity_sid') == 'S-1-16-8192' and
+                token.get('interactive_group') is True and
+                token.get('logon_type') in (2, 10) and
+                token.get('logon_sid') == sid and token.get('logon_session_id') == session and
+                len([s for s in environment.get('sessions', [])
+                     if s.get('session_id') == session and s.get('state') == 0 and
+                     s.get('sid') == sid and s.get('error') is None]) == 1)
+
+    candidate = 'NONE'
+    current, linked = environment.get('current'), environment.get('linked')
+    if environment.get('errors') == []:
+        if medium_interactive(current):
+            candidate = 'CURRENT_MEDIUM_INTERACTIVE'
+        elif (isinstance(current, dict) and current.get('errors') == [] and
+              current.get('elevated') is True and current.get('elevation_type') == 2 and
+              medium_interactive(linked) and linked['sid'] == current.get('sid') and
+              linked['session_id'] == current.get('session_id')):
+            candidate = 'EXISTING_LINKED_MEDIUM_REQUIRES_REVIEW'
+    return dict(status='DIAGNOSTIC_ONLY', session_candidate=candidate,
+                review_required=True, native_acceptance=False,
+                public_registration_attempted=False, stop_authority=False)
+
+
 def refuse_unvalidated_native(evidence):
     """Fail closed. A caller-supplied JSON label can NEVER enable native proof."""
     path = Path(evidence)

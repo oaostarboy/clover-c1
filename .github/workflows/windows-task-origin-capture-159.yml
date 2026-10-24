@@ -1,0 +1,44 @@
+name: Windows Task origin capture only 159
+on:
+  push:
+    branches: ['proof/windows-task-origin-capture-159']
+    paths:
+      - '.github/owner-worker-proof/task_origin*'
+      - '.github/owner-worker-proof/test_task_capture.py'
+      - '.github/workflows/windows-task-origin-capture-159.yml'
+permissions:
+  contents: read
+jobs:
+  capture:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Portable source and real SDK type contracts
+        shell: pwsh
+        run: |
+          if ($env:GITHUB_RUN_ATTEMPT -ne '1') { throw 'No reruns authorized' }
+          python -m venv .capture-venv
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .capture-venv/Scripts/python.exe -m pip install pytest PyYAML --disable-pip-version-check --quiet
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          New-Item -ItemType Directory -Path .test-tmp -Force | Out-Null
+          & .capture-venv/Scripts/python.exe -m pytest .github/owner-worker-proof/test_task_origin.py .github/owner-worker-proof/test_task_capture.py --basetemp .test-tmp/task-capture -q
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          & .github/owner-worker-proof/task_origin_replay.ps1 -Fixture "$PWD/.github/owner-worker-proof"
+          Add-Type -Path .github/owner-worker-proof/task_origin_session.cs
+          $tokens=$null; $errors=$null
+          [void][Management.Automation.Language.Parser]::ParseFile("$PWD/.github/owner-worker-proof/task_origin_capture.ps1",[ref]$tokens,[ref]$errors)
+          if ($errors.Count) { throw ($errors | Out-String) }
+      - name: One diagnostic only native capture (expected nonzero)
+        shell: pwsh
+        run: |
+          & .github/owner-worker-proof/task_origin_capture.ps1 -Python "$PWD/.capture-venv/Scripts/python.exe" -Evidence "$env:RUNNER_TEMP/task-origin-capture-159"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: task-origin-capture-159-${{ github.run_id }}
+          path: ${{ runner.temp }}/task-origin-capture-159
+          if-no-files-found: error
