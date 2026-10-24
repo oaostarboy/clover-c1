@@ -89,8 +89,8 @@ def main() -> int:
         (clover_home / 'config.yaml').write_bytes((install / 'cli-config.yaml.example').read_bytes())
         run([binary, 'gateway', 'install', '--start-now', '--start-on-login'], 'gateway-install')
         owned = True
-        run([py, root / '.github/native-proof/proof.py', 'gateway', '--repo', install,
-             '--home', clover_home, '--sha', args.old_sha, '--port', '18791', '--seconds', '0',
+        run([py, root / '.github/native-proof/macos_wrapper_state.py', '--source', root,
+             '--guard-sha', args.product_sha, '--home', clover_home, '--sha', args.old_sha, '--seconds', '0',
              '--output', evidence / 'before-state.json'], 'before-state', timeout=210)
         import psutil
         state = json.loads((evidence / 'before-state.json').read_text())
@@ -117,8 +117,8 @@ def main() -> int:
             (evidence / 'actual-update-receipt.json').write_bytes(receipt.read_bytes())
         if exit_code != 0:
             raise ValueError(f'frozen CLI updater failed with exit {exit_code}')
-        run([py, root / '.github/native-proof/proof.py', 'gateway', '--repo', install,
-             '--home', clover_home, '--sha', args.product_sha, '--port', '18791', '--seconds', '90',
+        run([py, root / '.github/native-proof/macos_wrapper_state.py', '--source', root,
+             '--guard-sha', args.product_sha, '--home', clover_home, '--sha', args.product_sha, '--seconds', '90',
              '--previous', evidence / 'before-state.json', '--output', evidence / 'after-state.json'],
             'after-state', timeout=300)
         run([py, root / '.github/native-proof/proof.py', 'receipt', '--home', clover_home,
