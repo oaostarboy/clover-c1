@@ -166,12 +166,17 @@ class Contracts(unittest.TestCase):
                 helper.require_limited(missing, good['sid'])
 
     def test_non_windows_entry_refuses_before_native_actions(self):
-        import sys
-        if sys.platform == 'win32':
-            self.skipTest('portable refusal control')
-        with self.assertRaisesRegex(RuntimeError, 'Native Windows required'):
-            load().WinAPI()
+        helper = load()
+        # Portable negative control only, never native Windows identity proof.
+        with patch.object(helper.C, 'WinDLL', create=True,
+                          side_effect=AssertionError('Unexpected native action')) as native:
+            with patch.object(helper.sys, 'platform', 'unsupported-fixture-platform'):
+                with self.assertRaisesRegex(RuntimeError, 'Native Windows required'):
+                    helper.WinAPI()
+            native.assert_not_called()
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    # This portable prerequisite must not accept unexpected skipped cases.
+    result = unittest.main(verbosity=2, exit=False).result
+    raise SystemExit(not result.wasSuccessful() or bool(result.skipped))

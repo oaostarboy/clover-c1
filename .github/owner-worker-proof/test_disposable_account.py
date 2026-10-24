@@ -30,4 +30,6 @@ class AccountContracts(unittest.TestCase):
 
 
 if __name__ == '__main__':
-    unittest.main(verbosity=2)
+    # This portable prerequisite must not accept unexpected skipped cases.
+    result = unittest.main(verbosity=2, exit=False).result
+    raise SystemExit(not result.wasSuccessful() or bool(result.skipped))
