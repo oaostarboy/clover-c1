@@ -79,7 +79,7 @@ public static class CloverDisposableProfile {
     public static extern int CreateProfile(string sid, string name, StringBuilder path, uint length);
 }
 '@
-    $buffer = [Text.StringBuilder]::new(1024)
+    $buffer = [Text.StringBuilder]::new(260)
     # Whitelisted metadata only: never serialize exceptions, credentials or PSI.
     $profileDiagnostic = [ordered]@{
         phase='create_profile'; state='calling'; expected_sid=$sid; expected_name=$name

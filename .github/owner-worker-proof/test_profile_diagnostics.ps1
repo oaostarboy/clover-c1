@@ -27,7 +27,7 @@ public static class CloverDisposableProfile {
 '@
 $text = [IO.File]::ReadAllText($Source)
 # Execute the actual native call, error handler and SID-binding guard, not a copy.
-$start = $text.IndexOf('    $buffer = [Text.StringBuilder]::new(1024)')
+$start = $text.IndexOf('    $buffer = [Text.StringBuilder]::new(')
 $end = $text.IndexOf('    Set-PrivateDirectory -Path $Evidence', $start)
 Assert ($start -ge 0 -and $end -gt $start) 'Actual profile boundary not found'
 $boundary = [scriptblock]::Create($text.Substring($start, $end - $start))
@@ -64,7 +64,7 @@ foreach ($case in $cases) {
     $raw = [IO.File]::ReadAllText($path); $d = $raw | ConvertFrom-Json
     Assert ($d.hresult_signed -eq $case.hr -and $d.hresult_hex -ceq $case.hex) 'Signed/unsigned HRESULT mismatch or overflow'
     Assert ($d.win32_code -eq $case.code -and $d.reason -ceq $case.reason) 'Unsafe HRESULT decoding'
-    Assert ($d.native_call_returned -eq $true -and $d.buffer_capacity -eq 1024 -and $d.buffer_length -eq 24) 'Missing native/buffer evidence'
+    Assert ($d.native_call_returned -eq $true -and $d.buffer_capacity -eq 260 -and $d.buffer_length -eq 24) 'Missing native/buffer evidence'
     Assert ($d.expected_sid -eq $sid -and $d.expected_name -eq $name -and $d.caller_sid -eq $runner.User.Value -and $d.caller_is_admin -eq $true) 'Missing safe identity evidence'
     Assert ($d.state -eq $(if ($case.hr) {'native_failure'} else {'sid_bound'})) 'Failure and positive states must differ'
     Assert ($d.profile_sid_bound -eq ($case.hr -eq 0)) 'Native zero alone must not imply SID binding'

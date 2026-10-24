@@ -32,6 +32,19 @@ if (-not $description.EndsWith($tag, [StringComparison]::Ordinal)) { throw 'Full
 """)
         self.assertEqual(result.returncode, 0, result.stderr)
 
+    def test_profile_buffer_respects_userenv_max_path_interop_limit(self):
+        assignment = next(line for line in (HERE / 'disposable_account.ps1').read_text().splitlines()
+                          if line.strip().startswith('$buffer = '))
+        result = self.run_ps(assignment + "\n" + """
+# The native call receives Capacity as its cchProfilePath argument.
+# Portable boundary check only, not proof that Windows creates a profile.
+if ($buffer.Capacity -le 0 -or $buffer.Capacity -gt 260) {
+    throw 'CreateProfile buffer exceeds MAX_PATH interop contract'
+}
+'PASS'
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_environment_excludes_secrets_and_rebuilds_account_locations(self):
         result = self.run_ps("""
 $locations = @{ SystemRoot='C:/Windows'; PATH='owned-tool-path'; USERPROFILE='runner-profile';
