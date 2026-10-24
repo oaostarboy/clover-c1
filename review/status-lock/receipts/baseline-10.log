@@ -1,0 +1,44 @@
+
+ℹ The running gateway predates restart-safe reply delivery. The update continues: the gateway is restarted when it is idle (waiting up to a couple of minutes; if it stays busy the restart remains pending). An ordinary reply may be delivered once more during the first transition.
+  legacy: default (PID 123): identified legacy runtime
+.
+✗ Update not completed: default (PID 123): delivery-aware restart is not established
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: default (PID 123): delivery-aware restart is not established
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: default (PID 123): delivery-aware restart is not established
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: default (PID 123): delivery-aware restart is not established
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: default (PID 123): unknown restart contract
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+..
+✗ Update not completed: PID 123: no owner-bound gateway status
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: Gateway PID 123 remains busy or unverified (timeout); restart pending.
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: Gateway PID 123 remains busy or unverified (unverified); restart pending.
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: Cannot verify quiet state for gateway PID 123.
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: still busy
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+....
+✗ Update not completed: Legacy gateway PID 123 has not finished draining; no forced stop requested.
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: Cannot signal identified legacy gateway PID 123; no forced stop requested.
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+✗ Update not completed: Gateway PID 123 remains busy or unverified (timeout); restart pending.
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+.
+18 passed in 1.19s

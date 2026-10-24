@@ -1,0 +1,22 @@
+..{"lock_mode": "0o644", "lock_fd_access": "O_RDONLY", "elapsed_seconds": 1.0084538899827749, "persisted_active_agents": 0}
+FF.
+=================================== FAILURES ===================================
+_______________ test_read_only_lock_holder_cannot_disable_status _______________
+review/status-lock/original_test_status_security_concurrency.py:127: in test_read_only_lock_holder_cannot_disable_status
+    status.write_runtime_status(active_agents=13)
+gateway/status.py:1111: in locked_write
+    raise TimeoutError("runtime status writer is busy")
+E   TimeoutError: runtime status writer is busy
+___________________ test_lock_is_private_under_default_umask ___________________
+review/status-lock/original_test_status_security_concurrency.py:145: in test_lock_is_private_under_default_umask
+    assert stat.S_IMODE(lock.stat().st_mode) & 0o077 == 0
+E   AssertionError: assert (420 & 63) == 0
+E    +  where 420 = <built-in function S_IMODE>(33188)
+E    +    where <built-in function S_IMODE> = stat.S_IMODE
+E    +    and   33188 = os.stat_result(st_mode=33188, st_ino=59271837, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1792805298, st_mtime=1792805298, st_ctime=1792805298).st_mode
+E    +      where os.stat_result(st_mode=33188, st_ino=59271837, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1792805298, st_mtime=1792805298, st_ctime=1792805298) = stat()
+E    +        where stat = PosixPath('/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-13/pytest/test_lock_is_private_under_def0/owner/gateway_state.lock').stat
+=========================== short test summary info ============================
+FAILED review/status-lock/original_test_status_security_concurrency.py::test_read_only_lock_holder_cannot_disable_status
+FAILED review/status-lock/original_test_status_security_concurrency.py::test_lock_is_private_under_default_umask
+2 failed, 3 passed in 1.67s
