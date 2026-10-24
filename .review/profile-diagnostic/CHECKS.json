@@ -1,0 +1,316 @@
+{
+  "scope": "portable only; NO Windows proof",
+  "baseline": "8ab74772c5187f74600994dcd31059b5b998b4a3",
+  "records": [
+    {
+      "label": "baseline",
+      "file": "test_contract.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".review/profile-diagnostic/baseline-tree/.github/owner-worker-proof/test_contract.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/baseline-test_contract.xml"
+      ],
+      "exit": 0,
+      "cases": 20,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_contract.Contracts::test_bootstrap_tool_requires_explicit_absolute_existing_file",
+        "test_contract.Contracts::test_candidate_needs_immutable_tree_and_nonrelease_identity",
+        "test_contract.Contracts::test_candidate_next_is_exact_parent_plus_marker_only",
+        "test_contract.Contracts::test_changed_frozen_caller_is_not_silently_normalized",
+        "test_contract.Contracts::test_exact_frozen_postpull_excerpt_preserves_systemexit_escape",
+        "test_contract.Contracts::test_exact_released_callers_and_no_duplicate_rows",
+        "test_contract.Contracts::test_frozen_excerpt_ref_is_not_repaired_or_normalized",
+        "test_contract.Contracts::test_full_manifest_and_completion_cannot_omit_or_skip_required_stages",
+        "test_contract.Contracts::test_installer_refuses_missing_changed_bytes_and_unapproved_hash",
+        "test_contract.Contracts::test_installer_rejects_wrong_or_normalized_frozen_caller",
+        "test_contract.Contracts::test_installer_side_effect_entry_is_native_hosted_only",
+        "test_contract.Contracts::test_native_safety_only_can_never_claim_full_update_acceptance",
+        "test_contract.Contracts::test_native_topology_accepts_measured_base_argv_not_only_venv_prefix",
+        "test_contract.Contracts::test_native_topology_does_not_admit_a_second_installed_launcher",
+        "test_contract.Contracts::test_old_environment_is_created_by_released_installer_not_direct_uv",
+        "test_contract.Contracts::test_private_git_rewrites_really_clone_exact_objects_without_network",
+        "test_contract.Contracts::test_released_installer_bytes_and_real_powershell_file_command",
+        "test_contract.Contracts::test_reviewed_native_controls_and_update_acceptance_are_not_weakened",
+        "test_contract.Contracts::test_startup_registration_uses_supported_cli_and_real_limited_token",
+        "test_contract.Contracts::test_task_correction_is_explicit_partial_and_cannot_clear_future_source"
+      ],
+      "junit_sha256": "a7f22a63ca79ecdef45d86211587e50e3509be1177ce1f617c2594e5a37f90b9"
+    },
+    {
+      "label": "baseline",
+      "file": "test_disposable_account.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".review/profile-diagnostic/baseline-tree/.github/owner-worker-proof/test_disposable_account.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/baseline-test_disposable_account.xml"
+      ],
+      "exit": 0,
+      "cases": 1,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_disposable_account.AccountContracts::test_genuine_account_requires_new_sid_and_no_administrators_sid"
+      ],
+      "junit_sha256": "d9f57d2ee14e87192e9738fd00e7f469ea7b5bc0c86cab092c03affb3e399d45"
+    },
+    {
+      "label": "baseline",
+      "file": "test_restricted_token.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".review/profile-diagnostic/baseline-tree/.github/owner-worker-proof/test_restricted_token.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/baseline-test_restricted_token.xml"
+      ],
+      "exit": 0,
+      "cases": 6,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_restricted_token.Contracts::test_fixed_elevation_queries_fail_closed_on_api_errors_and_bad_lengths",
+        "test_restricted_token.Contracts::test_non_windows_entry_refuses_before_native_actions",
+        "test_restricted_token.Contracts::test_registration_does_not_confuse_task_policy_with_filtered_token",
+        "test_restricted_token.Contracts::test_snapshot_reads_fixed_elevation_without_a_null_size_probe",
+        "test_restricted_token.Contracts::test_token_predicates_reject_each_unsafe_or_missing_observation",
+        "test_restricted_token.Contracts::test_variable_queries_still_require_insufficient_buffer"
+      ],
+      "junit_sha256": "2e9f6431ecfc73adb109eb907273bdd243e1cdb346ab7b5976c2d77adcc4012e"
+    },
+    {
+      "label": "baseline",
+      "file": "test_bootstrap_resolution.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".review/profile-diagnostic/baseline-tree/.github/owner-worker-proof/test_bootstrap_resolution.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/baseline-test_bootstrap_resolution.xml"
+      ],
+      "exit": 0,
+      "cases": 11,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_bat_is_not_a_fallback",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_cmd_is_not_a_fallback",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_directory_is_not_executable",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_empty_and_relative_paths_rejected",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_exe_directory_is_not_executable",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_existing_extensionless_file_keeps_precedence",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_explicit_exe_remains_exact",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_no_neighbor_directory_search",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_other_names_do_not_gain_exe_fallback",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_posix_does_not_append_exe",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_windows_extensionless_setup_output_resolves_exact_adjacent_exe"
+      ],
+      "junit_sha256": "54a9b5b2bb77750db25cd0f2d513396ac77b06d416b04203d351b1f7337c8f8b"
+    },
+    {
+      "label": "baseline",
+      "file": "test_profile_diagnostics.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".review/profile-diagnostic/baseline-tree/.github/owner-worker-proof/test_profile_diagnostics.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/baseline-test_profile_diagnostics.xml"
+      ],
+      "exit": 1,
+      "cases": 2,
+      "failed": 1,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_profile_diagnostics.ProfileDiagnostics::test_actual_profile_boundary_and_cleanup_with_portable_native_double",
+        "test_profile_diagnostics.ProfileDiagnostics::test_full_entry_still_refuses_non_windows_before_account_or_evidence_creation"
+      ],
+      "junit_sha256": "0ec89e4cdd18f53500e141fd3b02909b994a5a7251c206f5710c0e98ea09af91"
+    },
+    {
+      "label": "candidate",
+      "file": "test_contract.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_contract.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/candidate-test_contract.xml"
+      ],
+      "exit": 0,
+      "cases": 20,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_contract.Contracts::test_bootstrap_tool_requires_explicit_absolute_existing_file",
+        "test_contract.Contracts::test_candidate_needs_immutable_tree_and_nonrelease_identity",
+        "test_contract.Contracts::test_candidate_next_is_exact_parent_plus_marker_only",
+        "test_contract.Contracts::test_changed_frozen_caller_is_not_silently_normalized",
+        "test_contract.Contracts::test_exact_frozen_postpull_excerpt_preserves_systemexit_escape",
+        "test_contract.Contracts::test_exact_released_callers_and_no_duplicate_rows",
+        "test_contract.Contracts::test_frozen_excerpt_ref_is_not_repaired_or_normalized",
+        "test_contract.Contracts::test_full_manifest_and_completion_cannot_omit_or_skip_required_stages",
+        "test_contract.Contracts::test_installer_refuses_missing_changed_bytes_and_unapproved_hash",
+        "test_contract.Contracts::test_installer_rejects_wrong_or_normalized_frozen_caller",
+        "test_contract.Contracts::test_installer_side_effect_entry_is_native_hosted_only",
+        "test_contract.Contracts::test_native_safety_only_can_never_claim_full_update_acceptance",
+        "test_contract.Contracts::test_native_topology_accepts_measured_base_argv_not_only_venv_prefix",
+        "test_contract.Contracts::test_native_topology_does_not_admit_a_second_installed_launcher",
+        "test_contract.Contracts::test_old_environment_is_created_by_released_installer_not_direct_uv",
+        "test_contract.Contracts::test_private_git_rewrites_really_clone_exact_objects_without_network",
+        "test_contract.Contracts::test_released_installer_bytes_and_real_powershell_file_command",
+        "test_contract.Contracts::test_reviewed_native_controls_and_update_acceptance_are_not_weakened",
+        "test_contract.Contracts::test_startup_registration_uses_supported_cli_and_real_limited_token",
+        "test_contract.Contracts::test_task_correction_is_explicit_partial_and_cannot_clear_future_source"
+      ],
+      "junit_sha256": "c2ba0fb22dbbae2b66b9a74a5bca240070d06cc06e3fb73d9a9f4b3c85c4501b"
+    },
+    {
+      "label": "candidate",
+      "file": "test_disposable_account.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_disposable_account.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/candidate-test_disposable_account.xml"
+      ],
+      "exit": 0,
+      "cases": 1,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_disposable_account.AccountContracts::test_genuine_account_requires_new_sid_and_no_administrators_sid"
+      ],
+      "junit_sha256": "76f11d2638b283d94c6b0f06ee5184a2d55d1ac73da75456024c2e405cfd55dd"
+    },
+    {
+      "label": "candidate",
+      "file": "test_restricted_token.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_restricted_token.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/candidate-test_restricted_token.xml"
+      ],
+      "exit": 0,
+      "cases": 6,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_restricted_token.Contracts::test_fixed_elevation_queries_fail_closed_on_api_errors_and_bad_lengths",
+        "test_restricted_token.Contracts::test_non_windows_entry_refuses_before_native_actions",
+        "test_restricted_token.Contracts::test_registration_does_not_confuse_task_policy_with_filtered_token",
+        "test_restricted_token.Contracts::test_snapshot_reads_fixed_elevation_without_a_null_size_probe",
+        "test_restricted_token.Contracts::test_token_predicates_reject_each_unsafe_or_missing_observation",
+        "test_restricted_token.Contracts::test_variable_queries_still_require_insufficient_buffer"
+      ],
+      "junit_sha256": "4d61d80f2877cff8f293da310125f48fa0cc8ba394cfa98142790c0cd5e8d6cd"
+    },
+    {
+      "label": "candidate",
+      "file": "test_bootstrap_resolution.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_bootstrap_resolution.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/candidate-test_bootstrap_resolution.xml"
+      ],
+      "exit": 0,
+      "cases": 11,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_bat_is_not_a_fallback",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_cmd_is_not_a_fallback",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_directory_is_not_executable",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_empty_and_relative_paths_rejected",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_exe_directory_is_not_executable",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_existing_extensionless_file_keeps_precedence",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_explicit_exe_remains_exact",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_no_neighbor_directory_search",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_other_names_do_not_gain_exe_fallback",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_posix_does_not_append_exe",
+        "test_bootstrap_resolution.BootstrapResolutionTests::test_windows_extensionless_setup_output_resolves_exact_adjacent_exe"
+      ],
+      "junit_sha256": "d89171a39cc936947fbd4e9c3832416b0cc49ed2a6c0ce8637c843bf1dbcbd60"
+    },
+    {
+      "label": "candidate",
+      "file": "test_profile_diagnostics.py",
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_profile_diagnostics.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-cbb0513c/.review/profile-diagnostic/candidate-test_profile_diagnostics.xml"
+      ],
+      "exit": 0,
+      "cases": 2,
+      "failed": 0,
+      "errors": 0,
+      "skipped": 0,
+      "ids": [
+        "test_profile_diagnostics.ProfileDiagnostics::test_actual_profile_boundary_and_cleanup_with_portable_native_double",
+        "test_profile_diagnostics.ProfileDiagnostics::test_full_entry_still_refuses_non_windows_before_account_or_evidence_creation"
+      ],
+      "junit_sha256": "682d64ecb9a4886b6617cf0f0c429c549cd39dfdd23542bf2fe2c5468198b4fc"
+    }
+  ]
+}

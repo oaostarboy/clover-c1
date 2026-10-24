@@ -8,7 +8,8 @@ if (-not $IsWindows -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONME
     throw 'Disposable hosted Windows runner required'
 }
 $runner = [Security.Principal.WindowsIdentity]::GetCurrent()
-if (-not ([Security.Principal.WindowsPrincipal]::new($runner)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
+$runnerIsAdmin = ([Security.Principal.WindowsPrincipal]::new($runner)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $runnerIsAdmin) {
     throw 'Hosted admin parent required to create the test account'
 }
 if (-not [IO.Path]::IsPathFullyQualified($Python) -or -not (Test-Path -LiteralPath $Python -PathType Leaf)) {
@@ -23,6 +24,14 @@ $name = 'clv' + $tag.Substring(0,16)
 $description = 'Clover CI ' + $tag
 $account = $null; $sid = $null; $profile = $null; $secret = $null; $process = $null
 $childExit = -1; $passed = $false; $cleanupPassed = $false
+# Diagnostic inventory is not an additional acceptance receipt. Null means unknown.
+$cleanupInventory = [ordered]@{
+    phase='owned_cleanup'; owned_sid=$null; state='incomplete'
+    processes=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null; unresolved_owners=$null }
+    tasks=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null; unresolved_principals=$null; suppressed_query_errors=$null }
+    profile=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null }
+    account=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null; suppressed_query_errors=$null }
+}
 $childEvidence = Join-Path $Evidence 'child'
 $protected = Join-Path $Evidence 'admin-only.txt'
 
@@ -71,13 +80,53 @@ public static class CloverDisposableProfile {
 }
 '@
     $buffer = [Text.StringBuilder]::new(1024)
+    # Whitelisted metadata only: never serialize exceptions, credentials or PSI.
+    $profileDiagnostic = [ordered]@{
+        phase='create_profile'; state='calling'; expected_sid=$sid; expected_name=$name
+        caller_sid=$runner.User.Value; caller_is_admin=$runnerIsAdmin
+        native_call_returned=$false; hresult_signed=$null; hresult_hex=$null
+        facility=$null; win32_code=$null; reason='unknown'; error_category='unknown'
+        buffer_capacity=$buffer.Capacity; buffer_length=$buffer.Length; profile_sid_bound=$false
+    }
+    $diagnosticPath = Join-Path $Evidence 'profile-creation.json'
+    $profileDiagnostic | ConvertTo-Json | Set-Content -LiteralPath $diagnosticPath -Encoding utf8
     $hr = [CloverDisposableProfile]::CreateProfile($sid, $name, $buffer, $buffer.Capacity)
-    if ($hr -ne 0) { throw 'OS CreateProfile failed' }
+    # Reinterpret the signed native int's bytes: [uint32]$hr overflows for negatives.
+    $unsignedHr = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$hr), 0)
+    $profileDiagnostic.native_call_returned = $true
+    $profileDiagnostic.hresult_signed = $hr
+    $profileDiagnostic.hresult_hex = '0x{0:X8}' -f $unsignedHr
+    $profileDiagnostic.facility = ($unsignedHr -shr 16) -band 0x1fff
+    $profileDiagnostic.buffer_length = $buffer.Length
+    $profileDiagnostic.error_category = 'nonzero_hresult'
+    if ($profileDiagnostic.facility -eq 7) {
+        $profileDiagnostic.win32_code = $unsignedHr -band 0xffff
+        $profileDiagnostic.error_category = 'win32_hresult'
+    }
+    # Symbols describe the returned code, NOT an inferred underlying OS cause.
+    $profileDiagnostic.reason = switch ($profileDiagnostic.hresult_hex) {
+        '0x00000000' { 'S_OK' }
+        '0x00000001' { 'S_FALSE' }
+        '0x80004005' { 'E_FAIL' }
+        '0x80070005' { 'ERROR_ACCESS_DENIED' }
+        '0x80070057' { 'ERROR_INVALID_PARAMETER' }
+        '0x800700B7' { 'ERROR_ALREADY_EXISTS' }
+        default { 'unknown' }
+    }
+    if ($hr -eq 0) { $profileDiagnostic.error_category = 'success' }
+    $profileDiagnostic.state = if ($hr -ne 0) { 'native_failure' } else { 'binding' }
+    $profileDiagnostic | ConvertTo-Json | Set-Content -LiteralPath $diagnosticPath -Encoding utf8
+    if ($hr -ne 0) { throw ('OS CreateProfile failed: HRESULT {0} ({1})' -f $hr, $profileDiagnostic.hresult_hex) }
     $profile = $buffer.ToString()
     $profileRecord = Get-CimInstance Win32_UserProfile -Filter "SID='$sid'"
     if (-not $profileRecord -or $profileRecord.LocalPath -ne $profile -or $profileRecord.Special) {
+        $profileDiagnostic.state = 'binding_rejected'
+        $profileDiagnostic | ConvertTo-Json | Set-Content -LiteralPath $diagnosticPath -Encoding utf8
         throw 'OS profile is not bound to the exact created SID'
     }
+    $profileDiagnostic.state = 'sid_bound'
+    $profileDiagnostic.profile_sid_bound = $true
+    $profileDiagnostic | ConvertTo-Json | Set-Content -LiteralPath $diagnosticPath -Encoding utf8
     Set-PrivateDirectory -Path $Evidence -OwnedSid $sid
     Set-PrivateDirectory -Path $profile -OwnedSid $sid
     $null = New-Item -ItemType Directory -Path $childEvidence
@@ -141,14 +190,20 @@ public static class CloverDisposableProfile {
     $passed = $true
 } finally {
     # Continue all cleanup steps on failure. Every target is the unique created SID.
+    $cleanupInventory.owned_sid = $sid
     try {
     if ($sid) {
         Invoke-AccountCleanup -Steps @(
             {
+                $cleanupInventory.processes.state = 'checking'
+                $cleanupInventory.processes.found = $false
+                $cleanupInventory.processes.removed = $false
+                $cleanupInventory.processes.unresolved_owners = 0
                 # Account is newly created; every process with this SID is owned.
                 foreach ($candidate in Get-CimInstance Win32_Process) {
                     $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Ignore
                     if ($owner -and $owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid) {
+                        $cleanupInventory.processes.found = $true
                         $ownedProcess = $null
                         try {
                             $ownedProcess = [Diagnostics.Process]::GetProcessById($candidate.ProcessId)
@@ -162,6 +217,7 @@ public static class CloverDisposableProfile {
                                 if (-not $ownedProcess.HasExited) {
                                     $ownedProcess.Kill()
                                     if (-not $ownedProcess.WaitForExit(10000)) { throw 'Owned process remains alive' }
+                                    $cleanupInventory.processes.removed = $true
                                 }
                             }
                         } catch [ArgumentException] {
@@ -174,37 +230,74 @@ public static class CloverDisposableProfile {
                 }
                 foreach ($candidate in Get-CimInstance Win32_Process) {
                     $owner = Invoke-CimMethod -InputObject $candidate -MethodName GetOwnerSid -ErrorAction Ignore
-                    if ($owner -and $owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid) { throw 'Owned SID process remains' }
+                    if (-not $owner -or $owner.ReturnValue -ne 0) { $cleanupInventory.processes.unresolved_owners++ }
+                    if ($owner -and $owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid) { $cleanupInventory.processes.found = $true; throw 'Owned SID process remains' }
                 }
+                if ($cleanupInventory.processes.unresolved_owners -eq 0) {
+                    $cleanupInventory.processes.verified_absent = $true
+                    $cleanupInventory.processes.state = 'verified_absent'
+                } else { $cleanupInventory.processes.state = 'unknown' }
             },
             {
+                $cleanupInventory.tasks.state = 'checking'
+                $cleanupInventory.tasks.found = $false
+                $cleanupInventory.tasks.removed = $false
+                $cleanupInventory.tasks.unresolved_principals = 0
+                $taskLookupErrors = @()
                 # Never guess a name or sweep tasks. Check exact principal SID.
                 foreach ($task in Get-ScheduledTask) {
                     $taskSid = $null
                     try { $taskSid = ([Security.Principal.NTAccount]::new($task.Principal.UserId)).Translate([Security.Principal.SecurityIdentifier]).Value }
-                    catch { if ($task.Principal.UserId -eq $sid) { $taskSid = $sid } }
+                    catch {
+                        if ($task.Principal.UserId -eq $sid) { $taskSid = $sid }
+                        else { $cleanupInventory.tasks.unresolved_principals++ }
+                    }
                     if ($taskSid -eq $sid) {
+                        $cleanupInventory.tasks.found = $true
                         Stop-ScheduledTask -InputObject $task -ErrorAction SilentlyContinue
                         Unregister-ScheduledTask -InputObject $task -Confirm:$false
-                        if (Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue) { throw 'Owned task remains' }
+                        if (Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue -ErrorVariable +taskLookupErrors) { throw 'Owned task remains' }
+                        $cleanupInventory.tasks.removed = $true
                     }
+                }
+                $cleanupInventory.tasks.suppressed_query_errors = $taskLookupErrors.Count
+                if ($cleanupInventory.tasks.unresolved_principals -eq 0 -and $taskLookupErrors.Count -eq 0) {
+                    $cleanupInventory.tasks.verified_absent = $true
+                    $cleanupInventory.tasks.state = 'verified_absent'
+                } else {
+                    $cleanupInventory.tasks.state = 'unknown'
+                    if ($taskLookupErrors.Count) { $cleanupInventory.tasks.removed = $null }
                 }
             },
             {
+                $cleanupInventory.profile.state = 'checking'
                 $record = Get-CimInstance Win32_UserProfile -Filter "SID='$sid'"
+                $cleanupInventory.profile.found = [bool]$record
                 if ($record) {
                     if (-not $profile -or $record.LocalPath -ne $profile -or $record.Special -or $record.Loaded) { throw 'Refuse unrelated or loaded profile removal' }
                     $record | Remove-CimInstance
                 }
                 if ((Get-CimInstance Win32_UserProfile -Filter "SID='$sid'") -or ($profile -and (Test-Path -LiteralPath $profile))) { throw 'Owned profile remains' }
+                $cleanupInventory.profile.removed = [bool]$record
+                $cleanupInventory.profile.verified_absent = $true
+                $cleanupInventory.profile.state = 'verified_absent'
             },
             {
-                $owned = Get-LocalUser -SID $account.SID -ErrorAction SilentlyContinue
+                $cleanupInventory.account.state = 'checking'
+                $accountLookupErrors = @()
+                $owned = Get-LocalUser -SID $account.SID -ErrorAction SilentlyContinue -ErrorVariable +accountLookupErrors
+                if ($owned -or $accountLookupErrors.Count -eq 0) { $cleanupInventory.account.found = [bool]$owned }
                 if ($owned) {
                     if ($owned.Description -ne $description -or $owned.Name -ne $name) { throw 'Refuse unrelated user removal' }
                     $owned | Remove-LocalUser
                 }
-                if (Get-LocalUser -SID $account.SID -ErrorAction SilentlyContinue) { throw 'Owned account remains' }
+                if (Get-LocalUser -SID $account.SID -ErrorAction SilentlyContinue -ErrorVariable +accountLookupErrors) { throw 'Owned account remains' }
+                $cleanupInventory.account.suppressed_query_errors = $accountLookupErrors.Count
+                if ($accountLookupErrors.Count -eq 0) {
+                    $cleanupInventory.account.removed = [bool]$owned
+                    $cleanupInventory.account.verified_absent = $true
+                    $cleanupInventory.account.state = 'verified_absent'
+                } else { $cleanupInventory.account.state = 'unknown' }
             }
         )
     }
@@ -212,10 +305,26 @@ public static class CloverDisposableProfile {
     } finally {
         if ($process) { $process.Dispose() }
         if ($secret) { $secret.Dispose() }
-        @{ passed=($passed -and $cleanupPassed); exit=$childExit; cleanup_passed=$cleanupPassed;
-           account_created=($null -ne $sid); profile_created=($null -ne $profile);
-           credentials_recorded=$false; installer_runs=0; update_cases=0 } |
-            ConvertTo-Json | Set-Content (Join-Path $Evidence 'RESULT.json') -Encoding utf8
+        try {
+            $resources = @('processes','tasks','profile','account')
+            foreach ($resource in $resources) {
+                if ($cleanupInventory[$resource].state -eq 'checking') {
+                    $cleanupInventory[$resource].state = 'failed_or_unknown'
+                    if ($cleanupInventory[$resource].found -ne $true) { $cleanupInventory[$resource].found = $null }
+                    if ($cleanupInventory[$resource].removed -ne $true) { $cleanupInventory[$resource].removed = $null }
+                }
+            }
+            if (-not $sid) { $cleanupInventory.state = 'no_owned_sid' }
+            elseif (@($resources | Where-Object { $cleanupInventory[$_].state -ne 'verified_absent' }).Count -eq 0) {
+                $cleanupInventory.state = 'verified_absent'
+            }
+            $cleanupInventory | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $Evidence 'owned-cleanup.json') -Encoding utf8
+        } finally {
+            @{ passed=($passed -and $cleanupPassed); exit=$childExit; cleanup_passed=$cleanupPassed;
+               account_created=($null -ne $sid); profile_created=($null -ne $profile);
+               credentials_recorded=$false; installer_runs=0; update_cases=0 } |
+                ConvertTo-Json | Set-Content (Join-Path $Evidence 'RESULT.json') -Encoding utf8
+        }
     }
 }
 if (-not $passed -or -not $cleanupPassed) { throw 'Account prerequisite did not pass' }

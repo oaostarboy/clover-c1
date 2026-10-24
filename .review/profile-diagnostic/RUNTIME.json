@@ -1,0 +1,7 @@
+{
+  "scope": "portable Linux only; NO Windows proof",
+  "python": "3.12.12 (main, Jan 15 2026, 05:11:12) [GCC 15.2.1 20260103]",
+  "platform": "Linux-6.18.40-3-lts-x86_64-with-glibc2.44",
+  "powershell": "7.5.2",
+  "pwsh_sha256": "4a89e7904a0d37e8d2d2a1d85df24dbd7c4e06395b19e57dbb48c9d44b47444c"
+}

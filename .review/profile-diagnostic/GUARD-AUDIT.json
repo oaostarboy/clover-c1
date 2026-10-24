@@ -1,0 +1,41 @@
+{
+  "passed": true,
+  "checks": {
+    "hosted_windows_fence": true,
+    "private_acl_function": true,
+    "secret_mask_account_flags_membership": true,
+    "exact_native_declaration": true,
+    "acl_env_credentials_child_guards": true,
+    "$name = 'clv' + $tag.Substring(0,16)": true,
+    "$description = 'Clover CI ' + $tag": true,
+    "$hr = [CloverDisposableProfile]::CreateProfile($sid, $name, $buffer, $buffer.Capacity)": true,
+    "if (-not $profileRecord -or $profileRecord.LocalPath -ne $profile -or $profileRecord.Special)": true,
+    "if (-not $profile -or $record.LocalPath -ne $profile -or $record.Special -or $record.Loaded) { throw 'Refuse unrelated or loaded profile removal' }": true,
+    "if ($owned.Description -ne $description -or $owned.Name -ne $name) { throw 'Refuse unrelated user removal' }": true,
+    "if ($ownerAgain.ReturnValue -ne 0 -or $ownerAgain.Sid -ne $sid) { throw 'Owned process identity changed' }": true,
+    "all_existing_other_throw_guards_retained": true,
+    "result_schema_expressions_unchanged": true,
+    "unchanged:account_common.ps1": true,
+    "unchanged:account_child.ps1": true,
+    "unchanged:token_prerequisite.ps1": true,
+    "unchanged:pins.json": true,
+    "unchanged:plan.py": true,
+    "unchanged:windows_update.py": true,
+    "unchanged:register_startup.ps1": true,
+    "unchanged:test_owner_worker_native.py": true,
+    "unchanged:test_status_lock_windows_native.py": true
+  },
+  "unchanged_sha256": {
+    "account_common.ps1": "159347a10b7ac4c87e20c44c728d2a538c8f8c86498c14c136d42745e9389151",
+    "account_child.ps1": "3212aa719ace012f60f2e1cd6e7e405318e3b9065aeca4150a4e65973346dc08",
+    "token_prerequisite.ps1": "d18ca9a2c56c13e5727d1dc06cadfeef29725e9ab3c3d5cccdb13683cafb4e04",
+    "pins.json": "b3b6ff53bb0570cb06c9c11c51d3e0161fd9ce3c04863588dc1b6a33c8907bf7",
+    "plan.py": "7a919ad3aea9f5b85a1f359b2ac012662f430cb4431b86cbccf40a07303dcba1",
+    "windows_update.py": "18523a6877de29b81763c1abfa5f59c2520f3fabdad2f69dea8f4fde5fc6010f",
+    "register_startup.ps1": "b22e82207cc692e231779358a94781880ac9e8dcdba4e714c37016cc65ae8aea",
+    "test_owner_worker_native.py": "5f824bda525c87eaa4da8adf74eff4ec18910bf4c0ad7463f88bdc58908b759c",
+    "test_status_lock_windows_native.py": "e7531e8728f121ff71acad816a70bb735ae32d6ecb6f8a3445fcec5c17f8b0e8"
+  },
+  "product": "1a606496182ef48eafd78889eea8878165b829ae",
+  "product_tree": "43825538944a3d836e8a28ad509f39b0eca7710e"
+}

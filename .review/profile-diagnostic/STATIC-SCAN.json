@@ -1,0 +1,10 @@
+{
+  "shell_injection": 0,
+  "unsafe_deserialization": 0,
+  "dynamic_python_execution": 0,
+  "sql_interpolation": 0,
+  "hardcoded_real_credentials": 0,
+  "synthetic_test_secret_only": true,
+  "independent_review": "pending parent; no nested agents authorized",
+  "passed": true
+}

@@ -1,0 +1,390 @@
+diff --git a/.github/owner-worker-proof/disposable_account.ps1 b/.github/owner-worker-proof/disposable_account.ps1
+index fc945503..b4465057 100644
+--- a/.github/owner-worker-proof/disposable_account.ps1
++++ b/.github/owner-worker-proof/disposable_account.ps1
+@@ -11 +11,2 @@ $runner = [Security.Principal.WindowsIdentity]::GetCurrent()
+-if (-not ([Security.Principal.WindowsPrincipal]::new($runner)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) {
++$runnerIsAdmin = ([Security.Principal.WindowsPrincipal]::new($runner)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
++if (-not $runnerIsAdmin) {
+@@ -25,0 +27,8 @@ $childExit = -1; $passed = $false; $cleanupPassed = $false
++# Diagnostic inventory is not an additional acceptance receipt. Null means unknown.
++$cleanupInventory = [ordered]@{
++    phase='owned_cleanup'; owned_sid=$null; state='incomplete'
++    processes=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null; unresolved_owners=$null }
++    tasks=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null; unresolved_principals=$null; suppressed_query_errors=$null }
++    profile=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null }
++    account=@{ state='not_checked'; found=$null; removed=$null; verified_absent=$null; suppressed_query_errors=$null }
++}
+@@ -73,0 +83,10 @@ public static class CloverDisposableProfile {
++    # Whitelisted metadata only: never serialize exceptions, credentials or PSI.
++    $profileDiagnostic = [ordered]@{
++        phase='create_profile'; state='calling'; expected_sid=$sid; expected_name=$name
++        caller_sid=$runner.User.Value; caller_is_admin=$runnerIsAdmin
++        native_call_returned=$false; hresult_signed=$null; hresult_hex=$null
++        facility=$null; win32_code=$null; reason='unknown'; error_category='unknown'
++        buffer_capacity=$buffer.Capacity; buffer_length=$buffer.Length; profile_sid_bound=$false
++    }
++    $diagnosticPath = Join-Path $Evidence 'profile-creation.json'
++    $profileDiagnostic | ConvertTo-Json | Set-Content -LiteralPath $diagnosticPath -Encoding utf8
+@@ -75 +94,26 @@ public static class CloverDisposableProfile {
+-    if ($hr -ne 0) { throw 'OS CreateProfile failed' }
++    # Reinterpret the signed native int's bytes: [uint32]$hr overflows for negatives.
++    $unsignedHr = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$hr), 0)
++    $profileDiagnostic.native_call_returned = $true
++    $profileDiagnostic.hresult_signed = $hr
++    $profileDiagnostic.hresult_hex = '0x{0:X8}' -f $unsignedHr
++    $profileDiagnostic.facility = ($unsignedHr -shr 16) -band 0x1fff
++    $profileDiagnostic.buffer_length = $buffer.Length
++    $profileDiagnostic.error_category = 'nonzero_hresult'
++    if ($profileDiagnostic.facility -eq 7) {
++        $profileDiagnostic.win32_code = $unsignedHr -band 0xffff
++        $profileDiagnostic.error_category = 'win32_hresult'
++    }
++    # Symbols describe the returned code, NOT an inferred underlying OS cause.
++    $profileDiagnostic.reason = switch ($profileDiagnostic.hresult_hex) {
++        '0x00000000' { 'S_OK' }
++        '0x00000001' { 'S_FALSE' }
++        '0x80004005' { 'E_FAIL' }
++        '0x80070005' { 'ERROR_ACCESS_DENIED' }
++        '0x80070057' { 'ERROR_INVALID_PARAMETER' }
++        '0x800700B7' { 'ERROR_ALREADY_EXISTS' }
++        default { 'unknown' }
++    }
++    if ($hr -eq 0) { $profileDiagnostic.error_category = 'success' }
++    $profileDiagnostic.state = if ($hr -ne 0) { 'native_failure' } else { 'binding' }
++    $profileDiagnostic | ConvertTo-Json | Set-Content -LiteralPath $diagnosticPath -Encoding utf8
++    if ($hr -ne 0) { throw ('OS CreateProfile failed: HRESULT {0} ({1})' -f $hr, $profileDiagnostic.hresult_hex) }
+@@ -78,0 +123,2 @@ public static class CloverDisposableProfile {
++        $profileDiagnostic.state = 'binding_rejected'
++        $profileDiagnostic | ConvertTo-Json | Set-Content -LiteralPath $diagnosticPath -Encoding utf8
+@@ -80,0 +127,3 @@ public static class CloverDisposableProfile {
++    $profileDiagnostic.state = 'sid_bound'
++    $profileDiagnostic.profile_sid_bound = $true
++    $profileDiagnostic | ConvertTo-Json | Set-Content -LiteralPath $diagnosticPath -Encoding utf8
+@@ -143,0 +193 @@ public static class CloverDisposableProfile {
++    $cleanupInventory.owned_sid = $sid
+@@ -147,0 +198,4 @@ public static class CloverDisposableProfile {
++                $cleanupInventory.processes.state = 'checking'
++                $cleanupInventory.processes.found = $false
++                $cleanupInventory.processes.removed = $false
++                $cleanupInventory.processes.unresolved_owners = 0
+@@ -151,0 +206 @@ public static class CloverDisposableProfile {
++                        $cleanupInventory.processes.found = $true
+@@ -164,0 +220 @@ public static class CloverDisposableProfile {
++                                    $cleanupInventory.processes.removed = $true
+@@ -177 +233,2 @@ public static class CloverDisposableProfile {
+-                    if ($owner -and $owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid) { throw 'Owned SID process remains' }
++                    if (-not $owner -or $owner.ReturnValue -ne 0) { $cleanupInventory.processes.unresolved_owners++ }
++                    if ($owner -and $owner.ReturnValue -eq 0 -and $owner.Sid -eq $sid) { $cleanupInventory.processes.found = $true; throw 'Owned SID process remains' }
+@@ -178,0 +236,4 @@ public static class CloverDisposableProfile {
++                if ($cleanupInventory.processes.unresolved_owners -eq 0) {
++                    $cleanupInventory.processes.verified_absent = $true
++                    $cleanupInventory.processes.state = 'verified_absent'
++                } else { $cleanupInventory.processes.state = 'unknown' }
+@@ -180,0 +242,5 @@ public static class CloverDisposableProfile {
++                $cleanupInventory.tasks.state = 'checking'
++                $cleanupInventory.tasks.found = $false
++                $cleanupInventory.tasks.removed = $false
++                $cleanupInventory.tasks.unresolved_principals = 0
++                $taskLookupErrors = @()
+@@ -185 +251,4 @@ public static class CloverDisposableProfile {
+-                    catch { if ($task.Principal.UserId -eq $sid) { $taskSid = $sid } }
++                    catch {
++                        if ($task.Principal.UserId -eq $sid) { $taskSid = $sid }
++                        else { $cleanupInventory.tasks.unresolved_principals++ }
++                    }
+@@ -186,0 +256 @@ public static class CloverDisposableProfile {
++                        $cleanupInventory.tasks.found = $true
+@@ -189 +259,2 @@ public static class CloverDisposableProfile {
+-                        if (Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue) { throw 'Owned task remains' }
++                        if (Get-ScheduledTask -TaskName $task.TaskName -TaskPath $task.TaskPath -ErrorAction SilentlyContinue -ErrorVariable +taskLookupErrors) { throw 'Owned task remains' }
++                        $cleanupInventory.tasks.removed = $true
+@@ -191,0 +263,8 @@ public static class CloverDisposableProfile {
++                $cleanupInventory.tasks.suppressed_query_errors = $taskLookupErrors.Count
++                if ($cleanupInventory.tasks.unresolved_principals -eq 0 -and $taskLookupErrors.Count -eq 0) {
++                    $cleanupInventory.tasks.verified_absent = $true
++                    $cleanupInventory.tasks.state = 'verified_absent'
++                } else {
++                    $cleanupInventory.tasks.state = 'unknown'
++                    if ($taskLookupErrors.Count) { $cleanupInventory.tasks.removed = $null }
++                }
+@@ -193,0 +273 @@ public static class CloverDisposableProfile {
++                $cleanupInventory.profile.state = 'checking'
+@@ -194,0 +275 @@ public static class CloverDisposableProfile {
++                $cleanupInventory.profile.found = [bool]$record
+@@ -199,0 +281,3 @@ public static class CloverDisposableProfile {
++                $cleanupInventory.profile.removed = [bool]$record
++                $cleanupInventory.profile.verified_absent = $true
++                $cleanupInventory.profile.state = 'verified_absent'
+@@ -202 +286,4 @@ public static class CloverDisposableProfile {
+-                $owned = Get-LocalUser -SID $account.SID -ErrorAction SilentlyContinue
++                $cleanupInventory.account.state = 'checking'
++                $accountLookupErrors = @()
++                $owned = Get-LocalUser -SID $account.SID -ErrorAction SilentlyContinue -ErrorVariable +accountLookupErrors
++                if ($owned -or $accountLookupErrors.Count -eq 0) { $cleanupInventory.account.found = [bool]$owned }
+@@ -207 +294,7 @@ public static class CloverDisposableProfile {
+-                if (Get-LocalUser -SID $account.SID -ErrorAction SilentlyContinue) { throw 'Owned account remains' }
++                if (Get-LocalUser -SID $account.SID -ErrorAction SilentlyContinue -ErrorVariable +accountLookupErrors) { throw 'Owned account remains' }
++                $cleanupInventory.account.suppressed_query_errors = $accountLookupErrors.Count
++                if ($accountLookupErrors.Count -eq 0) {
++                    $cleanupInventory.account.removed = [bool]$owned
++                    $cleanupInventory.account.verified_absent = $true
++                    $cleanupInventory.account.state = 'verified_absent'
++                } else { $cleanupInventory.account.state = 'unknown' }
+@@ -215,4 +308,20 @@ public static class CloverDisposableProfile {
+-        @{ passed=($passed -and $cleanupPassed); exit=$childExit; cleanup_passed=$cleanupPassed;
+-           account_created=($null -ne $sid); profile_created=($null -ne $profile);
+-           credentials_recorded=$false; installer_runs=0; update_cases=0 } |
+-            ConvertTo-Json | Set-Content (Join-Path $Evidence 'RESULT.json') -Encoding utf8
++        try {
++            $resources = @('processes','tasks','profile','account')
++            foreach ($resource in $resources) {
++                if ($cleanupInventory[$resource].state -eq 'checking') {
++                    $cleanupInventory[$resource].state = 'failed_or_unknown'
++                    if ($cleanupInventory[$resource].found -ne $true) { $cleanupInventory[$resource].found = $null }
++                    if ($cleanupInventory[$resource].removed -ne $true) { $cleanupInventory[$resource].removed = $null }
++                }
++            }
++            if (-not $sid) { $cleanupInventory.state = 'no_owned_sid' }
++            elseif (@($resources | Where-Object { $cleanupInventory[$_].state -ne 'verified_absent' }).Count -eq 0) {
++                $cleanupInventory.state = 'verified_absent'
++            }
++            $cleanupInventory | ConvertTo-Json -Depth 5 | Set-Content (Join-Path $Evidence 'owned-cleanup.json') -Encoding utf8
++        } finally {
++            @{ passed=($passed -and $cleanupPassed); exit=$childExit; cleanup_passed=$cleanupPassed;
++               account_created=($null -ne $sid); profile_created=($null -ne $profile);
++               credentials_recorded=$false; installer_runs=0; update_cases=0 } |
++                ConvertTo-Json | Set-Content (Join-Path $Evidence 'RESULT.json') -Encoding utf8
++        }
+diff --git a/.github/owner-worker-proof/test_profile_diagnostics.ps1 b/.github/owner-worker-proof/test_profile_diagnostics.ps1
+new file mode 100644
+index 00000000..02dcec1e
+--- /dev/null
++++ b/.github/owner-worker-proof/test_profile_diagnostics.ps1
+@@ -0,0 +1,163 @@
++# Portable diagnostic contracts only. NO Windows account/profile/logon/ACL proof.
++param([Parameter(Mandatory=$true)][string]$EvidenceRoot,
++      [string]$Source = (Join-Path $PSScriptRoot 'disposable_account.ps1'))
++$ErrorActionPreference = 'Stop'
++Set-StrictMode -Version Latest
++$null = New-Item -ItemType Directory -Path $EvidenceRoot -Force
++. (Join-Path $PSScriptRoot 'account_common.ps1')
++function Assert($Condition, [string]$Message) { if (-not $Condition) { throw $Message } }
++$tokens = $null; $parseErrors = $null
++$ast = [Management.Automation.Language.Parser]::ParseFile($Source, [ref]$tokens, [ref]$parseErrors)
++Assert ($parseErrors.Count -eq 0) 'PowerShell source parser failed'
++# Compile the exact native declaration (renamed only to avoid the fake's type).
++$declaration = $ast.Find({param($n) $n -is [Management.Automation.Language.CommandAst] -and $n.GetCommandName() -eq 'Add-Type'}, $true)
++$nativeDefinition = $declaration.CommandElements[-1].Value
++Add-Type -TypeDefinition ($nativeDefinition.Replace('class CloverDisposableProfile', 'class CloverDisposableProfileDeclarationCheck'))
++Add-Type -TypeDefinition @'
++using System.Text;
++public static class CloverDisposableProfile {
++    public static int Result;
++    public static int Calls;
++    public static int CreateProfile(string sid, string name, StringBuilder path, uint length) {
++        Calls++;
++        path.Append("C:/portable-fake-profile");
++        return Result;
++    }
++}
++'@
++$text = [IO.File]::ReadAllText($Source)
++# Execute the actual native call, error handler and SID-binding guard, not a copy.
++$start = $text.IndexOf('    $buffer = [Text.StringBuilder]::new(1024)')
++$end = $text.IndexOf('    Set-PrivateDirectory -Path $Evidence', $start)
++Assert ($start -ge 0 -and $end -gt $start) 'Actual profile boundary not found'
++$boundary = [scriptblock]::Create($text.Substring($start, $end - $start))
++$sid = 'S-1-5-21-111-222-333-1001'; $name = 'clvportableowned'
++$runner = [pscustomobject]@{ User = [pscustomobject]@{ Value = 'S-1-5-21-111-222-333-500' } }
++$runnerIsAdmin = $true
++$script:bindingMismatch = $false
++function Get-CimInstance {
++    param($ClassName, $Filter)
++    Assert ($ClassName -eq 'Win32_UserProfile' -and $Filter -eq "SID='$sid'") 'Profile query must keep exact SID'
++    [pscustomobject]@{ LocalPath = $(if ($script:bindingMismatch) {'C:/foreign'} else {'C:/portable-fake-profile'}); Special=$false }
++}
++# A secret in scope must not leak through native failure diagnostics or errors.
++$plain = 'portable-synthetic-secret-never-record'; $secret = ConvertTo-SecureString $plain -AsPlainText -Force
++$cases = @(
++    @{ hr=-2147024713; hex='0x800700B7'; code=183; reason='ERROR_ALREADY_EXISTS' },
++    @{ hr=-2147024891; hex='0x80070005'; code=5; reason='ERROR_ACCESS_DENIED' },
++    @{ hr=-2147024809; hex='0x80070057'; code=87; reason='ERROR_INVALID_PARAMETER' },
++    @{ hr=-2147467259; hex='0x80004005'; code=$null; reason='E_FAIL' },
++    @{ hr=-2147483648; hex='0x80000000'; code=$null; reason='unknown' },
++    @{ hr=1; hex='0x00000001'; code=$null; reason='S_FALSE' },
++    @{ hr=2147483647; hex='0x7FFFFFFF'; code=$null; reason='unknown' },
++    @{ hr=0; hex='0x00000000'; code=$null; reason='S_OK' }
++)
++foreach ($case in $cases) {
++    $Evidence = Join-Path $EvidenceRoot $case.hex
++    $null = New-Item -ItemType Directory -Path $Evidence -Force
++    [CloverDisposableProfile]::Result = $case.hr
++    $profile = $null; $caught = $null
++    try { . $boundary } catch { $caught = $_.Exception.Message }
++    Assert (([bool]$caught) -eq ($case.hr -ne 0)) 'Every nonzero HRESULT must still fail'
++    $path = Join-Path $Evidence 'profile-creation.json'
++    Assert (Test-Path -LiteralPath $path) 'Missing numeric CreateProfile diagnostic artifact'
++    $raw = [IO.File]::ReadAllText($path); $d = $raw | ConvertFrom-Json
++    Assert ($d.hresult_signed -eq $case.hr -and $d.hresult_hex -ceq $case.hex) 'Signed/unsigned HRESULT mismatch or overflow'
++    Assert ($d.win32_code -eq $case.code -and $d.reason -ceq $case.reason) 'Unsafe HRESULT decoding'
++    Assert ($d.native_call_returned -eq $true -and $d.buffer_capacity -eq 1024 -and $d.buffer_length -eq 24) 'Missing native/buffer evidence'
++    Assert ($d.expected_sid -eq $sid -and $d.expected_name -eq $name -and $d.caller_sid -eq $runner.User.Value -and $d.caller_is_admin -eq $true) 'Missing safe identity evidence'
++    Assert ($d.state -eq $(if ($case.hr) {'native_failure'} else {'sid_bound'})) 'Failure and positive states must differ'
++    Assert ($d.profile_sid_bound -eq ($case.hr -eq 0)) 'Native zero alone must not imply SID binding'
++    Assert (-not $raw.Contains($plain) -and -not ([string]$caught).Contains($plain) -and -not $raw.Contains('add-mask')) 'Credential leaked'
++    if ($case.hr -ne 0) { Assert ($caught.Contains($case.hex)) 'Thrown failure lost HRESULT' }
++}
++$Evidence = Join-Path $EvidenceRoot 'binding-mismatch'; $null = New-Item -ItemType Directory -Path $Evidence -Force
++$script:bindingMismatch = $true; [CloverDisposableProfile]::Result = 0
++$rejected = $false
++try { . $boundary } catch { $rejected = $_.Exception.Message -eq 'OS profile is not bound to the exact created SID' }
++Assert $rejected 'Zero HRESULT must still reject a mismatched CIM profile'
++$d = Get-Content (Join-Path $Evidence 'profile-creation.json') -Raw | ConvertFrom-Json
++Assert ($d.state -eq 'binding_rejected' -and -not $d.profile_sid_bound) 'Binding failure must stay distinct'
++Assert ([CloverDisposableProfile]::Calls -eq ($cases.Count + 1)) 'Unexpected native fallback or retry'
++# Execute the actual outer finally, including all cleanup steps and RESULT write.
++$outerTry = $ast.Find({param($n) $n -is [Management.Automation.Language.TryStatementAst] -and $null -ne $n.Finally -and $n.Extent.Text.Contains('# A fresh random runtime secret')}, $true)
++$cleanup = [scriptblock]::Create($outerTry.Finally.Extent.Text.Trim().Substring(1).TrimEnd().TrimEnd('}'))
++$init = $ast.Find({param($n) $n -is [Management.Automation.Language.AssignmentStatementAst] -and $n.Left.Extent.Text -eq '$cleanupInventory'}, $true)
++Assert ($null -ne $init) 'Missing owned cleanup inventory initialization'
++$script:cleanupMode = 'removed'; $script:accountPresent = $true; $script:accountRemoved = $false
++function Get-CimInstance {
++    param($ClassName, $Filter)
++    if ($ClassName -eq 'Win32_Process') {
++        $script:processScans++
++        if ($script:cleanupMode -eq 'unknown-process' -or ($script:cleanupMode -eq 'process-remains' -and $script:processScans -eq 2)) { return [pscustomobject]@{ ProcessId=123 } }
++    }
++    if ($ClassName -eq 'Win32_UserProfile') {
++        Assert ($Filter -eq "SID='$sid'") 'Cleanup profile SID fence changed'
++        if ($script:cleanupMode -eq 'profile-refusal') { return [pscustomobject]@{ LocalPath='C:/unexpected'; Special=$false; Loaded=$false } }
++        if ($script:cleanupMode -eq 'owned-profile' -and $script:profilePresent) { return [pscustomobject]@{ LocalPath=$profile; Special=$false; Loaded=$false } }
++    }
++}
++function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction) if ($script:cleanupMode -eq 'process-remains') { return [pscustomobject]@{ ReturnValue=0; Sid=$sid } }; return $null }
++function Remove-CimInstance { param([Parameter(ValueFromPipeline=$true)]$InputObject) process { $script:profilePresent=$false } }
++function Get-ScheduledTask {
++    [CmdletBinding()] param($TaskName, $TaskPath)
++    if ($TaskName -and $script:cleanupMode -eq 'suppressed-task-query') { Write-Error 'portable suppressed task lookup'; return }
++    if ($script:taskPresent) {
++        [pscustomobject]@{ TaskName='portable-owned'; TaskPath='/portable/'; Principal=[pscustomobject]@{ UserId=$(if ($script:cleanupMode -eq 'unknown-task') {'portable-unresolved'} else {$sid}) } }
++    }
++}
++function Stop-ScheduledTask { param($InputObject, $ErrorAction) }
++function Unregister-ScheduledTask { param($InputObject, [switch]$Confirm) $script:taskPresent=$false }
++function Get-LocalUser {
++    [CmdletBinding()] param($SID)
++    Assert ($SID.Value -eq $account.SID.Value) 'Cleanup account SID fence changed'
++    if ($script:cleanupMode -eq 'suppressed-account-query') { Write-Error 'portable suppressed lookup failure'; return }
++    if ($script:accountPresent) { [pscustomobject]@{ Name=$name; Description=$description } }
++}
++function Remove-LocalUser { param([Parameter(ValueFromPipeline=$true)]$InputObject) process { $script:accountPresent=$false; $script:accountRemoved=$true } }
++foreach ($mode in @('removed','profile-refusal','unknown-process','process-remains','suppressed-account-query','owned-profile','owned-task','unknown-task','suppressed-task-query','account-query-failure')) {
++    $script:cleanupMode = $mode; $script:accountPresent = $true; $script:accountRemoved=$false
++    $script:processScans=0
++    $script:profilePresent=$true
++    $script:taskPresent=$mode -in @('owned-task','unknown-task','suppressed-task-query')
++    $Evidence = Join-Path $EvidenceRoot $mode; $null = New-Item -ItemType Directory -Path $Evidence -Force
++    $account = [pscustomobject]@{ SID=[pscustomobject]@{ Value=$sid } }
++    $description = 'Clover CI portable-owned-tag'; $profile=$null; $process=$null; $secret=$null
++    if ($mode -eq 'owned-profile') { $profile = Join-Path $Evidence 'absent-owned-profile' }
++    $passed=$false; $cleanupPassed=$false; $childExit=-1
++    . ([scriptblock]::Create($init.Extent.Text))
++    if ($mode -eq 'account-query-failure') {
++        function Get-LocalUser { param($SID, $ErrorAction) throw 'portable query failure' }
++    }
++    $caught=$null
++    try { . $cleanup } catch { $caught=$_.Exception.Message }
++    $raw = Get-Content (Join-Path $Evidence 'owned-cleanup.json') -Raw
++    $d = $raw | ConvertFrom-Json
++    Assert ($d.owned_sid -eq $sid) 'Cleanup must record exact owned SID'
++    Assert (-not $raw.Contains($plain) -and -not $raw.Contains('add-mask')) 'Cleanup credential leaked'
++    $result = Get-Content (Join-Path $Evidence 'RESULT.json') -Raw | ConvertFrom-Json
++    Assert (-not $result.passed) 'Failed provisioning must never become a positive receipt'
++    if ($mode -eq 'removed') {
++        Assert ($d.account.found -and $d.account.removed -and $d.account.verified_absent -and $d.state -eq 'verified_absent') 'Missing exact account disposal evidence'
++    } elseif ($mode -eq 'profile-refusal') {
++        Assert ($caught -and $script:accountRemoved -and -not $result.cleanup_passed) 'Cleanup must propagate failure and still remove owned account'
++        Assert ($d.profile.found -and $null -eq $d.profile.removed -and $null -eq $d.profile.verified_absent -and $d.profile.state -eq 'failed_or_unknown') 'Failed profile snapshot falsely passed'
++    } elseif ($mode -eq 'unknown-process') {
++        Assert ($null -eq $d.processes.verified_absent -and $d.processes.state -eq 'unknown' -and $d.state -eq 'incomplete') 'Unknown owner snapshot falsely passed'
++    } elseif ($mode -eq 'process-remains') {
++        Assert ($caught -and $d.processes.found -and $null -eq $d.processes.verified_absent -and -not $result.cleanup_passed -and $script:accountRemoved) 'Final owned-process detection lost or cleanup skipped'
++    } elseif ($mode -eq 'suppressed-account-query') {
++        Assert ($null -eq $d.account.found -and $null -eq $d.account.verified_absent -and $d.account.state -eq 'unknown' -and $d.state -eq 'incomplete') 'Suppressed lookup failure falsely passed'
++    } elseif ($mode -eq 'owned-profile') {
++        Assert ($d.profile.found -and $d.profile.removed -and $d.profile.verified_absent) 'Missing profile removal readback'
++    } elseif ($mode -eq 'owned-task') {
++        Assert ($d.tasks.found -and $d.tasks.removed -and $d.tasks.verified_absent) 'Missing task removal readback'
++    } elseif ($mode -in @('unknown-task','suppressed-task-query')) {
++        Assert ($null -eq $d.tasks.verified_absent -and $d.tasks.state -eq 'unknown' -and $d.state -eq 'incomplete') 'Unknown task snapshot falsely passed'
++    } else {
++        Assert ($caught -and -not $result.cleanup_passed -and $null -eq $d.account.found -and $null -eq $d.account.verified_absent) 'Failed account query falsely passed'
++    }
++}
++@{ scope='portable diagnostics only; NO Windows proof'; hresult_cases=$cases.Count; binding_negative=1; cleanup_cases=10; parser_and_native_declaration_compile=$true; passed=$true } |
++    ConvertTo-Json | Set-Content (Join-Path $EvidenceRoot 'PORTABLE-RESULT.json') -Encoding utf8
++Write-Output 'PASS portable diagnostics only; NO Windows proof'
+diff --git a/.github/owner-worker-proof/test_profile_diagnostics.py b/.github/owner-worker-proof/test_profile_diagnostics.py
+new file mode 100644
+index 00000000..638c98d4
+--- /dev/null
++++ b/.github/owner-worker-proof/test_profile_diagnostics.py
+@@ -0,0 +1,57 @@
++"""Portable diagnostics only: never Windows account/logon/profile/ACL proof."""
++import json
++from pathlib import Path
++import shutil
++import subprocess
++import sys
++import tempfile
++import unittest
++
++HERE = Path(__file__).resolve().parent
++
++
++class ProfileDiagnostics(unittest.TestCase):
++    def powershell(self):
++        executable = shutil.which('pwsh')
++        if not executable:
++            self.skipTest('Portable diagnostic execution requires PowerShell 7')
++        return executable
++
++    def test_actual_profile_boundary_and_cleanup_with_portable_native_double(self):
++        with tempfile.TemporaryDirectory(dir=HERE) as directory:
++            result = subprocess.run(
++                [self.powershell(), '-NoLogo', '-NoProfile', '-NonInteractive',
++                 '-File', str(HERE / 'test_profile_diagnostics.ps1'),
++                 '-EvidenceRoot', directory],
++                capture_output=True, text=True, timeout=45,
++            )
++            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
++            receipt = json.loads((Path(directory) / 'PORTABLE-RESULT.json').read_text())
++            self.assertEqual(receipt['scope'], 'portable diagnostics only; NO Windows proof')
++            self.assertTrue(receipt['passed'])
++            self.assertEqual(receipt['hresult_cases'], 8)
++            self.assertEqual(receipt['binding_negative'], 1)
++            self.assertEqual(receipt['cleanup_cases'], 10)
++            self.assertTrue(receipt['parser_and_native_declaration_compile'])
++            for artifact in Path(directory).rglob('*.json'):
++                raw = artifact.read_text()
++                self.assertNotIn('portable-synthetic-secret-never-record', raw)
++                self.assertNotIn('::add-mask::', raw)
++
++    @unittest.skipIf(sys.platform == 'win32', 'Portable non-Windows refusal control')
++    def test_full_entry_still_refuses_non_windows_before_account_or_evidence_creation(self):
++        with tempfile.TemporaryDirectory(dir=HERE) as directory:
++            evidence = Path(directory) / 'must-not-exist'
++            result = subprocess.run(
++                [self.powershell(), '-NoLogo', '-NoProfile', '-NonInteractive',
++                 '-File', str(HERE / 'disposable_account.ps1'),
++                 '-Python', sys.executable, '-Evidence', str(evidence)],
++                capture_output=True, text=True, timeout=15,
++            )
++            self.assertNotEqual(result.returncode, 0)
++            self.assertIn('Disposable hosted Windows runner required', result.stderr)
++            self.assertFalse(evidence.exists())
++
++
++if __name__ == '__main__':
++    unittest.main(verbosity=2)
