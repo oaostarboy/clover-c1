@@ -387,6 +387,17 @@ def main(a):
     provider = LocalProvider(evidence, effect, token, reply)
     irc = LocalIRC(evidence)
     records = [call('state', 'seed-state', '--label', 'old-before-start')]
+    customization = home / 'skills' / 'private-native-fixture' / 'SKILL.md'
+    customization.parent.mkdir(parents=True)
+    customization.write_text('Private nonsecret native proof customization.\n', encoding='utf-8')
+    customization_sha = sha(customization)
+    receipt_dir = home / 'logs' / 'update_receipts'
+    receipt_dir.mkdir(parents=True, exist_ok=True)
+    stale_receipt = dict(run_id='stale-native-proof-not-this-run', outcome='failed',
+                         started_at=1, finished_at=2, stop_reason='prior nonsecret refusal')
+    dump(receipt_dir / 'latest.json', stale_receipt)
+    dump(evidence / 'seeded-stale-receipt.json', stale_receipt)
+    (home / 'fleet_restart_pending').write_text('prior native fixture restart intent\n')
     large_lane = os.environ.get('LARGE_ROLLBACK_LANE') == 'true'
     live_python = python(live)
     if large_lane:
@@ -554,6 +565,8 @@ def main(a):
         dump(evidence/'first-outcome.json',dict(exit=rc,refused=refused,lost_original_while_held=lost,
             received=received,errors=errors,disk_sha=git('rev-parse','HEAD')))
         call('verify','state-after','--records',evidence/'records.json')
+        assert sha(customization) == customization_sha, 'local customization changed'
+        dump(evidence / 'customization-preserved.json', dict(path=str(customization), sha256=customization_sha))
         receipt=home/'logs/update_receipts/latest.json'
         if receipt.exists(): shutil.copy2(receipt,evidence/'update-receipt.json')
         if lost or errors or thread.is_alive():
@@ -564,6 +577,12 @@ def main(a):
             raise RuntimeError('actual turn did not survive the updater; see result and receiver evidence')
         assert received == [reply]
         dump(evidence/'inflight-after.json',legacy.verify_relaxed(pending,home,effect,receiver,evidence,evidence/'irc.log'))
+        if rc != 0 and git('rev-parse', 'HEAD') == a.old:
+            dump(evidence / 'result.json', dict(status='UNSUPPORTED_FROZEN_PREPULL_OR_NATIVE_FAILURE',
+                old=a.old, target=a.target, entry=a.entry, setup=a.setup, exit=rc,
+                source_pulled=False, driver_restart=False, real_telegram=False,
+                note='Target-side code did not run. Inspect preserved output; no retry or bypass.'))
+            raise RuntimeError('released caller refused or failed before target pull; native acceptance NOT passed')
         if refused:
             assert rc==2
             if pending_before is not None:
@@ -582,16 +601,28 @@ def main(a):
             dump(evidence/'gateway-window.json',samples)
             call('verify','state-after','--records',evidence/'records.json')
             dump(evidence/'inflight-after-successor.json',legacy.verify_relaxed(pending,home,effect,receiver,evidence,evidence/'irc.log'))
-            dump(evidence/'result.json',dict(status=('FIXED_GATEWAY_FALSE_REFUSAL' if a.old == a.fixed_base else 'SAFE_REFUSAL'),target=a.target,old=a.old,
-                entry=a.entry,exit=rc,workflow_sha=os.environ['GITHUB_SHA'],original_pid=before['state']['pid'],
+            dump(evidence/'result.json',dict(status='NATIVE_UPDATE_REFUSED_NOT_ACCEPTED',target=a.target,old=a.old,
+                entry=a.entry,setup=a.setup,exit=rc,workflow_sha=os.environ['GITHUB_SHA'],original_pid=before['state']['pid'],
                 stability_seconds=155,driver_restart=False,real_telegram=False))
-            assert a.old != a.fixed_base, 'capability-aware fixed base falsely refused the automatic update'
-            return
+            raise RuntimeError('state survived, but refusal is not automatic-update acceptance')
         assert rc==0
         logical_receipt = wait_update_receipt(home, evidence, began, a.old, a.target)
         dump(evidence / 'logical-update-completion.json', dict(outcome=logical_receipt['outcome'],
             pre_sha=logical_receipt['pre_update']['sha'], post_sha=logical_receipt['post_update']['sha'],
             started_at=logical_receipt['started_at'], finished_at=logical_receipt['finished_at']))
+        assert logical_receipt.get('run_id') != stale_receipt['run_id']
+        if a.entry == 'gateway':
+            def final_notice():
+                path = evidence / 'irc.log'
+                with path.open('rb') as handle:
+                    handle.seek(update_offsets[str(path)])
+                    text = handle.read().decode('utf-8', errors='replace')
+                lines = [line for line in text.splitlines()
+                         if '<< PRIVMSG' in line and 'Clover update finished' in line]
+                return lines or None
+            notices = wait_for(final_notice, 300)
+            assert len(notices) == 1, notices
+            dump(evidence / 'current-run-final-chat.json', dict(received=notices, real_telegram=False))
         first_transition = None
         if WINDOWS and a.old == '9535350bee1d57cf7e466672e6f416403886bec1':
             # Record what the released updater really does on its first transition:
@@ -653,7 +684,7 @@ def main(a):
             driver_restart=False, updater_owned_successor=True, stability_seconds=90,
             real_terminal_tool=True, local_deterministic_provider=True, real_external_llm=False,
             real_telegram=False, inflight_witness=True, latest_write_state=True,
-            rollback='frozen-156-fault-stop-passed' if large_lane else 'covered-by-platform-large-lane',
+            rollback='frozen-156-fault-stop-passed' if large_lane else 'NOT_EXERCISED',
             large_state_measured=large_lane, final_source_after_fault_injection=a.old if large_lane else a.target))
     finally:
         if health_watch is not None and health_watch.poll() is None:

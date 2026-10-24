@@ -52,6 +52,44 @@ def test_native_venv_launcher_and_worker_have_distinct_owner_witnesses(real_chil
     record_property('worker_birth', worker.create_time())
 
 
+def test_real_reporter_preserves_live_owner_identity_and_restart_contract(tmp_path, monkeypatch, record_property):
+    home = tmp_path / 'owner-reporter-home'
+    home.mkdir()
+    monkeypatch.setenv('CLOVER_HOME', str(home))
+    env = dict(os.environ, CLOVER_HOME=str(home))
+    owner_code = (
+        'import json,os,sys; from gateway import status; '
+        'status.write_pid_file(); '
+        'status.write_runtime_status(gateway_state="running", active_agents=0, '
+        'restart_requested=False, update_restart_capability="reply-carriers-through-ack-v1"); '
+        'print(json.dumps({"worker":os.getpid()}), flush=True); sys.stdin.buffer.read()'
+    )
+    owner = subprocess.Popen([sys.executable, '-I', '-c', owner_code], env=env,
+                             stdin=subprocess.PIPE, stdout=subprocess.PIPE, text=True)
+    try:
+        assert owner.stdout is not None
+        ready = json.loads(owner.stdout.readline())
+        path = home / 'gateway_state.json'
+        before = json.loads(path.read_text())
+        assert before['pid'] == ready['worker']
+        reporter = subprocess.run([sys.executable, '-I', '-c',
+            'from gateway import status; status.write_runtime_status('
+            'platform="native-reporter",platform_state="connected")'],
+            env=env, capture_output=True, text=True, timeout=30)
+        assert reporter.returncode == 0, reporter.stderr
+        after = json.loads(path.read_text())
+        record_property('owner_worker_pid', ready['worker'])
+        record_property('top_level_pid_after_reporter', after['pid'])
+        for field in ['pid', 'start_time', 'kind', 'clover_home', 'argv', 'code_sha', 'update_restart_capability']:
+            assert after.get(field) == before.get(field), (field, before, after)
+        entry = after['platforms']['native-reporter']
+        assert entry['state'] == 'connected'
+        assert entry['writer_pid'] != ready['worker']
+        assert owner.poll() is None
+    finally:
+        owner.communicate(timeout=15)
+
+
 @pytest.mark.parametrize('condition', ['missing', 'invalid-json', 'reused-pid', 'foreign-home'])
 def test_untrusted_status_cannot_admit_a_real_live_process(real_child, tmp_path, monkeypatch, condition):
     from clover_cli import gateway, update_delivery_guard as guard

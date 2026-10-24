@@ -60,12 +60,18 @@ jobs:
           enable-cache: false
       - name: Locked native test environment
         working-directory: source
-        run: uv sync --locked --python 3.11 --extra all --extra dev --extra messaging
+        shell: pwsh
+        run: |
+          uv sync --locked --python 3.11 --extra all --extra dev --extra messaging
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv pip install --python .venv/Scripts/python.exe pytest-timeout==2.4.0
+          exit $LASTEXITCODE
       - name: Exercise real native processes plus retained product safety contracts
         working-directory: source
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/evidence" | Out-Null
+          git rev-parse HEAD | Set-Content "$env:RUNNER_TEMP/evidence/source-sha.txt" -Encoding utf8
           uv run --no-sync python -m pytest -q -o addopts= --timeout=90 --timeout-method=thread `
             tests/clover_cli/test_windows_process_witness_native.py `
             tests/clover_cli/test_windows_handoff_clock_native.py `
