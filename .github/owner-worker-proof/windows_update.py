@@ -31,6 +31,7 @@ HELPERS = Path(os.environ["CLOVER_PROOF_HELPERS"]).resolve()
 sys.path.insert(0, str(HELPERS))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import released_installer
+import task_origin
 import inflight_witness as witness
 import legacy156_checks as legacy
 from macos_external_env import dump, sha, write_state, verify_state, identity
@@ -269,8 +270,13 @@ def observe(home, source, expected, live, diagnostic=None):
     assert p.pid == members[-1]['pid'], dict(state=state, actual_members=members)
     schedule = psutil.win_service_get('Schedule').as_dict()
     assert schedule['status'] == 'running'
+    schedule_process = psutil.Process(schedule['pid'])
+    schedule_created = schedule_process.create_time()
+    assert schedule_process.is_running()
     supervisor = dict(schedule_pid=schedule['pid'], schedule_status=schedule['status'],
+                      schedule_create_time=schedule_created,
                       ancestors=[dict(pid=q.pid, name=q.name()) for q in p.parents()])
+    assert psutil.Process(schedule['pid']).create_time() == schedule_created
     assert any(c.status==psutil.CONN_LISTEN and c.laddr.port==18791 for c in p.net_connections(kind='inet'))
     assert request('/health')['status']=='ok'
     return dict(state=state, argv=p.cmdline(), executable=p.exe(), create_time=p.create_time(),
@@ -323,16 +329,17 @@ def child(a):
 
 def main(a):
     native_guard()
+    diagnostic = a.setup == 'troy-live-ancestor-diagnostic'
     import importlib.util
     spec = importlib.util.spec_from_file_location('proof_bootstrap', Path(__file__).with_name('bootstrap.py'))
     assert spec is not None and spec.loader is not None
     bootstrap = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bootstrap)
-    # The legacy direct-pythonw Task does not prove the public launch contract.
-    # Keep its live-Schedule assertion below; refuse acceptance until the precise
-    # replacement-origin contract has independent review and native evidence.
+    # Public Task origin is historical, not a permanently live Schedule ancestor.
+    # No native SDK schema has been admitted yet; emit the exact bounded probe
+    # blocker rather than accepting synthetic/replayed history as native proof.
     if a.setup == 'troy':
-        raise RuntimeError('Public Task origin contract unresolved; no synthetic Task acceptance')
+        task_origin.refuse_unvalidated_native(a.evidence)
     uv = bootstrap.resolve(a.uv)
     for value in [a.target, a.tree, a.old, a.candidate]:
         assert re.fullmatch('[0-9a-f]{40}', value)
@@ -340,8 +347,17 @@ def main(a):
     evidence.mkdir(parents=True, exist_ok=True)
     if WINDOWS:
         import restricted_token
-        restricted_token.main(['--evidence', str(evidence / 'driver-token.json'),
-                               '--expected-sid', os.environ['CLOVER_FIXTURE_ACCOUNT_SID']])
+        if diagnostic:
+            # Explicitly NON-public historical S4U lab. Observe the actual token;
+            # never elevate/switch the account or pass this as the limited-user lane.
+            api = restricted_token.WinAPI()
+            with api.current() as token:
+                observed = api.snapshot(token, current=True)
+            dump(evidence / 'diagnostic-driver-token.json', observed)
+            assert observed['admin_member'] and observed['elevated'], 'historical S4U diagnostic requires its real elevated lab token'
+        else:
+            restricted_token.main(['--evidence', str(evidence / 'driver-token.json'),
+                                   '--expected-sid', os.environ['CLOVER_FIXTURE_ACCOUNT_SID']])
     scratch = Path.home() / ('owner-worker-' + os.environ['GITHUB_RUN_ID'])
     scratch.mkdir()
     home = Path(os.environ['LOCALAPPDATA']) / 'clover'
@@ -383,7 +399,8 @@ def main(a):
         workflow_sha=os.environ['GITHUB_SHA'],
         helper_checkout_sha=released_installer.git(Path(script).parents[2], 'rev-parse', 'HEAD'),
         files={name: sha(Path(script).with_name(name)) for name in
-               ('windows_update.py', 'released_installer.py', 'register_startup.ps1', 'start_troy.ps1')}))
+               ('windows_update.py', 'released_installer.py', 'register_startup.ps1', 'start_troy.ps1',
+                'start_troy_live_ancestor_diagnostic.ps1', 'task_origin.py', 'task_origin_callbacks.cs')}))
     released_installer.install(Path(a.source).resolve(), a.old, a.candidate, evidence,
                                scratch, source, home, uv, env, run)
     # Fetch candidate objects only AFTER installation, without changing HEAD
@@ -472,19 +489,20 @@ def main(a):
             trace_stop.wait(0.5)
     try:
         if WINDOWS:
-            # Use the supported gateway install CLI, declining UAC in an
-            # actually non-admin token. No private entry-generation helpers.
-            run(['pwsh', '-NoProfile', '-File', Path(script).with_name('register_startup.ps1'),
-                 '-Python', python(live), '-Source', source, '-Evidence', evidence,
-                 '-ExpectedSid', os.environ['CLOVER_FIXTURE_ACCOUNT_SID']],
-                'gateway-startup-registration', timeout=180)
-            service=call('service','service-definition')
-            if a.setup == 'troy':
-                run(['pwsh', '-NoProfile', '-File', Path(script).with_name('start_troy.ps1'),
+            if diagnostic:
+                run(['pwsh', '-NoProfile', '-File', Path(script).with_name('start_troy_live_ancestor_diagnostic.ps1'),
                      '-Python', python(live).with_name('pythonw.exe'), '-Source', source],
-                    'scheduled-task-launch', timeout=90)
-                service['task_name'] = 'Clover_OwnerWorker_Proof'
+                    'synthetic-d10-task-launch', timeout=90)
+                service = dict(path=str(evidence / 'synthetic-d10-task-launch.log'),
+                               task_name='Clover_OwnerWorker_Proof', diagnostic_only=True)
             else:
+                # Public Startup only: keep the actual limited account/UAC decline.
+                run(['pwsh', '-NoProfile', '-File', Path(script).with_name('register_startup.ps1'),
+                     '-Python', python(live), '-Source', source, '-Evidence', evidence,
+                     '-ExpectedSid', os.environ['CLOVER_FIXTURE_ACCOUNT_SID']],
+                    'gateway-startup-registration', timeout=180)
+                service=call('service','service-definition')
+                assert a.setup == 'zyra'
                 run(['wscript.exe','//B','//Nologo',service['path']],'startup-vbs-launch',timeout=30)
         else:
             run([bin, 'gateway', 'install'], 'service-install', timeout=180)
@@ -494,7 +512,12 @@ def main(a):
             return call('observe', 'gateway-before', '--expected', a.old, allow=True)
         before = wait_for(initial, 180)
         via_schedule = before['supervisor']['schedule_pid'] in [q['pid'] for q in before['supervisor']['ancestors']]
-        assert via_schedule == (a.setup == 'troy'), dict(setup=a.setup, observation=before)
+        # No public Task ever reaches a live-ancestry assertion. Historical
+        # origin cannot be recovered by walking parents after VBS exits.
+        if diagnostic:
+            task_origin.live_schedule_ancestor(before)
+        else:
+            assert a.setup == 'zyra' and not via_schedule, dict(setup=a.setup, observation=before)
         # Preserve owner/worker evidence before an update may replace it.
         dump(evidence / 'before-owner-worker.json', dict(setup=a.setup, via_schedule=via_schedule,
             status_pid=before['state']['pid'], processes=before['owned'],
@@ -639,6 +662,7 @@ def main(a):
                 current=call('observe','stable','--expected',a.old)
                 assert current['state']['pid']==before['state']['pid']
                 assert current['state']['start_time']==before['state']['start_time']
+                task_origin.schedule_observation_unchanged(before['supervisor'], current['supervisor'])
                 samples.append(current)
                 time.sleep(3)
             assert not (home/'.clover-update-heartbeat.json').exists()
@@ -688,20 +712,20 @@ def main(a):
                 return observed
             return None
         after = wait_for(candidate, 900)
-        assert after['supervisor']['schedule_pid'] == before['supervisor']['schedule_pid'], 'foreign Schedule host identity changed'
+        task_origin.schedule_observation_unchanged(before['supervisor'], after['supervisor'])
         samples = [after]
         end = time.monotonic() + 90
         while time.monotonic() < end:
             current = call('observe', 'stable', '--expected', a.target)
             assert current['state']['pid'] == after['state']['pid']
             assert current['state']['start_time'] == after['state']['start_time']
-            assert current['supervisor']['schedule_pid'] == before['supervisor']['schedule_pid']
+            task_origin.schedule_observation_unchanged(before['supervisor'], current['supervisor'])
             samples.append(current)
             time.sleep(3)
         final = call('observe', 'stable-final', '--expected', a.target)
         assert final['state']['pid'] == after['state']['pid']
         assert final['state']['start_time'] == after['state']['start_time']
-        assert final['supervisor']['schedule_pid'] == before['supervisor']['schedule_pid']
+        task_origin.schedule_observation_unchanged(before['supervisor'], final['supervisor'])
         assert final['observed'] - after['observed'] >= 90
         samples.append(final)
         dump(evidence / 'gateway-window.json', samples)
@@ -726,7 +750,8 @@ def main(a):
                  'frozen-156-failure-rollback',timeout=1200)
             call('verify', 'rollback-seed-records-after', '--records', evidence/'records.json')
             legacy.verify_relaxed(pending,home,effect,receiver,evidence,evidence/'irc.log')
-        dump(evidence / 'result.json', dict(status='PASS', first_transition=first_transition, target=a.target, old=a.old,
+        dump(evidence / 'result.json', dict(status='SYNTHETIC_D10_DIAGNOSTIC_PASS' if diagnostic else 'PASS',
+            diagnostic_only=diagnostic, first_transition=first_transition, target=a.target, old=a.old,
             workflow_sha=os.environ['GITHUB_SHA'], entry=a.entry, retry_after_busy_refusal=retry,
             actual_launchd=False, actual_windows_startup=a.setup == 'zyra', actual_scheduled_task=a.setup == 'troy',
             turn_mode=a.turn_mode, frozen_windows_first_stop_limit=a.old == '9535350bee1d57cf7e466672e6f416403886bec1',
@@ -755,7 +780,7 @@ if __name__ == '__main__':
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument('--mode', default='main')
     p.add_argument('--fixed-base', default='candidate')
-    p.add_argument('--setup', choices=['zyra','troy'], default='zyra')
+    p.add_argument('--setup', choices=['zyra','troy','troy-live-ancestor-diagnostic'], default='zyra')
     p.add_argument('--turn-mode', choices=['completed','inflight'], default='completed')
     for name in ['source', 'target', 'tree', 'old', 'entry', 'evidence', 'output', 'expected', 'label', 'records', 'uv', 'candidate']:
         p.add_argument('--' + name)
