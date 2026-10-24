@@ -121,6 +121,69 @@ function Test-AccountOwnedStartupLocation {
     } catch { return $false }
 }
 
+# Observer only: fixed version/architecture vocabulary, never paths or environment.
+function Get-AccountChildRuntimeObservation {
+    $result = @{ps_version='unknown'; framework_description='unknown'; process_architecture='unknown'; os_architecture='unknown'}
+    try {
+        $value = $PSVersionTable.PSVersion.ToString()
+        if ($value -cmatch '\A[0-9]{1,3}(\.[0-9]{1,5}){1,3}(-[A-Za-z0-9.-]{1,40})?\z') { $result.ps_version = $value }
+    } catch { }
+    try {
+        $value = [Runtime.InteropServices.RuntimeInformation]::FrameworkDescription
+        if ($value -cmatch '\A\.NET( Framework| Core)? [0-9]{1,3}(\.[0-9]{1,5}){1,3}(-[A-Za-z0-9.-]{1,40})?\z') { $result.framework_description = $value }
+    } catch { }
+    foreach ($key in @('process_architecture','os_architecture')) {
+        try {
+            $value = if ($key -eq 'process_architecture') { [Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString() } else { [Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString() }
+            if ($value -cin @('X86','X64','Arm','Arm64','Wasm','S390x','LoongArch64','Armv6','Ppc64le','RiscV64')) { $result[$key] = $value }
+        } catch { }
+    }
+    return $result
+}
+
+# Post-failure only; no Create flag. These later calls cannot explain the original
+# managed result at the same instant. GUID verified in dotnet/runtime v10.0.0,
+# Interop.SHGetKnownFolderPath.cs blob 740ea18cc5526f899088b7a2343f69dfb3d99aa0 (KnownFolders.Startup).
+function Get-AccountStartupNativeObservation {
+    param([ValidateSet(0,16384)][uint32]$Flags, $ValidatedStartup, $RecordedDefaultNormal,
+          [string]$AppData, [string]$Profile)
+    $result = @{flags=$Flags; reason='observer_unavailable'; category='unknown'; exception_category='none'; hresult_signed=$null; native_code=$null;
+        path_empty=$null; owned_path=$null; equals_validated_os_path=$null; equals_recorded_default_normal=$null}
+    $buffer = [IntPtr]::Zero
+    try {
+        if (-not ('CloverStartupDiagnosticNative' -as [type])) {
+            Add-Type -ErrorAction Stop -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+public static class CloverStartupDiagnosticNative {
+    [DllImport("shell32.dll", CharSet=CharSet.Unicode, ExactSpelling=true, PreserveSig=true, SetLastError=false)]
+    public static extern int SHGetKnownFolderPath(ref Guid folder, uint flags, IntPtr token, out IntPtr path);
+}
+'@ | Out-Null
+        }
+        $folder = [Guid]::new('B97D20BB-F46A-4C97-BA10-5E3608430854')
+        $hr = [CloverStartupDiagnosticNative]::SHGetKnownFolderPath([ref]$folder, $Flags, [IntPtr]::Zero, [ref]$buffer)
+        $result.hresult_signed = [int]$hr
+        $unsigned = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$hr), 0)
+        $result.category = if ($hr -eq 0) { 's_ok' } elseif ((($unsigned -shr 16) -band 0x1fff) -eq 7) { 'win32_hresult' } else { 'other_hresult' }
+        if ((($unsigned -shr 16) -band 0x1fff) -eq 7) { $result.native_code = $unsigned -band 0xffff }
+        $result.reason = 'returned'
+        if ($hr -eq 0) {
+            $path = [Runtime.InteropServices.Marshal]::PtrToStringUni($buffer)
+            $result.path_empty = [string]::IsNullOrEmpty($path)
+            $result.owned_path = Test-AccountOwnedStartupLocation -Startup $path -AppData $AppData -Profile $Profile
+            if ($null -ne $ValidatedStartup) { $result.equals_validated_os_path = $path -eq $ValidatedStartup }
+            if ($null -ne $RecordedDefaultNormal) { $result.equals_recorded_default_normal = $path -eq $RecordedDefaultNormal }
+        }
+    } catch {
+        $result.reason = 'observer_unavailable'
+        try { $result.exception_category = (Get-AccountExceptionObservation $_.Exception).exception_category } catch { }
+    } finally {
+        if ($buffer -ne [IntPtr]::Zero) { try { [Runtime.InteropServices.Marshal]::FreeCoTaskMem($buffer) } catch { } }
+    }
+    return $result
+}
+
 function Assert-AccountChildPredicate {
     param([bool]$Condition)
     if (-not $Condition) {

@@ -10,7 +10,9 @@ $exitCode = 1
 $script:childStage = [ordered]@{
     phase='credential_isolation'; state='unknown'; predicate_id='credential_isolation'; predicate_passed=$null
     reason='none'; exception_category='none'; hresult_signed=$null; native_code=$null
-    startup=@{default_empty=$null; resolved_owned=$null; exists=$null; readback_agrees=$null}
+    startup=@{default_empty=$null; resolved_owned=$null; exists=$null; readback_agrees=$null; readback_empty=$null}
+    runtime=@{ps_version='unknown'; framework_description='unknown'; process_architecture='unknown'; os_architecture='unknown'}
+    post_failure_observation=@{phase='not_observed'; normal=$null; do_not_verify=$null}
     states=[ordered]@{
         credential_isolation='unknown'; identity='unknown'; token='unknown'; acl_denial='unknown'
         profile_userprofile='unknown'; profile_home='unknown'; profile_known_userprofile='unknown'
@@ -20,6 +22,8 @@ $script:childStage = [ordered]@{
         access_receipt='unknown'
     }
 }
+$startup = $null; $startupDefault = $null
+try { $script:childStage.runtime = Get-AccountChildRuntimeObservation } catch { }
 try {
     Set-AccountChildStage -Phase 'credential_isolation' -State 'entered'
     foreach ($name in @('GITHUB_TOKEN','ACTIONS_RUNTIME_TOKEN','ACTIONS_ID_TOKEN_REQUEST_TOKEN',
@@ -85,7 +89,9 @@ try {
     Set-AccountChildStage -Phase 'startup_create' -State 'entered'
     $null = New-Item -ItemType Directory -Path $startup -Force
     $script:childStage.startup.exists = Test-Path -LiteralPath $startup -PathType Container
-    $script:childStage.startup.readback_agrees = [Environment]::GetFolderPath('Startup') -eq $startup
+    $startupReadback = [Environment]::GetFolderPath('Startup')
+    $script:childStage.startup.readback_agrees = $startupReadback -eq $startup
+    $script:childStage.startup.readback_empty = [string]::IsNullOrEmpty($startupReadback)
     Assert-AccountChildPredicate ($script:childStage.startup.exists -and $script:childStage.startup.readback_agrees -and
         (Test-AccountOwnedStartupLocation -Startup $startup -AppData $env:APPDATA -Profile $c.profile))
     $readiness = Join-Path $startup 'clover-fixture-readiness.txt'
@@ -111,6 +117,19 @@ try {
     $originalFailure = $_.Exception
     $exitCode = 1
     try { Set-AccountChildStage -Phase $script:childStage.phase -State 'failed' -Exception $originalFailure } catch { }
+    # Only after the ORIGINAL Startup predicate failed and exit=1 was fixed.
+    # Later native returns are observations, never replacement acceptance inputs.
+    try {
+        if ($script:childStage.phase -in @('startup_location','startup_create') -and
+            $script:childStage.reason -eq 'predicate_mismatch') {
+            $validatedStartup = if ($script:childStage.startup.resolved_owned -eq $true) { $startup } else { $null }
+            $script:childStage.post_failure_observation.phase = 'post_failure_observation'
+            $script:childStage.post_failure_observation.normal = Get-AccountStartupNativeObservation -Flags 0 -ValidatedStartup $validatedStartup -RecordedDefaultNormal $startupDefault -AppData $env:APPDATA -Profile $c.profile
+            $script:childStage.post_failure_observation.do_not_verify = Get-AccountStartupNativeObservation -Flags 0x4000 -ValidatedStartup $validatedStartup -RecordedDefaultNormal $startupDefault -AppData $env:APPDATA -Profile $c.profile
+            $script:childStage | ConvertTo-Json -Depth 4 |
+                Set-Content -LiteralPath (Join-Path $c.evidence 'child-stage.json') -Encoding utf8 -ErrorAction Stop
+        }
+    } catch { }
     # Fixed generic fallback survives even diagnostic persistence/classifier failure.
     try {
         [IO.File]::WriteAllText((Join-Path $c.evidence 'child-failure.txt'), 'Actual account child failed; inspect phase-specific nonsecret receipts')
