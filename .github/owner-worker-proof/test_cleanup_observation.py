@@ -13,6 +13,60 @@ PWSH = os.environ.get('TOKEN_TEST_PWSH') or shutil.which('pwsh')
 
 @unittest.skipUnless(PWSH, 'PowerShell required for portable fixture execution')
 class CleanupObservation(unittest.TestCase):
+    def test_requested_update_payload_requires_passed_access_and_verified_cleanup(self):
+        """Exercise the actual payload, not an invented update completion receipt."""
+        with tempfile.TemporaryDirectory(dir=HERE) as directory:
+            root = Path(directory)
+            source = (HERE / 'disposable_account.ps1').read_text()
+            start = source.index('            $payload = @{')
+            end = source.index('\n        }', start)
+            payload = source[start:end]
+            script = root / 'payload.ps1'
+            script.write_text(r"""
+$ErrorActionPreference='Stop'
+Set-StrictMode -Version Latest
+$root='ROOT'
+$sid='created-sid';$profile='owned-profile';$childExit=0
+$payloadBody=[scriptblock]::Create([IO.File]::ReadAllText('PAYLOAD'))
+$rows=@()
+foreach ($requested in @($false,$true)) {
+    foreach ($passed in @($false,$true)) {
+        foreach ($cleanupPassed in @($false,$true)) {
+            $RequestFile=if ($requested) { 'PORTABLE_NOT_EXECUTED' } else { $null }
+            $Evidence=Join-Path $root ($requested.ToString()+$passed.ToString()+$cleanupPassed.ToString())
+            $null=New-Item -ItemType Directory -Path $Evidence
+            . $payloadBody
+            $receipt=Get-Content (Join-Path $Evidence 'RESULT.json') -Raw | ConvertFrom-Json
+            $rows+=@{requested=$requested;access_passed=$passed;cleanup_passed=$cleanupPassed;receipt=$receipt}
+        }
+    }
+}
+$rows | ConvertTo-Json -Depth 5
+""".replace('ROOT', str(root).replace("'", "''"))
+                .replace('PAYLOAD', str(root / 'payload-body.ps1').replace("'", "''")))
+            (root / 'payload-body.ps1').write_text(payload)
+            assert PWSH is not None
+            result = subprocess.run([PWSH, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(script)],
+                                    capture_output=True, text=True, timeout=20)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            rows = json.loads(result.stdout)
+            self.assertEqual(len(rows), 8)
+            for row in rows:
+                with self.subTest(requested=row['requested'], access_passed=row['access_passed'],
+                                  cleanup_passed=row['cleanup_passed']):
+                    receipt = row['receipt']
+                    self.assertEqual(receipt['update_requested'], row['requested'])
+                    self.assertEqual(receipt['passed'], row['access_passed'] and row['cleanup_passed'])
+                    self.assertEqual(receipt['update_accepted'],
+                                     row['requested'] and row['access_passed'] and row['cleanup_passed'])
+                    if row['requested']:
+                        self.assertNotIn('installer_runs', receipt)
+                        self.assertNotIn('update_cases', receipt)
+                    else:
+                        self.assertEqual(receipt['installer_runs'], 0)
+                        self.assertEqual(receipt['update_cases'], 0)
+                    self.assertIs(receipt['credentials_recorded'], False)
+
     def test_actual_finally_fences_targets_and_keeps_every_unresolved_resource_unknown(self):
         with tempfile.TemporaryDirectory(dir=HERE) as directory:
             script = Path(directory) / 'cleanup.ps1'
@@ -157,6 +211,8 @@ foreach ($mode in @($unknown)+@($failed)+@($clean)) {
     $script:profilePresent=$mode -in @('owned-profile','foreign-profile')
     $Evidence=Join-Path 'ROOT' $mode; $null=New-Item -ItemType Directory -Path $Evidence
     . $init
+    # Match the real optional parameter's access-only default under StrictMode.
+    $RequestFile=$null
     $caught=$false
     try { . $finally } catch { $caught=$true }
     $d=Get-Content (Join-Path $Evidence 'owned-cleanup.json') -Raw | ConvertFrom-Json
