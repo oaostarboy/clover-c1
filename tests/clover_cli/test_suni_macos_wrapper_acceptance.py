@@ -51,6 +51,7 @@ def module(name: str, **attrs) -> ModuleType:
     return m
 
 
+@unittest.skipIf(os.name == 'nt', 'POSIX-path macOS argv replay; Windows uses its separate native ownership tests')
 class SuniWrapperAcceptance(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(dir=ROOT / 'artifacts/suni-ownership')
