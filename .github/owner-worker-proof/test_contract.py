@@ -161,11 +161,12 @@ class Contracts(unittest.TestCase):
         self.assertIn("'--no-start-now', '--start-on-login'", text)
         self.assertIn('IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)', text)
         self.assertIn('if ($admin) { throw', text)
-        self.assertIn('-LogonType S4U -RunLevel Limited', text)
+        self.assertIn("'restricted_token.py'", text)
+        self.assertNotIn('New-ScheduledTaskPrincipal', text)
         self.assertIn("'n' | & $Python @argv", text)
         self.assertNotIn('_write_task_script', text)
         self.assertNotIn('_install_startup_entry', text)
-        self.assertIn('Unregister-ScheduledTask -TaskName $taskName', text)
+        self.assertIn('$childExit -ne 0', text)
 
     def test_reviewed_native_controls_and_update_acceptance_are_not_weakened(self):
         repo = HERE.parents[1]

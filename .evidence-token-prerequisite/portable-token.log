@@ -1,0 +1,9 @@
+test_child_environment_is_allowlisted_and_keeps_owned_profile (__main__.Contracts.test_child_environment_is_allowlisted_and_keeps_owned_profile) ... ok
+test_non_windows_entry_refuses_before_native_actions (__main__.Contracts.test_non_windows_entry_refuses_before_native_actions) ... ok
+test_registration_does_not_confuse_task_policy_with_filtered_token (__main__.Contracts.test_registration_does_not_confuse_task_policy_with_filtered_token) ... ok
+test_token_predicates_reject_each_unsafe_or_missing_observation (__main__.Contracts.test_token_predicates_reject_each_unsafe_or_missing_observation) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 0.008s
+
+OK

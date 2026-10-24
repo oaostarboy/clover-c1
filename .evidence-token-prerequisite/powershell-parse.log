@@ -1,0 +1,2 @@
+PARSE PASS .github/owner-worker-proof/register_startup.ps1
+PARSE PASS .github/owner-worker-proof/token_prerequisite.ps1

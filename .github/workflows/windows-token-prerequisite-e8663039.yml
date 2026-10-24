@@ -1,0 +1,42 @@
+name: Isolated Windows token prerequisite e8663039
+on:
+  push:
+    branches: ['clover-subagent/subagent-sa-0-e8663039']
+    paths:
+      - '.github/workflows/windows-token-prerequisite-e8663039.yml'
+      - '.github/owner-worker-proof/restricted_token.py'
+      - '.github/owner-worker-proof/token_prerequisite.ps1'
+permissions:
+  contents: read
+jobs:
+  token-prerequisite:
+    runs-on: windows-2025
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - name: Compile and parse fixture only
+        shell: pwsh
+        run: |
+          $python = (Get-Command python -CommandType Application).Source
+          & $python -I -m py_compile .github/owner-worker-proof/restricted_token.py
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          foreach ($path in @('.github/owner-worker-proof/register_startup.ps1', '.github/owner-worker-proof/token_prerequisite.ps1')) {
+            $tokens = $null; $errors = $null
+            [Management.Automation.Language.Parser]::ParseFile((Resolve-Path $path), [ref]$tokens, [ref]$errors) | Out-Null
+            if ($errors.Count) { throw ($errors | Out-String) }
+          }
+          & $python -I .github/owner-worker-proof/test_restricted_token.py
+          exit $LASTEXITCODE
+      - name: Observe original task and prove OS-restricted same-owner child once
+        shell: pwsh
+        run: |
+          $python = (Get-Command python -CommandType Application).Source
+          & .github/owner-worker-proof/token_prerequisite.ps1 -Python $python -Evidence "$env:RUNNER_TEMP/token-prerequisite-e8663039"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: token-prerequisite-e8663039-${{ github.run_id }}
+          path: ${{ runner.temp }}/token-prerequisite-e8663039
+          if-no-files-found: error
