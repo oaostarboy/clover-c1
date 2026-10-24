@@ -71,9 +71,31 @@ inert-child identity/exit and a per-file integrity manifest. It reports absent
 native callbacks as absent, never fills modeled process rows. No Task acceptance
 or positive/adversarial **native origin** controls are claimed by this job.
 
+## Observed single attempt (capture did not run)
+
+Run https://github.com/oaostarboy/clover-c1/actions/runs/40128801941, attempt 1,
+head `b542e549e7baadc4873426a614796e1b7cdbc68c`, failed in portable preflight:
+57 tests passed and two existing historical-source preservation tests failed
+because the default shallow checkout omitted commit
+`b1b7eb5e0fb42a81462ee70cead5467964dd0703`. Native capture was **skipped**, and
+GitHub reports **zero artifacts**. No WTS/session/token/schema facts were observed.
+This is a fixture checkout failure, NOT evidence of a hosted-Windows session
+limitation. No Task/product install/update/account or cleanup was attempted.
+
+The local successor sets checkout `fetch-depth: 0` and adds a regression contract.
+A real shallow local clone reproduced missing pinned blobs (exit 128); unshallow
+fetch restored both exact pinned blobs (exit 0). All 59 targeted Python tests and
+the real PowerShell parser/C# SDK replay pass locally after this fix. The successor
+was not pushed to the proof branch: another push would trigger an unauthorized
+second experiment. Windows P/Invoke, provider/template capture, actual native
+callbacks, public Task registration, native origin and native adversarial controls
+remain unverified. Parent review and renewed explicit capture authorization are
+required. No automatic retry, force push or rerun was performed.
+
 ## One bounded native probe, once account ownership is resolved
 
-No native/CI dispatch is authorized by this patch. The account-prerequisite
+The original public-registration probe below has **not** acquired permission to
+run from the environment/schema capture. Its independent account-prerequisite
 owner must first supply an actually new account, its actual SID and a genuine
 interactive logon. The existing limited-account/Startup protocol is NOT proof
 of a public InteractiveToken task. A batch/service token, copied environment,

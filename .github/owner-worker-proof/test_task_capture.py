@@ -78,6 +78,7 @@ def test_new_capture_workflow_is_single_push_only_readonly_and_always_uploads():
     assert job['runs-on'] == 'windows-2025'
     checkout = job['steps'][0]
     assert checkout['with']['persist-credentials'] is False
+    assert checkout['with']['fetch-depth'] == 0, 'Pinned-history preservation controls require actual ancestors'
     assert job['steps'][-1]['if'] == 'always()'
     text = (HERE / 'task_origin_capture.ps1').read_text()
     assert text.index('$collector.SubscribeChannels(') < text.index('Start-Process')
