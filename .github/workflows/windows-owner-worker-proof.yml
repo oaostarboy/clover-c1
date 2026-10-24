@@ -1,0 +1,172 @@
+name: Windows owner-worker exact-source proof
+# Test-only branch. No release, secrets, live gateways, replacement refs or retries.
+on:
+  push:
+    branches: ['proof/windows-startup-final-159-f492']
+    paths:
+      - '.github/owner-worker-proof/**'
+      - '.github/workflows/windows-owner-worker-proof.yml'
+permissions:
+  contents: read
+concurrency:
+  group: owner-worker-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.pins.outputs.mode }}
+      target: ${{ steps.pins.outputs.target }}
+      target_tree: ${{ steps.pins.outputs.target_tree }}
+      historical_helpers: ${{ steps.pins.outputs.historical_helpers }}
+      matrix: ${{ steps.pins.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - id: pins
+        run: python .github/owner-worker-proof/plan.py .github/owner-worker-proof/pins.json "$RUNNER_TEMP/evidence/plan.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: owner-worker-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+  native-safety:
+    # Retained ABI contract; separate owner executes this gate, not this matrix.
+    if: ${{ false }}
+    name: Native Windows child identity and refusal controls
+    needs: plan
+    runs-on: windows-2025
+    timeout-minutes: 35
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: source
+          ref: ${{ needs.plan.outputs.target }}
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require status-lock repair ancestry before native acceptance
+        shell: bash
+        run: git -C source merge-base --is-ancestor 27f507acb4f12c30d237471095f137007952c312 HEAD
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+          enable-cache: false
+      - name: Locked native test environment
+        working-directory: source
+        shell: pwsh
+        run: |
+          uv sync --locked --python 3.11 --extra all --extra dev --extra messaging
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          uv pip install --python .venv/Scripts/python.exe pytest-timeout==2.4.0
+          exit $LASTEXITCODE
+      - name: Exercise real native processes plus retained product safety contracts
+        working-directory: source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/evidence" | Out-Null
+          git rev-parse HEAD | Set-Content "$env:RUNNER_TEMP/evidence/source-sha.txt" -Encoding utf8
+          uv run --no-sync python -m pytest -q -o addopts= --timeout=90 --timeout-method=thread `
+            tests/clover_cli/test_windows_process_witness_native.py `
+            tests/clover_cli/test_windows_handoff_clock_native.py `
+            tests/clover_cli/test_update_delivery_guard.py `
+            tests/clover_cli/test_update_delivery_guard_wrappers.py `
+            ../helpers/.github/owner-worker-proof/test_bootstrap_resolution.py `
+            ../helpers/.github/owner-worker-proof/test_owner_worker_native.py `
+            ../helpers/.github/owner-worker-proof/test_status_lock_windows_native.py `
+            --junitxml="$env:RUNNER_TEMP/evidence/native-safety.xml"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: owner-worker-native-safety-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+  updates:
+    name: Windows / ${{ matrix.caller }} / ${{ matrix.setup }} / ${{ matrix.entry }}
+    needs: plan
+    if: needs.plan.outputs.mode == 'candidate'
+    runs-on: windows-2025
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: historical
+          ref: ${{ needs.plan.outputs.historical_helpers }}
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: source
+          ref: ${{ needs.plan.outputs.target }}
+          fetch-depth: 0
+          persist-credentials: false
+      - id: bootstrap-uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          # Exact uv used by the successful historical native run40029884972.
+          # Its catalog supplies safe CPython3.12.15/SQLite3.53.1; 0.9.28
+          # supplies vulnerable3.12.12/SQLite3.50.4 and must fail sqlite-before.
+          version: '0.13.5'
+          enable-cache: false
+      - name: Prepare exact candidate or candidate-plus-marker target
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ needs.plan.outputs.target }}
+          CANDIDATE_TREE: ${{ needs.plan.outputs.target_tree }}
+          STATUS_LOCK_REPAIR_SHA: 27f507acb4f12c30d237471095f137007952c312
+          CALLER: ${{ matrix.caller }}
+        run: python helpers/.github/owner-worker-proof/target.py source "$RUNNER_TEMP/evidence"
+      - name: Released installer and full Startup update inside disposable account lifetime
+        shell: pwsh
+        env:
+          OLD_SHA: ${{ matrix.old }}
+          CANDIDATE_SHA: ${{ needs.plan.outputs.target }}
+          ENTRY: ${{ matrix.entry }}
+          SETUP: ${{ matrix.setup }}
+          TURN_MODE: ${{ matrix.turn_mode }}
+          CLOVER_PROOF_HELPERS: ${{ github.workspace }}/historical/.github/native-proof
+          BOOTSTRAP_UV: ${{ steps.bootstrap-uv.outputs.uv-path }}
+        run: |
+          if ($env:SETUP -ne 'zyra') { throw 'Public Task origin contract unresolved; no synthetic Task acceptance' }
+          $python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          if (-not [IO.Path]::IsPathFullyQualified($python)) { throw 'Absolute machine Python required' }
+          $request = @{ source="$env:GITHUB_WORKSPACE/source"; helpers=$env:CLOVER_PROOF_HELPERS;
+            uv=$env:BOOTSTRAP_UV; setup=$env:SETUP; old=$env:OLD_SHA; candidate=$env:CANDIDATE_SHA;
+            target=$env:UPDATE_TARGET; tree=$env:UPDATE_TREE; entry=$env:ENTRY; turn_mode=$env:TURN_MODE }
+          $requestPath = "$env:RUNNER_TEMP/startup-update-request.json"
+          $request | ConvertTo-Json | Set-Content -LiteralPath $requestPath -Encoding utf8
+          & helpers/.github/owner-worker-proof/disposable_account.ps1 -Python $python `
+            -Evidence "$env:RUNNER_TEMP/evidence/account" -RequestFile $requestPath
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: owner-worker-${{ matrix.caller }}-${{ matrix.setup }}-${{ matrix.entry }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+          include-hidden-files: true
+          if-no-files-found: error
