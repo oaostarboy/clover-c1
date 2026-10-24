@@ -8,9 +8,12 @@ permission changes, Git replacement refs, refusal retry, or driver-owned restart
 
 `pins.json` is the versioned parameter handoff: exact candidate SHA/tree, exact
 released callers, and the historical helper SHA. A push executes those pins, not
-whatever main happens to contain. Keep `mode=baseline` for a release-only native
-safety run; set `mode=candidate` with an independently verified new SHA/tree for
-the full matrix. This new workflow intentionally is not registered on main.
+whatever main happens to contain. Historical `mode=baseline` runs are retained
+at their original workflow commits; this successor's unconditional repair-ancestry
+check intentionally prevents redispatching release-only baselines. Use
+`mode=native-safety` for reviewed correction-only controls, or `mode=candidate`
+with an independently verified new SHA/tree for the full matrix. This new
+workflow intentionally is not registered on main.
 Parent review is required before adding `ci-reviewed` or merging the fixture.
 
 **Current pins select `native-safety` only on reviewed correction27f507.** The
