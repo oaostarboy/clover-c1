@@ -136,5 +136,10 @@ def test_untrusted_status_cannot_admit_a_real_live_process(real_child, tmp_path,
     before = path.read_bytes() if path.exists() else None
     reasons = guard._unsafe_gateways()
     assert any(not reason.startswith('legacy: ') for reason in reasons), reasons
+    # Exercise the real admission boundary too: a frozen caller must receive
+    # SystemExit, not a swallowed Exception/False that permits a force-stop.
+    with pytest.raises(SystemExit) as refused:
+        guard.require_delivery_safe_update()
+    assert refused.value.code == 1
     assert (path.read_bytes() if path.exists() else None) == before
     assert launcher.is_running() and worker.is_running()

@@ -291,6 +291,16 @@ def child(a):
             result['base_executable'] = base_executable
             result['base_executable_resolved'] = str(Path(base_executable).resolve(strict=True))
         assert not result['vulnerable'], result
+    elif a.mode == 'service-inventory':
+        from clover_cli.gateway import find_windows_gateway_services
+        found = find_windows_gateway_services()
+        result = dict(services=[dict(name=s.name, service_pid=s.service_pid,
+                                     gateway_pid=s.gateway_pid) for s in found])
+        dump(a.output, result)
+        # Neither shipped Startup nor the real Task fixture installs an SCM
+        # service. Fail before updating if discovery would touch Schedule or
+        # any other foreign service; never attempt a stop to test the fence.
+        assert not found, result
     elif a.mode == 'service':
         if WINDOWS:
             from clover_cli import gateway_windows as g
@@ -455,6 +465,7 @@ def main(a):
         dump(evidence / 'before-owner-worker.json', dict(setup=a.setup, via_schedule=via_schedule,
             status_pid=before['state']['pid'], processes=before['owned'],
             status_start=before['state']['start_time'], supervisor=before['supervisor']))
+        call('service-inventory', 'native-scm-discovery-before-update')
         threading.Thread(target=tracer,daemon=True).start()
         assert irc.joined.wait(60), 'installed gateway did not join local IRC'
         request('/api/sessions', {'id': 'native-inflight', 'title': 'native controlled turn'})
@@ -643,17 +654,20 @@ def main(a):
                 return observed
             return None
         after = wait_for(candidate, 900)
+        assert after['supervisor']['schedule_pid'] == before['supervisor']['schedule_pid'], 'foreign Schedule host identity changed'
         samples = [after]
         end = time.monotonic() + 90
         while time.monotonic() < end:
             current = call('observe', 'stable', '--expected', a.target)
             assert current['state']['pid'] == after['state']['pid']
             assert current['state']['start_time'] == after['state']['start_time']
+            assert current['supervisor']['schedule_pid'] == before['supervisor']['schedule_pid']
             samples.append(current)
             time.sleep(3)
         final = call('observe', 'stable-final', '--expected', a.target)
         assert final['state']['pid'] == after['state']['pid']
         assert final['state']['start_time'] == after['state']['start_time']
+        assert final['supervisor']['schedule_pid'] == before['supervisor']['schedule_pid']
         assert final['observed'] - after['observed'] >= 90
         samples.append(final)
         dump(evidence / 'gateway-window.json', samples)

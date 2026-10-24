@@ -53,7 +53,12 @@ and native hardlink/file-reparse/directory rejection with unchanged targets.
 These staged tests are **NOT NATIVE-EXECUTED YET**. They do not prove Windows ACL
 isolation or the Linux cross-UID result. They do not change ACLs, Developer Mode,
 privileges or security policy; inability to create a required native object is
-an unexercised/failed gate, not an automatic pass.
+an unexercised/failed gate, not an automatic pass. The staged negative controls
+also exercise the real `require_delivery_safe_update` SystemExit boundary while
+their actual native children remain alive. The update driver refuses to proceed
+if its native SCM inventory maps either installation shape to any service, and
+requires the foreign Schedule host PID to remain unchanged through the final
+90-second window. These additions are likewise awaiting the final native run.
 
 ## Bounded matrix
 
