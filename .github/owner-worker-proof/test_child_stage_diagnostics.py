@@ -32,6 +32,13 @@ class StartupProbeSourceContract(unittest.TestCase):
         self.assertNotIn('$exitCode = 0', catch)
         self.assertNotIn("'access.json'", catch)
         self.assertIn("[Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::Create)", child)
+        acceptance = child[:child.index('} catch {\n    $originalFailure')]
+        create = "$startupCreated = [Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::Create)"
+        self.assertIn(create, acceptance)
+        self.assertLess(acceptance.index("Set-AccountChildStage -Phase 'startup_location' -State 'passed'"), acceptance.index(create))
+        self.assertLess(acceptance.index(create), acceptance.index('Assert-AccountChildPredicate ($startupCreated -eq $startup)'))
+        self.assertLess(acceptance.index('Assert-AccountChildPredicate ($startupCreated -eq $startup)'), acceptance.index('$startupReadback ='))
+        self.assertNotIn('New-Item -ItemType Directory -Path $startup', acceptance)
         # Native assertion and real file operations stay mandatory, not probe outputs.
         self.assertIn('$script:childStage.startup.exists -and $script:childStage.startup.readback_agrees -and', child)
         for operation in ("[IO.File]::WriteAllText($readiness,", "[IO.File]::ReadAllText($readiness)",
@@ -44,7 +51,8 @@ class ChildStageDiagnostics(unittest.TestCase):
     def run_child_body(self, phase=None, predicate=False, diagnostic_failure=False,
                        fallback_failure=False, real_write_failure=False, boundary_failure=None,
                        startup_case=None, native_case='owned', runtime_case=None,
-                       probe_case='normal-already-recovers', mapping_case='expand', probe_receipt_failure=False):
+                       probe_case='normal-already-recovers', mapping_case='expand', probe_receipt_failure=False,
+                       create_case='owned'):
         with tempfile.TemporaryDirectory(dir=HERE) as directory:
             assert PWSH is not None
             root = Path(directory)
@@ -167,6 +175,8 @@ $script:nativeCase='NATIVE'; $script:runtimeCase='RUNTIME'
 $script:nativeCalls=[Collections.Generic.List[object]]::new(); $script:allocated=0; $script:freed=0
 $script:managedNormalCalls=0; $script:managedDoNotVerifyCalls=0
 $script:probeCase='PROBE'; $script:mappingCase='MAPPING'; $script:createCalls=0; $script:probeRepaired=$false
+$script:acceptanceCreateCase='CREATE'; $script:acceptanceCreateCalls=0
+$script:acceptanceCreateProvisioned=$false
 $script:probeCalls=[Collections.Generic.List[object]]::new(); $script:probeAllocated=0; $script:probeFreed=0
 function Test-PortableProbeScope { return (Get-PSCallStack).FunctionName -contains 'Invoke-AccountStartupCounterfactual' }
 function Get-PortableIdentity {
@@ -205,6 +215,17 @@ function Open-PortableRegistryKey {
     return $key
 }
 function Invoke-PortableStartupCreate {
+    if (-not (Test-PortableProbeScope)) {
+        $script:acceptanceCreateCalls++
+        if ($script:acceptanceCreateCase -eq 'throws') { throw [IO.IOException]::new('sentinel-secret') }
+        if ($script:acceptanceCreateCase -eq 'empty') { return '' }
+        if ($script:acceptanceCreateCase -eq 'foreign') { return (Join-Path $env:APPDATA 'other-registration') }
+        if ($script:acceptanceCreateCase -ne 'no-provision') {
+            $null=New-Item -ItemType Directory -Path $script:registeredStartup -Force
+            $script:acceptanceCreateProvisioned=[IO.Directory]::Exists($script:registeredStartup)
+        }
+        return $script:registeredStartup
+    }
     $script:createCalls++
     if ($script:probeCase -eq 'create-throws') { throw [IO.IOException]::new('sentinel-secret') }
     if ($script:probeCase -eq 'create-empty') { return '' }
@@ -251,7 +272,7 @@ function Free-PortableNativePath {
     [Runtime.InteropServices.Marshal]::FreeCoTaskMem($Buffer)
     if (Test-PortableProbeScope) { $script:probeFreed++ } else { $script:freed++ }
 }
-""".replace('NATIVE', native_case).replace('RUNTIME', runtime_case or '').replace('PROBE', probe_case).replace("'MAPPING'", "'" + mapping_case + "'")
+""".replace('NATIVE', native_case).replace('RUNTIME', runtime_case or '').replace('PROBE', probe_case).replace("'MAPPING'", "'" + mapping_case + "'").replace("'CREATE'", "'" + create_case + "'")
             # Save seam counters without replacing the production catch or exit.
             marker = 'exit $exitCode'
             self.assertEqual(body.count(marker), 1)
@@ -259,6 +280,7 @@ function Free-PortableNativePath {
 @{calls=@($script:nativeCalls.ToArray()); allocated=$script:allocated; freed=$script:freed;
   managed_normal=$script:managedNormalCalls; managed_do_not_verify=$script:managedDoNotVerifyCalls;
   probe_calls=@($script:probeCalls.ToArray()); create_calls=$script:createCalls;
+  acceptance_create_calls=$script:acceptanceCreateCalls; acceptance_create_provisioned=$script:acceptanceCreateProvisioned;
   probe_allocated=$script:probeAllocated; probe_freed=$script:probeFreed;
   runtime_expected=@{ps_version=$PSVersionTable.PSVersion.ToString(); framework_description=[Runtime.InteropServices.RuntimeInformation]::FrameworkDescription;
     process_architecture=[Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString(); os_architecture=[Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()}} |
@@ -268,6 +290,7 @@ exit $exitCode
             startup_prelude = r"""
 $script:startupCase='CASE'
 $script:registeredStartup=Join-Path $env:APPDATA 'OS-registered-startup'
+if (-not $script:startupCase) { $script:registeredStartup=Join-Path $env:APPDATA 'Startup' }
 switch ($script:startupCase) {
     'existing' { $null=New-Item -ItemType Directory -Path $script:registeredStartup }
     'empty' { $script:registeredStartup='' }
@@ -292,6 +315,7 @@ function Get-PortableStartup {
     $script:managedNormalCalls++
     if ($script:startupCase -eq 'default-disagrees') { return (Join-Path $env:APPDATA 'other-registration') }
     if ($script:startupCase -eq 'readback-empty') { return '' }
+    if ($script:startupCase -eq 'readback-throws' -and $script:acceptanceCreateCalls -gt 0) { throw [IO.IOException]::new('sentinel-secret') }
     if ($script:startupCase -eq 'readback-disagrees' -and (Test-Path -LiteralPath $script:registeredStartup)) { return (Join-Path $env:APPDATA 'other-registration') }
     if ($script:startupCase -eq 'empty') { return '' }
     if (Test-Path -LiteralPath $script:registeredStartup -PathType Container) { return $script:registeredStartup }
@@ -312,6 +336,59 @@ function Get-PortableStartup {
                     'readiness_count': len(list(root.rglob('clover-fixture-readiness.txt'))),
                 })
             return result, receipts
+
+    def test_shell_create_provisions_before_strict_normal_readback_and_real_io(self):
+        result, receipts = self.run_child_body(startup_case='missing')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        seam = json.loads(receipts['portable-native-state.json'])
+        self.assertEqual(seam['acceptance_create_calls'], 1)
+        self.assertIs(seam['acceptance_create_provisioned'], True)
+        self.assertEqual(seam['create_calls'], 0)
+        self.assertEqual((seam['managed_normal'], seam['managed_do_not_verify']), (2, 1))
+        d = json.loads(receipts['child-stage.json'])
+        self.assertEqual(d['states'], dict.fromkeys(PHASES, 'passed'))
+        self.assertIs(d['startup']['exists'], True)
+        self.assertIs(d['startup']['readback_agrees'], True)
+        self.assertEqual(json.loads(receipts['portable-startup-state.json']),
+                         dict(registered_created=True, foreign_created=False, readiness_count=0))
+        self.assertNotIn('startup-counterfactual.json', receipts)
+        self.assertEqual(json.loads(receipts['access.json'])['exit'], 0)
+
+    def test_shell_create_rejects_bad_returns_exceptions_and_missing_provision_before_write(self):
+        for case in ('empty', 'foreign', 'throws', 'no-provision'):
+            with self.subTest(create_case=case):
+                result, receipts = self.run_child_body(startup_case='missing', create_case=case)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('access.json', receipts)
+                d = json.loads(receipts['child-stage.json'])
+                self.assertEqual((d['phase'], d['state']), ('startup_create', 'failed'))
+                self.assertEqual(d['states']['startup_write'], 'unknown')
+                self.assertEqual(d['reason'], 'exception' if case == 'throws' else 'predicate_mismatch')
+                seam = json.loads(receipts['portable-native-state.json'])
+                self.assertEqual(seam['acceptance_create_calls'], 1)
+                self.assertIs(seam['acceptance_create_provisioned'], False)
+                self.assertEqual(seam['create_calls'], 0)
+                self.assertEqual(json.loads(receipts['portable-startup-state.json']),
+                                 dict(registered_created=False, foreign_created=False, readiness_count=0))
+                self.assertNotIn('startup-counterfactual.json', receipts)
+                self.assertNotIn('sentinel-secret', receipts['child-stage.json'] + result.stdout + result.stderr)
+
+    def test_shell_create_success_cannot_replace_failed_normal_lookup(self):
+        for case in ('readback-empty', 'readback-disagrees', 'readback-throws'):
+            with self.subTest(normal=case):
+                result, receipts = self.run_child_body(startup_case=case)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('access.json', receipts)
+                d = json.loads(receipts['child-stage.json'])
+                self.assertEqual((d['phase'], d['state']), ('startup_create', 'failed'))
+                self.assertEqual(d['states']['startup_write'], 'unknown')
+                self.assertIs(d['startup']['exists'], True)
+                seam = json.loads(receipts['portable-native-state.json'])
+                self.assertEqual(seam['acceptance_create_calls'], 1)
+                self.assertIs(seam['acceptance_create_provisioned'], True)
+                self.assertEqual(seam['create_calls'], 0)
+                self.assertEqual(json.loads(receipts['portable-startup-state.json'])['readiness_count'], 0)
+                self.assertNotIn('sentinel-secret', receipts['child-stage.json'] + result.stdout + result.stderr)
 
     def test_counterfactual_never_accepts_even_if_shell_create_changes_normal_lookup(self):
         for case in ('create-repairs', 'create-no-effect', 'create-empty', 'create-throws', 'create-foreign'):
@@ -543,6 +620,9 @@ function Get-PortableStartup {
                 self.assertEqual(d['states']['startup_create'], 'unknown')
                 state = json.loads(receipts['portable-startup-state.json'])
                 self.assertEqual(state, dict(registered_created=False, foreign_created=False, readiness_count=0))
+                seam = json.loads(receipts['portable-native-state.json'])
+                self.assertEqual(seam['acceptance_create_calls'], 0)
+                self.assertIs(seam['acceptance_create_provisioned'], False)
 
     def test_startup_requires_postcreate_default_readback_and_keeps_existing_folder_control(self):
         for case in ('readback-empty', 'readback-disagrees', 'existing'):
