@@ -160,6 +160,19 @@ class WinAPI:
                    'GetTokenInformation(class=' + str(kind) + ')')
         return buf
 
+    def elevation_info(self, token, kind):
+        # SDK: TOKEN_ELEVATION is one DWORD; TOKEN_ELEVATION_TYPE is a
+        # 32-bit enum. These fixed-size classes need no null-buffer size query.
+        if kind not in (18, 20):
+            raise ValueError('Not a fixed-size elevation information class')
+        value, length = W.DWORD(), W.DWORD()
+        size = C.sizeof(value)
+        self.check(self.a.GetTokenInformation(token, kind, C.byref(value), size, C.byref(length)),
+                   'GetTokenInformation(class=' + str(kind) + ')')
+        if length.value != size:
+            raise RuntimeError('Unexpected elevation information length: ' + str((kind, length.value, size)))
+        return value.value
+
     @contextmanager
     def current(self):
         token = W.HANDLE()
@@ -192,8 +205,8 @@ class WinAPI:
             self.check(self.a.CheckTokenMembership(impersonation, admin, C.byref(member)), 'CheckTokenMembership')
         return dict(sid=self.sid_text(C.cast(user, C.POINTER(SA)).contents.Sid),
                     groups={self.sid_text(r.Sid): r.Attributes for r in rows},
-                    elevated=bool(C.cast(self.info(token, 20), C.POINTER(W.DWORD)).contents.value),
-                    elevation_type=C.cast(self.info(token, 18), C.POINTER(W.DWORD)).contents.value,
+                    elevated=bool(self.elevation_info(token, 20)),
+                    elevation_type=self.elevation_info(token, 18),
                     integrity_sid=integrity_sid, integrity_rid=int(integrity_sid.rsplit('-', 1)[1]),
                     admin_member=bool(member), enabled_privileges=enabled,
                     is_user_an_admin=bool(self.s.IsUserAnAdmin()) if current else None,

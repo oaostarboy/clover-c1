@@ -61,11 +61,20 @@ try {
     Export-ScheduledTask -TaskName $taskName | Set-Content (Join-Path $Evidence 'scheduled-task.xml') -Encoding utf8
     Start-ScheduledTask -TaskName $taskName
     $until = [DateTime]::UtcNow.AddSeconds(35)
-    while (-not (Test-Path (Join-Path $Evidence 'scheduled-token.json')) -or (Get-ScheduledTask -TaskName $taskName).State -eq 'Running') {
+    while ($true) {
+        $taskState = (Get-ScheduledTask -TaskName $taskName).State
+        $taskResult = (Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
+        @{ task_name=$taskName; state=[string]$taskState; last_task_result=$taskResult } |
+            ConvertTo-Json | Set-Content (Join-Path $Evidence 'scheduled-task-result.json') -Encoding utf8
+        $identityError = Join-Path $Evidence 'token-error-identity.json'
+        if (Test-Path -LiteralPath $identityError) {
+            $detail = Get-Content -LiteralPath $identityError -Raw
+            throw "Baseline token observation failed (LastTaskResult=$taskResult): $detail"
+        }
+        if ((Test-Path (Join-Path $Evidence 'scheduled-token.json')) -and $taskState -ne 'Running') { break }
         if ([DateTime]::UtcNow -gt $until) { throw 'Baseline token observation timed out' }
         Start-Sleep -Milliseconds 200
     }
-    $taskResult = (Get-ScheduledTaskInfo -TaskName $taskName).LastTaskResult
     if ($taskResult -ne 0) { throw "Baseline task exited $taskResult" }
 } finally {
     if ($created) {
