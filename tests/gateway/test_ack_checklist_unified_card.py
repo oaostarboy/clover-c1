@@ -84,7 +84,7 @@ async def _drive(adapter, *, did=OWNED):
     cb("subagent.start", preview="Audit the gateway auth mixin")
     cb("tool.started", "read_file", "x.py", {"path": "x.py"})
     cb("tool.completed", "read_file", None, None, duration=0.2, is_error=False, result="body")
-    cb("subagent.complete", status="completed", summary="Plain summary: All good.", duration_seconds=3)
+    cb("subagent.complete", status="completed", outcome="done", summary="Plain summary: All good.", duration_seconds=3)
     await pub.drain()
     return pub
 
@@ -141,7 +141,7 @@ async def test_turn_card_absorb_has_nothing_to_absorb_for_owned_delegations():
     runner = _turn_runner(pub)
     cb = _child_cb(runner)
     cb("subagent.start", preview="g")
-    cb("subagent.complete", status="completed", summary="Plain summary: Done.", duration_seconds=1)
+    cb("subagent.complete", status="completed", outcome="done", summary="Plain summary: Done.", duration_seconds=1)
     await pub.drain()
     workers, ids = pub.absorb_finished()
     assert workers == [] and ids == []
@@ -188,7 +188,7 @@ async def test_editor_schedules_no_tick_once_finished_or_gone(monkeypatch):
     editor = await _bind(adapter, card)
     calls: List[Any] = []
     monkeypatch.setattr(asyncio.get_running_loop(), "call_later", lambda *a: calls.append(a))
-    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", outcome="done", summary="Plain summary: ok.")
     assert card.finished
     editor._tick_later()
     assert calls == []
@@ -233,7 +233,7 @@ async def test_ticks_stop_when_the_helper_finishes(monkeypatch):
     editor = await _bind(adapter, card)
     editor.notify()
     await _settle(editor)
-    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", outcome="done", summary="Plain summary: ok.")
     await asyncio.sleep(0.2)
     await _settle(editor)
     edits_after_finish = len(adapter.edits)
@@ -292,7 +292,7 @@ async def test_multi_helper_events_edit_the_one_message_in_place():
     assert "\U0001f527 *terminal npm test*" in text and "**check a** \u00b7 waiting" in text
     assert adapter.edits[-1]["finalize"] is True  # live edits are formatted
     for i in (0, 1):
-        ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed",
+        ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed", outcome="done",
                           summary="Plain summary: ok.")
     await _settle(editor)
     assert adapter.edits[-1]["finalize"] is True
@@ -307,7 +307,7 @@ async def test_a_six_helper_edit_fits_the_telegram_limit():
     adapter, card = _Adapter(), _multi("dm", goals=goals)
     editor = await _bind(adapter, card)
     for i in range(6):
-        ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed",
+        ac.on_child_event("subagent.complete", delegation_id="dm", task_index=i, status="completed", outcome="done",
                           summary="Plain summary: " + " ".join(["word"] * 70) + ".")
     await _settle(editor)
     sent = adapter.edits[-1]["text"]
@@ -335,7 +335,7 @@ async def test_editor_always_edits_with_finalize_true_so_telegram_formats_it():
     await _settle(editor)
     assert adapter.edits and not card.finished
     assert all(e["finalize"] is True for e in adapter.edits), "mid-run edits must be formatted"
-    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle(editor)
     assert all(e["finalize"] is True for e in adapter.edits)
 
@@ -412,7 +412,7 @@ async def test_a_roster_card_already_posted_is_removed_once_the_delegation_is_ow
     await pub.drain()
     assert adapter.deleted, "the live 🔀 card was taken down"
     assert adapter.cards == {}
-    cb("subagent.complete", status="completed", summary="Plain summary: All good.", duration_seconds=3)
+    cb("subagent.complete", status="completed", outcome="done", summary="Plain summary: All good.", duration_seconds=3)
     await pub.drain()
     pub.end_turn()
     await pub.drain()
@@ -520,7 +520,7 @@ def test_the_multi_card_collapses_to_n_subagents_hint_and_a_blank_line():
 def test_telegram_finished_card_is_one_plain_line_without_a_quote_or_hint():
     card = _say_card()
     ac.on_child_event("subagent.start", delegation_id=OWNED, model="m")
-    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed",
+    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", outcome="done",
                       summary="Result: done\nPlain summary: All fixed.")
     text = _editor(_tg_adapter(), card)._render()
     lines = text.splitlines()
@@ -551,7 +551,7 @@ def _three_subagent_card():
                           title=f"site {i}", model="m")
     ac.on_child_event("subagent.tool", delegation_id="dm", task_index=0, task_count=3,
                       tool_name="terminal", preview="ls", tool_call_id="t1")
-    ac.on_child_event("subagent.complete", delegation_id="dm", task_index=1, task_count=3, status="completed",
+    ac.on_child_event("subagent.complete", delegation_id="dm", task_index=1, task_count=3, status="completed", outcome="done",
                       summary="Result: done\nPlain summary: Site 1 is tidy.")
     return card
 
@@ -639,7 +639,7 @@ def test_telegram_format_of_a_joined_card_with_a_long_running_name_and_an_ended_
     card = ac.card_for([r1, r2, r3])
     cl = card.parts[0].checklist
     cl.model, cl.calls, cl.started = "Sonnet 5.5", 20, time.monotonic() - 355
-    ac.on_child_event("subagent.complete", delegation_id="b", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="b", status="completed", outcome="done", summary="Plain summary: ok.")
     out = _telegram_format(da._to_expandable(card.render(include_say=False), da.TAP_HINT_LIVE, bold_title=True))
     assert "\u25a0 *finishing the small fast model fix*\n" in out, "the name has the line to itself"
     assert "disks report" not in out and "2 subagents" in out.splitlines()[0]
@@ -665,7 +665,7 @@ async def test_the_finishing_edit_swaps_the_expandable_quote_for_one_plain_line(
     await _settle(editor)
     live = adapter.edits[-1]["text"]
     assert live.startswith("**> ") and live.endswith("||") and "tap to watch" in live
-    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed",
+    ac.on_child_event("subagent.complete", delegation_id=OWNED, status="completed", outcome="done",
                       summary="Plain summary: All fixed.")
     await _settle(editor)
     last = adapter.edits[-1]
@@ -682,7 +682,7 @@ async def test_the_finishing_edit_swaps_the_expandable_quote_for_one_plain_line(
 def test_telegram_formats_the_finished_one_liners_as_plain_text():
     ok = _tg_format("\U0001f340 **checking your second-GPU options** \u00b7 done \u00b7 Opus 5.5 \u00b7 \U0001f6e0 66 \u00b7 \u23f1 8m42s")
     assert ok == "\U0001f340 *checking your second\\-GPU options* \u00b7 done \u00b7 Opus 5\\.5 \u00b7 \U0001f6e0 66 \u00b7 \u23f1 8m42s"
-    bad = _tg_format("\U0001f342 **fixing the bugs** \u00b7 failed\n" + ac._INDENT + "The folder does not exist.")
-    assert bad.startswith("\U0001f342 *fixing the bugs* \u00b7 failed\n") and not bad.startswith(">")
-    stopped = _tg_format("\U0001f940 **fixing the bugs** \u00b7 stopped")
-    assert stopped == "\U0001f940 *fixing the bugs* \u00b7 stopped"
+    bad = _tg_format("\U0001f940 **fixing the bugs** \u00b7 failed\n" + ac._INDENT + "The folder does not exist.")
+    assert bad.startswith("\U0001f940 *fixing the bugs* \u00b7 failed\n") and not bad.startswith(">")
+    stopped = _tg_format("⏹ **fixing the bugs** \u00b7 stopped")
+    assert stopped == "⏹ *fixing the bugs* \u00b7 stopped"

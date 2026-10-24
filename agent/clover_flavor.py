@@ -97,6 +97,8 @@ CLOVER_PACK: dict = {
     "lucky_mark": LUCKY_LEAF,
     "done_mark": "🍀",
     "fail_mark": "🥀",
+    "incomplete_mark": "☘️",
+    "stopped_mark": "⏹",
     'faces': {
         'steer': [
             '(•̀ᴗ•́)و',
@@ -400,6 +402,8 @@ def normalize_pack(raw: Any) -> Optional[dict]:
         "lucky_mark": _mark("lucky_mark"),
         "done_mark": _mark("done_mark"),
         "fail_mark": _mark("fail_mark"),
+        "incomplete_mark": _mark("incomplete_mark"),
+        "stopped_mark": _mark("stopped_mark"),
         "faces": {str(k): _str_list(v) for k, v in faces_raw.items()},
         "lines": {k: v for k, v in lines.items() if v},
         "review_items": {**_REVIEW_ITEM_DEFAULTS, **_str_map(raw.get("review_items"))},
@@ -434,6 +438,21 @@ def active_pack() -> Optional[dict]:
         return pack_for_skin(_get_skin())
     except Exception:
         return None
+
+
+def outcome_mark(state: str, default: str) -> str:
+    """Shared card/step marks; an agent's selected pack keeps its identity."""
+    key = {"done": "done_mark", "failed": "fail_mark", "stopped": "stopped_mark"}.get(
+        state, "incomplete_mark")
+    pack = active_pack()
+    if pack and pack.get(key):
+        return pack[key]
+    from agent.display import _get_skin, _skin_emoji_usable
+
+    skin = _get_skin()
+    if _skin_emoji_usable(skin):
+        return (skin.spinner or {}).get(key) or default
+    return default
 
 
 def has_lines(pack: Optional[dict], kind: str) -> bool:

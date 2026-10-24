@@ -1,0 +1,49 @@
+.......................F.F.F.F.F.F.F.F.F.                                [100%]
+=================================== FAILURES ===================================
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-default-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'partial' in '☘️ checking work → verified result\n☘️ check\n⬜ verify'
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-boring-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'partial' in '☘️ checking work → verified result\n☘️ check\n⬜ verify'
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-tentacle-test-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'partial' in '🪸 checking work → verified result\n🪸 check\n⬜ verify'
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-default-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'blocked' in '☘️ checking work → verified result\n☘️ check\n⬜ verify'
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-boring-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'blocked' in '☘️ checking work → verified result\n☘️ check\n⬜ verify'
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-tentacle-test-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'blocked' in '🪸 checking work → verified result\n🪸 check\n⬜ verify'
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-default-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'unverified' in '☘️ checking work → verified result\n☘️ check\n⬜ verify'
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-boring-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'unverified' in '☘️ checking work → verified result\n☘️ check\n⬜ verify'
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-tentacle-test-classic] _
+tests/agent/test_delegation_outcome_display.py:159: in test_skin_identity_and_card_style_share_marks
+    assert label in text
+E   AssertionError: assert 'unverified' in '🪸 checking work → verified result\n🪸 check\n⬜ verify'
+=========================== short test summary info ============================
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-default-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-boring-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-tentacle-test-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-default-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-boring-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-tentacle-test-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-default-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-boring-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-tentacle-test-classic]
+9 failed, 32 passed in 0.89s

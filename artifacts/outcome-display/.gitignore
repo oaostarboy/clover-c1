@@ -1,0 +1,17 @@
+# Keep only the bounded review bundle; local source/temp data stays ignored.
+*
+!.gitignore
+!README.md
+!PREVIEW.md
+!render-previews.json
+!verification.json
+!static-review.json
+!test-command.json
+!red.txt
+!red-edges.txt
+!candidate.txt
+!candidate.xml
+!baseline-original.txt
+!baseline-original.xml
+!baseline-same-tests.txt
+!baseline-same-tests.xml

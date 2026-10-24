@@ -1,0 +1,11 @@
+{
+  "added_source_scan": {
+    "hardcoded_secret": [],
+    "shell_injection": [],
+    "eval_exec": [],
+    "pickle": [],
+    "formatted_sql": []
+  },
+  "independent_review": "parent review pending; not independently approved",
+  "scope": "display only; no lifecycle parser, gateway/run.py, versions, services or live configuration changed"
+}

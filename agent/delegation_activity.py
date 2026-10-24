@@ -105,6 +105,31 @@ _COMPLETE_STATUS = {
     "max_iterations": "incomplete",
 }
 
+
+def completion_display_state(event: Dict[str, Any]) -> str:
+    """Task evidence for cards only; never changes execution/delivery state."""
+    status = str(event.get("status") or "completed").strip().lower()
+    lifecycle = _COMPLETE_STATUS.get(status, "failed")
+    if status == "stopped" or lifecycle == "cancelled":
+        return "stopped"
+    if lifecycle == "failed":
+        return "failed"
+    capped = str(event.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}
+    report = event.get("task_outcome")
+    task = report.get("status") if isinstance(report, dict) else None
+    if task in {"partial", "blocked"}:
+        return task
+    if task == "unknown" or event.get("exited_unverified"):
+        return "unverified"
+    if capped or lifecycle == "incomplete":
+        return "unfinished"
+    if task == "done" or (task is None and event.get("outcome") == "done"):
+        return "done"
+    if event.get("outcome") == "not_done":
+        return "unfinished"
+    return "unverified"
+
+
 _TITLE_MAX = 60
 _NOTE_MAX = 110
 _TOOL_MAX = 72
@@ -342,6 +367,7 @@ class ChildActivity:
     # Finished after the fan-out's combined report already went out; its
     # result is delivered separately (card note only, never a state change).
     late_result: bool = False
+    display_state: str = ""  # terminal task evidence, separate from lifecycle
     # The root is holding the fan-out's combined report for this helper (every
     # other helper is done): "waiting on helper N" until it ends or the wait
     # is given up.
@@ -735,6 +761,7 @@ class DelegationActivityTracker:
         if state == "completed" and task_incomplete:
             state = "incomplete"
         child.state = state
+        child.display_state = completion_display_state(kw)
         child.exited_unverified = state == "incomplete" and bool(kw.get("exited_unverified"))
         child.ended_at = now
         _close_open_tools(child)
@@ -1057,7 +1084,9 @@ def _worker_rows(child: ChildActivity, now: float, *, live: bool) -> List[str]:
     if live:
         icon = WORKER_ICON
     else:
-        icon = WORKER_ICON if child.state == "completed" else _child_icon(child, "•")
+        from agent.clover_flavor import outcome_mark
+
+        icon = outcome_mark("done", WORKER_ICON) if _display_state(child) == "done" else _child_icon(child, "•")
     title = f"{icon} {_bold_title(child, _ROW_TITLE_MAX)}"
     calls = _calls(child, live=live)
     bits = [pretty_model(child.model)]
@@ -1092,13 +1121,13 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
             label += " · stopped"
         head = _stats_head("🔀", label, _calls(child, live=True), elapsed)
         if settled:
-            quoted = [_bold_title(child), f"{_child_icon(child)} {child.reason or child.state}"]
+            quoted = [_bold_title(child), f"{_child_icon(child)} {_final_body(child, _FINAL_SUMMARY_SINGLE)}"]
         else:
             quoted = [_bold_title(child), _doing(child, now)]
         if child.note and child.open_tools and child.visibility != "lifecycle":
             quoted.append(f"💬 {child.note}")
         return "\n".join([head] + _quote(quoted))
-    done = sum(1 for c in children if c.state == "completed")
+    done = sum(1 for c in children if _display_state(c) == "done")
     label = f"{len(children)} subagents" + (f" · {done} done" if done else "")
     if stopped:
         label += " · stopped"
@@ -1107,8 +1136,8 @@ def _render_active(group: DelegationGroup, now: float, stamp: str) -> str:
     shown = 0
     for child in children:
         if child.state in TERMINAL_STATES:
-            if child.state != "completed":
-                # Failures/cancellations stay visible; successes are just
+            if _display_state(child) != "done":
+                # Non-success outcomes stay visible; successes are just
                 # counted in the header until the final summary.
                 if quoted:
                     quoted.append(SPACER)
@@ -1220,7 +1249,20 @@ def _quote(lines: List[str]) -> List[str]:
     return [f"> {ln}" for ln in lines if ln]
 
 
+def _display_state(child: ChildActivity) -> str:
+    return child.display_state or {
+        "completed": "done", "failed": "failed", "cancelled": "stopped",
+        "incomplete": "unverified" if child.exited_unverified else "unfinished",
+    }.get(child.state, child.state)
+
+
 def _final_body(child: ChildActivity, limit: int) -> str:
+    display = _display_state(child)
+    if display in {"partial", "blocked", "unverified", "unfinished"}:
+        return {"partial": "partial: some work remains", "blocked": "blocked: waiting on a dependency",
+                "unverified": _UNVERIFIED_BODY,
+                "unfinished": "ran out of steps before finishing" if child.state == "incomplete"
+                else "unfinished: work did not finish"}[display]
     if child.state == "completed":
         body = _truncate_words(child.summary or "", limit)
         return f"{_LATE_BODY} {body}".strip() if child.late_result else body
@@ -1268,23 +1310,12 @@ def _render_final(group: DelegationGroup, now: float, stamp: str) -> str:
 
 
 def _state_counts(children: List[ChildActivity]) -> str:
-    done = sum(1 for c in children if c.state == "completed")
-    failed = sum(1 for c in children if c.state == "failed")
-    cancelled = sum(1 for c in children if c.state == "cancelled")
-    unverified = sum(1 for c in children if getattr(c, "exited_unverified", False))
-    incomplete = sum(1 for c in children if c.state == "incomplete") - unverified
-    if failed == 0 and cancelled == 0 and incomplete == 0 and unverified == 0:
+    states = [_display_state(c) for c in children]
+    if all(s == "done" for s in states):
         return ""
-    parts = [f"{done} done"] if done else []
-    if incomplete:
-        parts.append(f"{incomplete} unfinished")
-    if unverified:
-        parts.append(f"{unverified} unverified")
-    if failed:
-        parts.append(f"{failed} failed")
-    if cancelled:
-        parts.append(f"{cancelled} stopped")
-    return " · ".join(parts)
+    return " · ".join(f"{states.count(state)} {state}" for state in
+                      ("done", "partial", "blocked", "unverified", "unfinished", "failed", "stopped")
+                      if state in states)
 
 
 def _state_icon(state: str, default: Optional[str] = None) -> str:
@@ -1299,27 +1330,29 @@ def _state_icon(state: str, default: Optional[str] = None) -> str:
 
 
 def _child_icon(child: ChildActivity, default: Optional[str] = None) -> str:
-    """Card icon for one worker: like ``_state_icon``, but a clean exit whose
-    result could not be verified gets its own terminal mark, not ⏳."""
-    if child.exited_unverified:
-        return _UNVERIFIED_ICON
+    from agent.clover_flavor import outcome_mark
+
+    display = _display_state(child)
+    if display in {"done", "failed", "stopped", "partial", "blocked", "unverified", "unfinished"}:
+        fallback = {"done": _ICONS["completed"], "failed": "🥀", "stopped": "⏹"}.get(display, "☘️")
+        return outcome_mark(display, fallback)
     return _state_icon(child.state, default)
 
 
 def group_icon(children: List[ChildActivity]) -> str:
-    """❌ only for a real failure; running out of steps is ⏳, not red."""
-    from agent.display import get_done_mark, get_fail_mark
+    """Only true failures get a failure mark; success needs every task done."""
+    from agent.clover_flavor import outcome_mark
 
-    states = {c.state for c in children}
+    states = {_display_state(c) for c in children}
     if "failed" in states:
-        return get_fail_mark()
-    if any(c.state == "incomplete" and not getattr(c, "exited_unverified", False) for c in children):
-        return "⏳"
-    if any(getattr(c, "exited_unverified", False) for c in children):
-        return _UNVERIFIED_ICON
-    if "cancelled" in states:
-        return "⏹"
-    return get_done_mark()
+        return outcome_mark("failed", "🥀")
+    if states & {"partial", "blocked", "unverified", "unfinished"}:
+        return outcome_mark("unfinished", "☘️")
+    if "stopped" in states:
+        return outcome_mark("stopped", "⏹")
+    if states == {"done"}:
+        return outcome_mark("done", _ICONS["completed"])
+    return "🔀"
 
 
 def short_duration(seconds: Optional[float]) -> str:

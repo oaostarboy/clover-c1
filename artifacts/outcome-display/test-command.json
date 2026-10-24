@@ -1,0 +1,28 @@
+{
+  "baseline": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+  "interpreter": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-1-5a8c2e04/.venv/bin/python",
+  "tests": [
+    "tests/agent/test_ack_checklist.py",
+    "tests/agent/test_ack_checklist_unified.py",
+    "tests/tools/test_delegation_task_outcome.py",
+    "tests/gateway/test_skin_message_packs.py",
+    "tests/agent/test_delegation_activity_late_result.py",
+    "tests/agent/test_delegation_activity_provider_status.py",
+    "tests/gateway/test_delegation_activity.py",
+    "tests/gateway/test_delegation_card_adapter_rebuild.py",
+    "tests/gateway/test_ack_card_follow.py",
+    "tests/gateway/test_ack_checklist_card.py",
+    "tests/gateway/test_ack_checklist_unified_card.py",
+    "tests/gateway/test_delegation_card_follow.py",
+    "tests/agent/test_delegation_outcome_display.py"
+  ],
+  "flags": [
+    "-q",
+    "--tb=short"
+  ],
+  "environment": {
+    "TMPDIR": "<worktree>/artifacts/outcome-display",
+    "PYTHONDONTWRITEBYTECODE": "1"
+  },
+  "package_source": "own .venv; read-only package path from runtime-158 venv; no shared installs"
+}
