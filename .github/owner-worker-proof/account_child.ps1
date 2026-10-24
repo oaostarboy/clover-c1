@@ -165,7 +165,10 @@ try {
         ($script:childStage.startup.default_empty -or $startupDefault -eq $startup))
     Set-AccountChildStage -Phase 'startup_location' -State 'passed'
     Set-AccountChildStage -Phase 'startup_create' -State 'entered'
-    $null = New-Item -ItemType Directory -Path $startup -Force
+    # A new profile needs shell-managed known-folder provisioning, not raw mkdir.
+    # Normal lookup and real write/read/remove below remain mandatory.
+    $startupCreated = [Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::Create)
+    Assert-AccountChildPredicate ($startupCreated -eq $startup)
     $script:childStage.startup.exists = Test-Path -LiteralPath $startup -PathType Container
     $startupReadback = [Environment]::GetFolderPath('Startup')
     $script:childStage.startup.readback_agrees = $startupReadback -eq $startup
