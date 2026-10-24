@@ -1,0 +1,56 @@
+test_actual_suni_framework_shape_is_owned (__main__.SuniWrapperAcceptance.test_actual_suni_framework_shape_is_owned) ... FAIL
+test_cross_uid_rejected (__main__.SuniWrapperAcceptance.test_cross_uid_rejected) ... ok
+test_duplicate_launchctl_owner_field_rejected (__main__.SuniWrapperAcceptance.test_duplicate_launchctl_owner_field_rejected) ... ok
+test_foreign_child_environment_rejected (__main__.SuniWrapperAcceptance.test_foreign_child_environment_rejected) ... ok
+test_foreign_supervisor_rejected (__main__.SuniWrapperAcceptance.test_foreign_supervisor_rejected) ... ok
+test_foreign_symlink_to_shared_base_is_not_own_venv (__main__.SuniWrapperAcceptance.test_foreign_symlink_to_shared_base_is_not_own_venv) ... ok
+test_foreign_worker_command_rejected (__main__.SuniWrapperAcceptance.test_foreign_worker_command_rejected) ... ok
+test_framework_executable_mismatch_rejected (__main__.SuniWrapperAcceptance.test_framework_executable_mismatch_rejected) ... ok
+test_frozen_caller_defers_without_forced_restart_and_keeps_recovery (__main__.SuniWrapperAcceptance.test_frozen_caller_defers_without_forced_restart_and_keeps_recovery) ... skipped 'exact historical-policy replay requires published source pin'
+test_full_discovery_only_identifies_legacy_worker_not_wrapper (__main__.SuniWrapperAcceptance.test_full_discovery_only_identifies_legacy_worker_not_wrapper) ... skipped 'exact historical-policy replay requires published source pin'
+test_launchctl_failure_rejected (__main__.SuniWrapperAcceptance.test_launchctl_failure_rejected) ... ok
+test_lexically_equal_positive_control (__main__.SuniWrapperAcceptance.test_lexically_equal_positive_control) ... ok
+test_loaded_launchd_foreign_venv_rejected_despite_claimed_environment (__main__.SuniWrapperAcceptance.test_loaded_launchd_foreign_venv_rejected_despite_claimed_environment) ... ok
+test_loaded_launchd_wrong_arguments_rejected (__main__.SuniWrapperAcceptance.test_loaded_launchd_wrong_arguments_rejected) ... ok
+test_loaded_launchd_wrong_pid_rejected (__main__.SuniWrapperAcceptance.test_loaded_launchd_wrong_pid_rejected) ... ok
+test_non_mac_alias_stays_rejected (__main__.SuniWrapperAcceptance.test_non_mac_alias_stays_rejected) ... ok
+test_only_outer_alias_correction_is_insufficient (__main__.SuniWrapperAcceptance.test_only_outer_alias_correction_is_insufficient) ... FAIL
+test_other_venv_on_same_base_interpreter_rejected (__main__.SuniWrapperAcceptance.test_other_venv_on_same_base_interpreter_rejected) ... ok
+test_shared_base_alias_outside_own_venv_rejected (__main__.SuniWrapperAcceptance.test_shared_base_alias_outside_own_venv_rejected) ... FAIL
+test_stale_worker_fingerprint_rejected (__main__.SuniWrapperAcceptance.test_stale_worker_fingerprint_rejected) ... ok
+test_unadmitted_worker_rejected (__main__.SuniWrapperAcceptance.test_unadmitted_worker_rejected) ... ok
+test_unknown_process_start_rejected (__main__.SuniWrapperAcceptance.test_unknown_process_start_rejected) ... ok
+test_unreadable_child_environment_rejected (__main__.SuniWrapperAcceptance.test_unreadable_child_environment_rejected) ... ok
+test_unreadable_wrapper_environment_rejected (__main__.SuniWrapperAcceptance.test_unreadable_wrapper_environment_rejected) ... ok
+test_wrapper_not_launchd_child_rejected (__main__.SuniWrapperAcceptance.test_wrapper_not_launchd_child_rejected) ... ok
+test_wrapper_reused_during_attestation_rejected (__main__.SuniWrapperAcceptance.test_wrapper_reused_during_attestation_rejected) ... ok
+test_wrong_profile_log_rejected (__main__.SuniWrapperAcceptance.test_wrong_profile_log_rejected) ... ok
+
+======================================================================
+FAIL: test_actual_suni_framework_shape_is_owned (__main__.SuniWrapperAcceptance.test_actual_suni_framework_shape_is_owned)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/tests/clover_cli/test_suni_macos_wrapper_acceptance.py", line 139, in test_actual_suni_framework_shape_is_owned
+    self.assertTrue(self.proved(), 'real owned wrapper has different outer/inner argv[0] and normalized child argv[0]')
+AssertionError: False is not true : real owned wrapper has different outer/inner argv[0] and normalized child argv[0]
+
+======================================================================
+FAIL: test_only_outer_alias_correction_is_insufficient (__main__.SuniWrapperAcceptance.test_only_outer_alias_correction_is_insufficient)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/tests/clover_cli/test_suni_macos_wrapper_acceptance.py", line 144, in test_only_outer_alias_correction_is_insufficient
+    self.assertTrue(self.proved(), 'worker OS argv normalization must also preserve verified ownership')
+AssertionError: False is not true : worker OS argv normalization must also preserve verified ownership
+
+======================================================================
+FAIL: test_shared_base_alias_outside_own_venv_rejected (__main__.SuniWrapperAcceptance.test_shared_base_alias_outside_own_venv_rejected)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/tests/clover_cli/test_suni_macos_wrapper_acceptance.py", line 197, in test_shared_base_alias_outside_own_venv_rejected
+    self.assertFalse(self.proved())
+AssertionError: True is not false
+
+----------------------------------------------------------------------
+Ran 27 tests in 0.507s
+
+FAILED (failures=3, skipped=2)

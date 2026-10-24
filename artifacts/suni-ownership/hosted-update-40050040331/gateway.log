@@ -1,0 +1,34 @@
+2026-10-24 01:31:45,744 INFO gateway.control_socket: Gateway control socket listening at /Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/gateway.sock
+2026-10-24 01:31:45,792 INFO gateway.run: Starting Clover Gateway...
+2026-10-24 01:31:45,822 INFO gateway.run: Session storage: /Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/sessions
+2026-10-24 01:31:45,828 INFO gateway.run: Agent budget: max_iterations=500 (agent.max_turns from config.yaml, or CLOVER_MAX_ITERATIONS from .env, or default 500)
+2026-10-24 01:31:45,828 INFO gateway.run: Secret redaction: ENABLED (tool output, logs, and chat responses are scrubbed before delivery)
+2026-10-24 01:31:45,851 WARNING gateway.run: No env user allowlists configured. Messaging platforms default to pairing/allowlist policies and will deny unknown senders unless you configure platform allowlists (e.g., TELEGRAM_ALLOWED_USERS=your_id) or explicitly opt in with GATEWAY_ALLOW_ALL_USERS=true plus dm_policy/group_policy: open on the platform.
+2026-10-24 01:31:46,100 INFO gateway.run: Connecting to api_server...
+2026-10-24 01:31:46,113 INFO gateway.platforms.api_server: [Api_Server] API server listening on http://127.0.0.1:18791 (model: clover-c1)
+2026-10-24 01:31:46,117 INFO gateway.run: ✓ api_server connected
+2026-10-24 01:31:46,121 INFO gateway.run: Gateway running with 1 platform(s)
+2026-10-24 01:31:46,138 INFO gateway.run: Channel directory built: 0 target(s)
+2026-10-24 01:31:47,157 INFO gateway.run: kanban dispatcher: holding singleton dispatcher lock (/Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/kanban/.dispatcher.lock)
+2026-10-24 01:31:47,169 INFO gateway.run: Press Ctrl+C to stop
+2026-10-24 01:31:47,194 INFO gateway.run: Gateway housekeeping started (interval=60s)
+2026-10-24 01:31:52,159 INFO gateway.run: kanban dispatcher: embedded in gateway (interval=60.0s)
+2026-10-24 01:34:42,426 INFO gateway.run: Received SIGTERM as a planned gateway stop — exiting cleanly
+2026-10-24 01:34:42,427 WARNING gateway.run: Shutdown context: signal=SIGTERM under_systemd=no parent_pid=1981 parent_name=? loadavg_1m=7.17 parent_cmdline='(unknown)'
+2026-10-24 01:34:42,458 INFO gateway.run: Stopping gateway...
+2026-10-24 01:34:42,459 INFO gateway.run: Shutdown phase: notify_active_sessions done at +0.00s
+2026-10-24 01:34:42,462 INFO gateway.run: Shutdown phase: drain done at +0.00s (drain took 0.00s, timed_out=False, active_at_start=0, active_now=0, cron_at_start=0, cron_now=0, api_at_start=0, api_now=0)
+2026-10-24 01:34:42,480 INFO gateway.platforms.api_server: [Api_Server] API server stopped
+2026-10-24 01:34:42,480 INFO gateway.run: ✓ api_server disconnected (0.02s)
+2026-10-24 01:34:42,480 INFO gateway.run: Shutdown phase: all adapters disconnected at +0.02s
+2026-10-24 01:34:42,560 INFO gateway.run: Shutdown phase: final-cleanup tool kill done at +0.10s
+2026-10-24 01:34:42,564 INFO gateway.run: Shutdown phase: SessionDB close done at +0.11s
+2026-10-24 01:34:42,566 INFO gateway.run: Gateway stopped (total teardown 0.11s)
+2026-10-24 01:34:42,575 INFO gateway.run: Gateway housekeeping stopped
+┌─────────────────────────────────────────────────────────┐
+│           ☘ Clover Gateway Starting...                 │
+├─────────────────────────────────────────────────────────┤
+│  Messaging platforms + cron scheduler                    │
+│  Press Ctrl+C to stop                                   │
+└─────────────────────────────────────────────────────────┘
+

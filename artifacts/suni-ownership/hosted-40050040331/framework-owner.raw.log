@@ -1,0 +1,595 @@
+﻿2026-10-24T01:30:20.7972020Z Current runner version: '2.338.0'
+2026-10-24T01:30:20.7991330Z ##[group]Runner Image Provisioner
+2026-10-24T01:30:20.7992050Z Hosted Compute Agent
+2026-10-24T01:30:20.7992520Z Version: 20260828.587
+2026-10-24T01:30:20.7993060Z Commit: abac92662cab4cc7352de4f9f9d2e2419aad9c29
+2026-10-24T01:30:20.7993630Z Build Date: 2026-08-28T16:44:25Z
+2026-10-24T01:30:20.7994200Z Worker ID: {7f0c93ef-76fc-4d27-86b6-4861c609b456}
+2026-10-24T01:30:20.7994760Z Azure Region: westus
+2026-10-24T01:30:20.7995230Z ##[endgroup]
+2026-10-24T01:30:20.7996280Z ##[group]Operating System
+2026-10-24T01:30:20.7996770Z macOS
+2026-10-24T01:30:20.7997190Z 14.8.9
+2026-10-24T01:30:20.7997610Z 23J631
+2026-10-24T01:30:20.7998040Z ##[endgroup]
+2026-10-24T01:30:20.7998490Z ##[group]Runner Image
+2026-10-24T01:30:20.7998970Z Image: macos-14-arm64
+2026-10-24T01:30:20.7999430Z Version: 20260831.0302.1
+2026-10-24T01:30:20.8000430Z Included Software: https://github.com/actions/runner-images/blob/macos-14-arm64/20260831.0302/images/macos/macos-14-arm64-Readme.md
+2026-10-24T01:30:20.8001580Z Image Release: https://github.com/actions/runner-images/releases/tag/macos-14-arm64%2F20260831.0302
+2026-10-24T01:30:20.8002330Z ##[endgroup]
+2026-10-24T01:30:20.8003250Z ##[group]GITHUB_TOKEN Permissions
+2026-10-24T01:30:20.8004910Z Contents: read
+2026-10-24T01:30:20.8005390Z Metadata: read
+2026-10-24T01:30:20.8005880Z ##[endgroup]
+2026-10-24T01:30:20.8007520Z Secret source: Actions
+2026-10-24T01:30:20.8008250Z Cache mode: write
+2026-10-24T01:30:20.8008820Z Prepare workflow directory
+2026-10-24T01:30:20.8465040Z Prepare all required actions
+2026-10-24T01:30:20.8521270Z Getting action download info
+2026-10-24T01:30:21.2587520Z Download action repository 'actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd' (SHA:de0fac2e4500dabe0009e67214ff5f5447ce83dd)
+2026-10-24T01:30:21.5670230Z Download action repository 'actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02' (SHA:ea165f8d65b6e75b540449e92b4886f43607fa02)
+2026-10-24T01:30:21.7806990Z Complete job name: framework-owner
+2026-10-24T01:30:21.8369940Z ##[group]Run actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+2026-10-24T01:30:21.8370850Z with:
+2026-10-24T01:30:21.8371340Z   fetch-depth: 0
+2026-10-24T01:30:21.8371880Z   persist-credentials: false
+2026-10-24T01:30:21.8372420Z   repository: oaostarboy/clover-c1
+2026-10-24T01:30:21.8375740Z   token: ***
+2026-10-24T01:30:21.8376290Z   ssh-strict: true
+2026-10-24T01:30:21.8376850Z   ssh-user: git
+2026-10-24T01:30:21.8377360Z   clean: true
+2026-10-24T01:30:21.8378160Z   sparse-checkout-cone-mode: true
+2026-10-24T01:30:21.8378750Z   fetch-tags: false
+2026-10-24T01:30:21.8379250Z   show-progress: true
+2026-10-24T01:30:21.8379730Z   lfs: false
+2026-10-24T01:30:21.8380180Z   submodules: false
+2026-10-24T01:30:21.8380660Z   set-safe-directory: true
+2026-10-24T01:30:21.8381450Z env:
+2026-10-24T01:30:21.8382060Z   PRODUCT_SHA: 9195c15e6d40410ada6fd23b125e1e6137ad6547
+2026-10-24T01:30:21.8382750Z   OLD_SHA: 9535350bee1d57cf7e466672e6f416403886bec1
+2026-10-24T01:30:21.8383500Z   PYTHONDONTWRITEBYTECODE: 1
+2026-10-24T01:30:21.8384070Z ##[endgroup]
+2026-10-24T01:30:22.3349840Z Syncing repository: oaostarboy/clover-c1
+2026-10-24T01:30:22.3351620Z ##[group]Getting Git version info
+2026-10-24T01:30:22.3352280Z Working directory is '/Users/runner/work/clover-c1/clover-c1'
+2026-10-24T01:30:22.3353260Z [command]/opt/homebrew/bin/git version
+2026-10-24T01:30:22.3597380Z git version 2.55.0
+2026-10-24T01:30:22.3614790Z ##[endgroup]
+2026-10-24T01:30:22.3623980Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/748e7e66-c73c-4d38-af3f-52ea572f887c/.gitconfig'
+2026-10-24T01:30:22.3629360Z Temporarily overriding HOME='/Users/runner/work/_temp/748e7e66-c73c-4d38-af3f-52ea572f887c' before making global git config changes
+2026-10-24T01:30:22.3630900Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-24T01:30:22.3633150Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/clover-c1/clover-c1
+2026-10-24T01:30:22.3730640Z Deleting the contents of '/Users/runner/work/clover-c1/clover-c1'
+2026-10-24T01:30:22.3739090Z ##[group]Initializing the repository
+2026-10-24T01:30:22.3740230Z [command]/opt/homebrew/bin/git init /Users/runner/work/clover-c1/clover-c1
+2026-10-24T01:30:22.3973960Z hint: Using 'master' as the name for the initial branch. This default branch name
+2026-10-24T01:30:22.3979140Z hint: will change to "main" in Git 3.0. To configure the initial branch name
+2026-10-24T01:30:22.3980340Z hint: to use in all of your new repositories, which will suppress this warning,
+2026-10-24T01:30:22.3981330Z hint: call:
+2026-10-24T01:30:22.3982720Z hint:
+2026-10-24T01:30:22.3983640Z hint: 	git config --global init.defaultBranch <name>
+2026-10-24T01:30:22.3984500Z hint:
+2026-10-24T01:30:22.3985260Z hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+2026-10-24T01:30:22.3986230Z hint: 'development'. The just-created branch can be renamed via this command:
+2026-10-24T01:30:22.3987970Z hint:
+2026-10-24T01:30:22.3988720Z hint: 	git branch -m <name>
+2026-10-24T01:30:22.4004260Z hint:
+2026-10-24T01:30:22.4005900Z hint: Disable this message with "git config set advice.defaultBranchName false"
+2026-10-24T01:30:22.4007150Z Initialized empty Git repository in /Users/runner/work/clover-c1/clover-c1/.git/
+2026-10-24T01:30:22.4009890Z [command]/opt/homebrew/bin/git remote add origin https://github.com/oaostarboy/clover-c1
+2026-10-24T01:30:22.4047190Z ##[endgroup]
+2026-10-24T01:30:22.4048010Z ##[group]Disabling automatic garbage collection
+2026-10-24T01:30:22.4049960Z [command]/opt/homebrew/bin/git config --local gc.auto 0
+2026-10-24T01:30:22.4114910Z ##[endgroup]
+2026-10-24T01:30:22.4118900Z ##[group]Setting up auth
+2026-10-24T01:30:22.4120130Z Removing SSH command configuration
+2026-10-24T01:30:22.4121370Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-24T01:30:22.4184250Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-24T01:30:22.4997380Z Removing HTTP extra header
+2026-10-24T01:30:22.5004480Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-24T01:30:22.5057560Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-24T01:30:22.5867040Z Removing includeIf entries pointing to credentials config files
+2026-10-24T01:30:22.5871810Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-24T01:30:22.5922640Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-24T01:30:22.6554850Z [command]/opt/homebrew/bin/git config --file /Users/runner/work/_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config http.https://github.com/.extraheader AUTHORIZATION: basic ***
+2026-10-24T01:30:22.6607940Z [command]/opt/homebrew/bin/git config --local includeIf.gitdir:/Users/runner/work/clover-c1/clover-c1/.git.path /Users/runner/work/_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:22.6657730Z [command]/opt/homebrew/bin/git config --local includeIf.gitdir:/Users/runner/work/clover-c1/clover-c1/.git/worktrees/*.path /Users/runner/work/_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:22.6714180Z [command]/opt/homebrew/bin/git config --local includeIf.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:22.6769880Z [command]/opt/homebrew/bin/git config --local includeIf.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:22.6819560Z ##[endgroup]
+2026-10-24T01:30:22.6820450Z ##[group]Fetching the repository
+2026-10-24T01:30:22.6824660Z [command]/opt/homebrew/bin/git -c protocol.version=2 fetch --no-tags --prune --no-recurse-submodules origin +refs/heads/*:refs/remotes/origin/* +refs/tags/*:refs/tags/*
+2026-10-24T01:30:26.1862930Z From https://github.com/oaostarboy/clover-c1
+2026-10-24T01:30:26.1868130Z  * [new branch]        bot/js-autofix          -> origin/bot/js-autofix
+2026-10-24T01:30:26.1869780Z  * [new branch]        c1.3/integration        -> origin/c1.3/integration
+2026-10-24T01:30:26.1870670Z  * [new branch]        c1.4/integration-2      -> origin/c1.4/integration-2
+2026-10-24T01:30:26.1871280Z  * [new branch]        c1.5/integration        -> origin/c1.5/integration
+2026-10-24T01:30:26.1871850Z  * [new branch]        c1.5/skillfix           -> origin/c1.5/skillfix
+2026-10-24T01:30:26.1872480Z  * [new branch]        candidate/native-proof-20261015T185744Z -> origin/candidate/native-proof-20261015T185744Z
+2026-10-24T01:30:26.1873590Z  * [new branch]        candidate/proactive-1.5.6-reviewed-5b3f6fb -> origin/candidate/proactive-1.5.6-reviewed-5b3f6fb
+2026-10-24T01:30:26.1874520Z  * [new branch]        ci/approved-join-boundary-observer-6a7fb604 -> origin/ci/approved-join-boundary-observer-6a7fb604
+2026-10-24T01:30:26.1875560Z  * [new branch]        ci/approved-platform-join-diagnostic -> origin/ci/approved-platform-join-diagnostic
+2026-10-24T01:30:26.1876430Z  * [new branch]        ci/approved-platform-join-proof -> origin/ci/approved-platform-join-proof
+2026-10-24T01:30:26.1877160Z  * [new branch]        ci/cim-probe-20261016T065034Z -> origin/ci/cim-probe-20261016T065034Z
+2026-10-24T01:30:26.1877830Z  * [new branch]        ci/diagnose-sqlite-pr129-99ed2859-20261016 -> origin/ci/diagnose-sqlite-pr129-99ed2859-20261016
+2026-10-24T01:30:26.1879700Z  * [new branch]        ci/docker-proof/card156-20261016T160115Z -> origin/ci/docker-proof/card156-20261016T160115Z
+2026-10-24T01:30:26.1881340Z  * [new branch]        ci/docker-proof/finish-owner-20261015T220145Z -> origin/ci/docker-proof/finish-owner-20261015T220145Z
+2026-10-24T01:30:26.1882430Z  * [new branch]        ci/docker-proof/finish-owner-r5-20261016T003232Z -> origin/ci/docker-proof/finish-owner-r5-20261016T003232Z
+2026-10-24T01:30:26.1883380Z  * [new branch]        ci/docker-proof/finish-owner-r8-20261016T011110Z -> origin/ci/docker-proof/finish-owner-r8-20261016T011110Z
+2026-10-24T01:30:26.1884210Z  * [new branch]        ci/docker-proof/finish-owner-r9-20261016T025454Z -> origin/ci/docker-proof/finish-owner-r9-20261016T025454Z
+2026-10-24T01:30:26.1885000Z  * [new branch]        ci/docker-proof/public156-20261016T134550Z -> origin/ci/docker-proof/public156-20261016T134550Z
+2026-10-24T01:30:26.1885800Z  * [new branch]        ci/docker-proof/public156-20261016T151316Z -> origin/ci/docker-proof/public156-20261016T151316Z
+2026-10-24T01:30:26.1886570Z  * [new branch]        ci/docker-proof/receipt-r10-20261016T034155Z -> origin/ci/docker-proof/receipt-r10-20261016T034155Z
+2026-10-24T01:30:26.1887400Z  * [new branch]        ci/docker-proof/receipt-r12-20261016T041051Z -> origin/ci/docker-proof/receipt-r12-20261016T041051Z
+2026-10-24T01:30:26.1888200Z  * [new branch]        ci/docker-proof/receipt-r14-20261016T050324Z -> origin/ci/docker-proof/receipt-r14-20261016T050324Z
+2026-10-24T01:30:26.1888970Z  * [new branch]        ci/docker-proof/receipt-r16-20261016T053159Z -> origin/ci/docker-proof/receipt-r16-20261016T053159Z
+2026-10-24T01:30:26.1889810Z  * [new branch]        ci/docker-proof/receipt-r17-20261016T062438Z -> origin/ci/docker-proof/receipt-r17-20261016T062438Z
+2026-10-24T01:30:26.1890580Z  * [new branch]        ci/docker-proof/receipt-r18-20261016T065717Z -> origin/ci/docker-proof/receipt-r18-20261016T065717Z
+2026-10-24T01:30:26.1891330Z  * [new branch]        ci/docker-proof/receipt-r19-20261016T071812Z -> origin/ci/docker-proof/receipt-r19-20261016T071812Z
+2026-10-24T01:30:26.1892040Z  * [new branch]        ci/guard-native-final-20261022 -> origin/ci/guard-native-final-20261022
+2026-10-24T01:30:26.1892900Z  * [new branch]        ci/guard-native-fresh-20261022 -> origin/ci/guard-native-fresh-20261022
+2026-10-24T01:30:26.1893690Z  * [new branch]        ci/guard-native-gatewaydiag-20261022 -> origin/ci/guard-native-gatewaydiag-20261022
+2026-10-24T01:30:26.1894490Z  * [new branch]        ci/guard-native-product-20261022 -> origin/ci/guard-native-product-20261022
+2026-10-24T01:30:26.1895200Z  * [new branch]        ci/guard-native-product-5817449d-20261022 -> origin/ci/guard-native-product-5817449d-20261022
+2026-10-24T01:30:26.1895970Z  * [new branch]        ci/guard-native-reviewed-product-20261022 -> origin/ci/guard-native-reviewed-product-20261022
+2026-10-24T01:30:26.1896880Z  * [new branch]        ci/guarded-query-probe/20261016T043547Z -> origin/ci/guarded-query-probe/20261016T043547Z
+2026-10-24T01:30:26.1897630Z  * [new branch]        ci/isolated-quota-candidate -> origin/ci/isolated-quota-candidate
+2026-10-24T01:30:26.1898280Z  * [new branch]        ci/isolated-quota-proof -> origin/ci/isolated-quota-proof
+2026-10-24T01:30:26.1899010Z  * [new branch]        ci/joined-deadline-review -> origin/ci/joined-deadline-review
+2026-10-24T01:30:26.1899580Z  * [new branch]        ci/joined-reader-proof  -> origin/ci/joined-reader-proof
+2026-10-24T01:30:26.1900160Z  * [new branch]        ci/legacy-156-acceptance-20261023 -> origin/ci/legacy-156-acceptance-20261023
+2026-10-24T01:30:26.1900810Z  * [new branch]        ci/legacy-guard-review-20261022 -> origin/ci/legacy-guard-review-20261022
+2026-10-24T01:30:26.1901520Z  * [new branch]        ci/linux-external-early-exit-20261022 -> origin/ci/linux-external-early-exit-20261022
+2026-10-24T01:30:26.1902210Z  * [new branch]        ci/linux-final-replies-20261022 -> origin/ci/linux-final-replies-20261022
+2026-10-24T01:30:26.1902880Z  * [new branch]        ci/linux-native-service-20261022 -> origin/ci/linux-native-service-20261022
+2026-10-24T01:30:26.1903470Z  * [new branch]        ci/macos-cold-audit     -> origin/ci/macos-cold-audit
+2026-10-24T01:30:26.1904330Z  * [new branch]        ci/macos-external-runtime-proof/c4338be2 -> origin/ci/macos-external-runtime-proof/c4338be2
+2026-10-24T01:30:26.1905220Z  * [new branch]        ci/macos-external-runtime-proof/final-20261022 -> origin/ci/macos-external-runtime-proof/final-20261022
+2026-10-24T01:30:26.1906220Z  * [new branch]        ci/macos-external-runtime-proof/windows-module-final-20261022 -> origin/ci/macos-external-runtime-proof/windows-module-final-20261022
+2026-10-24T01:30:26.1907110Z  * [new branch]        ci/macos-fresh-install-c1-2-c12846b -> origin/ci/macos-fresh-install-c1-2-c12846b
+2026-10-24T01:30:26.1907870Z  * [new branch]        ci/macos-fresh-install-correction-20261023 -> origin/ci/macos-fresh-install-correction-20261023
+2026-10-24T01:30:26.1908670Z  * [new branch]        ci/macos-service-acceptance-20261022 -> origin/ci/macos-service-acceptance-20261022
+2026-10-24T01:30:26.1909500Z  * [new branch]        ci/native-exact-registration-20261015T185744Z -> origin/ci/native-exact-registration-20261015T185744Z
+2026-10-24T01:30:26.1910300Z  * [new branch]        ci/native-next/20261015T185744Z -> origin/ci/native-next/20261015T185744Z
+2026-10-24T01:30:26.1911010Z  * [new branch]        ci/native-next/20261015T200243Z-c3-r2 -> origin/ci/native-next/20261015T200243Z-c3-r2
+2026-10-24T01:30:26.1911750Z  * [new branch]        ci/native-next/card156-20261016T160115Z -> origin/ci/native-next/card156-20261016T160115Z
+2026-10-24T01:30:26.1912550Z  * [new branch]        ci/native-next/finish-owner-20261015T213256Z -> origin/ci/native-next/finish-owner-20261015T213256Z
+2026-10-24T01:30:26.1913330Z  * [new branch]        ci/native-next/finish-r2-20261015T214250Z -> origin/ci/native-next/finish-r2-20261015T214250Z
+2026-10-24T01:30:26.1914100Z  * [new branch]        ci/native-next/finish-r3-20261015T220102Z -> origin/ci/native-next/finish-r3-20261015T220102Z
+2026-10-24T01:30:26.1914880Z  * [new branch]        ci/native-next/finish-r4-20261015T225041Z -> origin/ci/native-next/finish-r4-20261015T225041Z
+2026-10-24T01:30:26.1915850Z  * [new branch]        ci/native-next/finish-r5-20261016T003354Z -> origin/ci/native-next/finish-r5-20261016T003354Z
+2026-10-24T01:30:26.1916620Z  * [new branch]        ci/native-next/finish-r8-20261016T010957Z -> origin/ci/native-next/finish-r8-20261016T010957Z
+2026-10-24T01:30:26.1917370Z  * [new branch]        ci/native-next/finish-r9-20261016T025454Z -> origin/ci/native-next/finish-r9-20261016T025454Z
+2026-10-24T01:30:26.1918140Z  * [new branch]        ci/native-next/guard-native-final-20261022 -> origin/ci/native-next/guard-native-final-20261022
+2026-10-24T01:30:26.1918960Z  * [new branch]        ci/native-next/guard-reviewed-5817449d-20261022 -> origin/ci/native-next/guard-reviewed-5817449d-20261022
+2026-10-24T01:30:26.1919840Z  * [new branch]        ci/native-next/guard-reviewed-final-20261022 -> origin/ci/native-next/guard-reviewed-final-20261022
+2026-10-24T01:30:26.1920720Z  * [new branch]        ci/native-next/installer-fa5-20261015T204315Z-9e0a6f -> origin/ci/native-next/installer-fa5-20261015T204315Z-9e0a6f
+2026-10-24T01:30:26.1921610Z  * [new branch]        ci/native-next/macos-fresh-e1eac70b-20261023 -> origin/ci/native-next/macos-fresh-e1eac70b-20261023
+2026-10-24T01:30:26.1922520Z  * [new branch]        ci/native-next/overnight-birth-final-20261023 -> origin/ci/native-next/overnight-birth-final-20261023
+2026-10-24T01:30:26.1923310Z  * [new branch]        ci/native-next/overnight-final-20261023 -> origin/ci/native-next/overnight-final-20261023
+2026-10-24T01:30:26.1924110Z  * [new branch]        ci/native-next/overnight-final-v2-20261023 -> origin/ci/native-next/overnight-final-v2-20261023
+2026-10-24T01:30:26.1924900Z  * [new branch]        ci/native-next/overnight-fresh-v3-20261023 -> origin/ci/native-next/overnight-fresh-v3-20261023
+2026-10-24T01:30:26.1925760Z  * [new branch]        ci/native-next/proactive-156-99ed2859 -> origin/ci/native-next/proactive-156-99ed2859
+2026-10-24T01:30:26.1926640Z  * [new branch]        ci/native-next/proactive-156-f2f3146 -> origin/ci/native-next/proactive-156-f2f3146
+2026-10-24T01:30:26.1927490Z  * [new branch]        ci/native-next/public156-20261016T134550Z -> origin/ci/native-next/public156-20261016T134550Z
+2026-10-24T01:30:26.1928290Z  * [new branch]        ci/native-next/public156-20261016T151316Z -> origin/ci/native-next/public156-20261016T151316Z
+2026-10-24T01:30:26.1929100Z  * [new branch]        ci/native-next/receipt-r10-20261016T034155Z -> origin/ci/native-next/receipt-r10-20261016T034155Z
+2026-10-24T01:30:26.1929970Z  * [new branch]        ci/native-next/receipt-r12-20261016T041051Z -> origin/ci/native-next/receipt-r12-20261016T041051Z
+2026-10-24T01:30:26.1930740Z  * [new branch]        ci/native-next/receipt-r14-20261016T050324Z -> origin/ci/native-next/receipt-r14-20261016T050324Z
+2026-10-24T01:30:26.1931560Z  * [new branch]        ci/native-next/receipt-r16-20261016T053159Z -> origin/ci/native-next/receipt-r16-20261016T053159Z
+2026-10-24T01:30:26.1932410Z  * [new branch]        ci/native-next/receipt-r17-20261016T062438Z -> origin/ci/native-next/receipt-r17-20261016T062438Z
+2026-10-24T01:30:26.1933230Z  * [new branch]        ci/native-next/receipt-r18-20261016T065717Z -> origin/ci/native-next/receipt-r18-20261016T065717Z
+2026-10-24T01:30:26.1934040Z  * [new branch]        ci/native-next/receipt-r19-20261016T071812Z -> origin/ci/native-next/receipt-r19-20261016T071812Z
+2026-10-24T01:30:26.1934840Z  * [new branch]        ci/overnight-birth-final-20261023 -> origin/ci/overnight-birth-final-20261023
+2026-10-24T01:30:26.1935540Z  * [new branch]        ci/overnight-fresh-v3-20261023 -> origin/ci/overnight-fresh-v3-20261023
+2026-10-24T01:30:26.1936150Z  * [new branch]        ci/overnight-linux-20261023 -> origin/ci/overnight-linux-20261023
+2026-10-24T01:30:26.1936800Z  * [new branch]        ci/overnight-native-delta-20261023 -> origin/ci/overnight-native-delta-20261023
+2026-10-24T01:30:26.1937490Z  * [new branch]        ci/overnight-native-final-20261023 -> origin/ci/overnight-native-final-20261023
+2026-10-24T01:30:26.1938220Z  * [new branch]        ci/owner-cli-candidate-native-ea010382 -> origin/ci/owner-cli-candidate-native-ea010382
+2026-10-24T01:30:26.1939220Z  * [new branch]        ci/owner-cli-causal-experiment-918cf7ae -> origin/ci/owner-cli-causal-experiment-918cf7ae
+2026-10-24T01:30:26.1939930Z  * [new branch]        ci/owner-cli-diagnosis-918cf7ae -> origin/ci/owner-cli-diagnosis-918cf7ae
+2026-10-24T01:30:26.1940640Z  * [new branch]        ci/owner-cli-fixture-candidate-918cf7ae -> origin/ci/owner-cli-fixture-candidate-918cf7ae
+2026-10-24T01:30:26.1941290Z  * [new branch]        ci/owner-console-api-fix -> origin/ci/owner-console-api-fix
+2026-10-24T01:30:26.1941880Z  * [new branch]        ci/owner-console-completion -> origin/ci/owner-console-completion
+2026-10-24T01:30:26.1942540Z  * [new branch]        ci/owner-console-reviewed-729e52f3 -> origin/ci/owner-console-reviewed-729e52f3
+2026-10-24T01:30:26.1943200Z  * [new branch]        ci/owner-final-native-ea010382 -> origin/ci/owner-final-native-ea010382
+2026-10-24T01:30:26.1943860Z  * [new branch]        ci/owner-final-product-ea010382 -> origin/ci/owner-final-product-ea010382
+2026-10-24T01:30:26.1944560Z  * [new branch]        ci/owner-onboarding/diagnose-de9df79d -> origin/ci/owner-onboarding/diagnose-de9df79d
+2026-10-24T01:30:26.1945280Z  * [new branch]        ci/owner-onboarding/native-de9df79d -> origin/ci/owner-onboarding/native-de9df79d
+2026-10-24T01:30:26.1945990Z  * [new branch]        ci/owner-onboarding/product-de9df79d -> origin/ci/owner-onboarding/product-de9df79d
+2026-10-24T01:30:26.1946720Z  * [new branch]        ci/owner-product-reviewed-918cf7ae -> origin/ci/owner-product-reviewed-918cf7ae
+2026-10-24T01:30:26.1947370Z  * [new branch]        ci/presence-native-174f4d -> origin/ci/presence-native-174f4d
+2026-10-24T01:30:26.1947990Z  * [new branch]        ci/presence-native-finalization -> origin/ci/presence-native-finalization
+2026-10-24T01:30:26.1948620Z  * [new branch]        ci/presence-native-recovery -> origin/ci/presence-native-recovery
+2026-10-24T01:30:26.1949390Z  * [new branch]        ci/presence-release-joined -> origin/ci/presence-release-joined
+2026-10-24T01:30:26.1950020Z  * [new branch]        ci/receipt-mini/20261016T044714Z -> origin/ci/receipt-mini/20261016T044714Z
+2026-10-24T01:30:26.1950660Z  * [new branch]        ci/receipt-mini2/20261016T045811Z -> origin/ci/receipt-mini2/20261016T045811Z
+2026-10-24T01:30:26.1951310Z  * [new branch]        ci/receipt-probe/20261016T040149Z -> origin/ci/receipt-probe/20261016T040149Z
+2026-10-24T01:30:26.1951930Z  * [new branch]        ci/release-harness-20260930 -> origin/ci/release-harness-20260930
+2026-10-24T01:30:26.1952520Z  * [new branch]        ci/release-posix-acceptance -> origin/ci/release-posix-acceptance
+2026-10-24T01:30:26.1953220Z  * [new branch]        ci/release-posix-acceptance-c1-2-73cd788 -> origin/ci/release-posix-acceptance-c1-2-73cd788
+2026-10-24T01:30:26.1954000Z  * [new branch]        ci/release-posix-acceptance-c1-2-ce7070d -> origin/ci/release-posix-acceptance-c1-2-ce7070d
+2026-10-24T01:30:26.1954840Z  * [new branch]        ci/release-posix-acceptance-c1-2-final-c12846b -> origin/ci/release-posix-acceptance-c1-2-final-c12846b
+2026-10-24T01:30:26.1955700Z  * [new branch]        ci/release-posix-acceptance-c1-2-r1-493c9b6 -> origin/ci/release-posix-acceptance-c1-2-r1-493c9b6
+2026-10-24T01:30:26.1956510Z  * [new branch]        ci/release-posix-acceptance-c1-2-r1-6ea1027 -> origin/ci/release-posix-acceptance-c1-2-r1-6ea1027
+2026-10-24T01:30:26.1957260Z  * [new branch]        ci/reply-followup-boundary-20261022 -> origin/ci/reply-followup-boundary-20261022
+2026-10-24T01:30:26.1957940Z  * [new branch]        ci/security-probe/20261016T022714Z -> origin/ci/security-probe/20261016T022714Z
+2026-10-24T01:30:26.1958510Z  * [new branch]        ci/upgrade-e2e          -> origin/ci/upgrade-e2e
+2026-10-24T01:30:26.1959050Z  * [new branch]        ci/upgrade-e2e-pr55     -> origin/ci/upgrade-e2e-pr55
+2026-10-24T01:30:26.1959580Z  * [new branch]        ci/win-double-restart   -> origin/ci/win-double-restart
+2026-10-24T01:30:26.1960270Z  * [new branch]        ci/win-pr63-042d2212    -> origin/ci/win-pr63-042d2212
+2026-10-24T01:30:26.1960840Z  * [new branch]        ci/win-pr63-042d2212-candidate -> origin/ci/win-pr63-042d2212-candidate
+2026-10-24T01:30:26.1961440Z  * [new branch]        ci/win-pr63-43b568d     -> origin/ci/win-pr63-43b568d
+2026-10-24T01:30:26.1961950Z  * [new branch]        ci/win-pr63-73f5559     -> origin/ci/win-pr63-73f5559
+2026-10-24T01:30:26.1962500Z  * [new branch]        ci/win-pr63-probe-43b568d -> origin/ci/win-pr63-probe-43b568d
+2026-10-24T01:30:26.1963050Z  * [new branch]        ci/win-pr69-a86b0fd3    -> origin/ci/win-pr69-a86b0fd3
+2026-10-24T01:30:26.1963870Z  * [new branch]        ci/win-preflight-next/proactive-156-5b3f6fb -> origin/ci/win-preflight-next/proactive-156-5b3f6fb
+2026-10-24T01:30:26.1964730Z  * [new branch]        ci/win-preflight/proactive-156-5b3f6fb -> origin/ci/win-preflight/proactive-156-5b3f6fb
+2026-10-24T01:30:26.1965430Z  * [new branch]        ci/win-target/c1-2-c12846b -> origin/ci/win-target/c1-2-c12846b
+2026-10-24T01:30:26.1966060Z  * [new branch]        ci/win-update-next/c1-2-c12846b -> origin/ci/win-update-next/c1-2-c12846b
+2026-10-24T01:30:26.1967340Z  * [new branch]        ci/win-update-next/c1-2-final-73cd788 -> origin/ci/win-update-next/c1-2-final-73cd788
+2026-10-24T01:30:26.1968230Z  * [new branch]        ci/win-update-next/c1-2-finish-4a5496b1 -> origin/ci/win-update-next/c1-2-finish-4a5496b1
+2026-10-24T01:30:26.1969230Z  * [new branch]        ci/win-update-next/c1-2-finish-898ad79 -> origin/ci/win-update-next/c1-2-finish-898ad79
+2026-10-24T01:30:26.1969920Z  * [new branch]        ci/win-update-next/c1-2-finisher -> origin/ci/win-update-next/c1-2-finisher
+2026-10-24T01:30:26.1971200Z  * [new branch]        ci/win-update-next/c1-2-r1-493c9b6 -> origin/ci/win-update-next/c1-2-r1-493c9b6
+2026-10-24T01:30:26.1971940Z  * [new branch]        ci/win-update-next/c1-2-r1-6ea1027 -> origin/ci/win-update-next/c1-2-r1-6ea1027
+2026-10-24T01:30:26.1972960Z  * [new branch]        ci/win-update-next/c1-5-1-7584e29 -> origin/ci/win-update-next/c1-5-1-7584e29
+2026-10-24T01:30:26.1973710Z  * [new branch]        ci/win-update-next/c1-5-1-7584e29-target -> origin/ci/win-update-next/c1-5-1-7584e29-target
+2026-10-24T01:30:26.1974460Z  * [new branch]        ci/win-update-next/c1-5-183d93e -> origin/ci/win-update-next/c1-5-183d93e
+2026-10-24T01:30:26.1975170Z  * [new branch]        ci/win-update-next/c1-5-183d93e-target -> origin/ci/win-update-next/c1-5-183d93e-target
+2026-10-24T01:30:26.1975870Z  * [new branch]        ci/win-update-next/c1-5-2-e113ad3 -> origin/ci/win-update-next/c1-5-2-e113ad3
+2026-10-24T01:30:26.1976600Z  * [new branch]        ci/win-update-next/c1-5-2-e113ad3-target -> origin/ci/win-update-next/c1-5-2-e113ad3-target
+2026-10-24T01:30:26.1977320Z  * [new branch]        ci/win-update-next/c1-5-3-8e22264 -> origin/ci/win-update-next/c1-5-3-8e22264
+2026-10-24T01:30:26.1978020Z  * [new branch]        ci/win-update-next/c1-5-3-8e22264-target -> origin/ci/win-update-next/c1-5-3-8e22264-target
+2026-10-24T01:30:26.1978720Z  * [new branch]        ci/win-update-next/c1-5-4-24f9d52 -> origin/ci/win-update-next/c1-5-4-24f9d52
+2026-10-24T01:30:26.1979420Z  * [new branch]        ci/win-update-next/c1-5-4-24f9d52-target -> origin/ci/win-update-next/c1-5-4-24f9d52-target
+2026-10-24T01:30:26.1980130Z  * [new branch]        ci/win-update-next/c1-5-5-4b0518f -> origin/ci/win-update-next/c1-5-5-4b0518f
+2026-10-24T01:30:26.1980830Z  * [new branch]        ci/win-update-next/c1-5-5-4b0518f-target -> origin/ci/win-update-next/c1-5-5-4b0518f-target
+2026-10-24T01:30:26.1981720Z  * [new branch]        ci/win-update-next/c1-5-dcbe7ef -> origin/ci/win-update-next/c1-5-dcbe7ef
+2026-10-24T01:30:26.1982500Z  * [new branch]        ci/win-update-next/c1-5-dcbe7ef-target -> origin/ci/win-update-next/c1-5-dcbe7ef-target
+2026-10-24T01:30:26.1983150Z  * [new branch]        ci/win-update-proof-next -> origin/ci/win-update-proof-next
+2026-10-24T01:30:26.1983880Z  * [new branch]        ci/win-update-proof/c1-2-c12846b -> origin/ci/win-update-proof/c1-2-c12846b
+2026-10-24T01:30:26.1984920Z  * [new branch]        ci/win-update-proof/c1-2-final-73cd788 -> origin/ci/win-update-proof/c1-2-final-73cd788
+2026-10-24T01:30:26.1985680Z  * [new branch]        ci/win-update-proof/c1-2-finish-4a5496b1 -> origin/ci/win-update-proof/c1-2-finish-4a5496b1
+2026-10-24T01:30:26.1986540Z  * [new branch]        ci/win-update-proof/c1-2-finish-898ad79 -> origin/ci/win-update-proof/c1-2-finish-898ad79
+2026-10-24T01:30:26.1987240Z  * [new branch]        ci/win-update-proof/c1-2-finisher -> origin/ci/win-update-proof/c1-2-finisher
+2026-10-24T01:30:26.1987960Z  * [new branch]        ci/win-update-proof/c1-2-r1-493c9b6 -> origin/ci/win-update-proof/c1-2-r1-493c9b6
+2026-10-24T01:30:26.1988640Z  * [new branch]        ci/win-update-proof/c1-2-r1-6ea1027 -> origin/ci/win-update-proof/c1-2-r1-6ea1027
+2026-10-24T01:30:26.1989370Z  * [new branch]        ci/win-update-proof/c1-5-1-7584e29 -> origin/ci/win-update-proof/c1-5-1-7584e29
+2026-10-24T01:30:26.1990150Z  * [new branch]        ci/win-update-proof/c1-5-183d93e -> origin/ci/win-update-proof/c1-5-183d93e
+2026-10-24T01:30:26.1990890Z  * [new branch]        ci/win-update-proof/c1-5-2-e113ad3 -> origin/ci/win-update-proof/c1-5-2-e113ad3
+2026-10-24T01:30:26.1991580Z  * [new branch]        ci/win-update-proof/c1-5-3-8e22264 -> origin/ci/win-update-proof/c1-5-3-8e22264
+2026-10-24T01:30:26.1992310Z  * [new branch]        ci/win-update-proof/c1-5-4-24f9d52 -> origin/ci/win-update-proof/c1-5-4-24f9d52
+2026-10-24T01:30:26.1992990Z  * [new branch]        ci/win-update-proof/c1-5-5-4b0518f -> origin/ci/win-update-proof/c1-5-5-4b0518f
+2026-10-24T01:30:26.1993630Z  * [new branch]        ci/win-update-proof/c1-5-dcbe7ef -> origin/ci/win-update-proof/c1-5-dcbe7ef
+2026-10-24T01:30:26.1994370Z  * [new branch]        ci/windows-acceptance-correction-20261023 -> origin/ci/windows-acceptance-correction-20261023
+2026-10-24T01:30:26.2006340Z  * [new branch]        ci/windows-ack-cohort-trace -> origin/ci/windows-ack-cohort-trace
+2026-10-24T01:30:26.2007360Z  * [new branch]        ci/windows-ack-trace    -> origin/ci/windows-ack-trace
+2026-10-24T01:30:26.2008130Z  * [new branch]        ci/windows-corrected-product-20261023 -> origin/ci/windows-corrected-product-20261023
+2026-10-24T01:30:26.2008940Z  * [new branch]        ci/windows-external-runtime/c4338be2-20261022 -> origin/ci/windows-external-runtime/c4338be2-20261022
+2026-10-24T01:30:26.2009730Z  * [new branch]        ci/windows-external-runtime/final-20261022 -> origin/ci/windows-external-runtime/final-20261022
+2026-10-24T01:30:26.2010570Z  * [new branch]        ci/windows-external-runtime/module-fix-20261022 -> origin/ci/windows-external-runtime/module-fix-20261022
+2026-10-24T01:30:26.2011290Z  * [new branch]        ci/windows-home-import-proof -> origin/ci/windows-home-import-proof
+2026-10-24T01:30:26.2011960Z  * [new branch]        ci/windows-installer-diagnose-20261022 -> origin/ci/windows-installer-diagnose-20261022
+2026-10-24T01:30:26.2012730Z  * [new branch]        ci/windows-native-witness-product-20261023 -> origin/ci/windows-native-witness-product-20261023
+2026-10-24T01:30:26.2013500Z  * [new branch]        ci/windows-presence-settlement -> origin/ci/windows-presence-settlement
+2026-10-24T01:30:26.2015880Z  * [new branch]        ci/wrapper-macos-final-20261023 -> origin/ci/wrapper-macos-final-20261023
+2026-10-24T01:30:26.2016670Z  * [new branch]        ci/wrapper-next-review-20261023 -> origin/ci/wrapper-next-review-20261023
+2026-10-24T01:30:26.2017430Z  * [new branch]        ci/wrapper-product-review-20261023 -> origin/ci/wrapper-product-review-20261023
+2026-10-24T01:30:26.2018350Z  * [new branch]        clover-subagent/subagent-sa-0-295fba45 -> origin/clover-subagent/subagent-sa-0-295fba45
+2026-10-24T01:30:26.2019100Z  * [new branch]        clover-subagent/subagent-sa-0-578b1794 -> origin/clover-subagent/subagent-sa-0-578b1794
+2026-10-24T01:30:26.2019890Z  * [new branch]        clover-subagent/subagent-sa-0-9328c2af -> origin/clover-subagent/subagent-sa-0-9328c2af
+2026-10-24T01:30:26.2020850Z  * [new branch]        clover-subagent/subagent-sa-0-af0ff5ad -> origin/clover-subagent/subagent-sa-0-af0ff5ad
+2026-10-24T01:30:26.2021570Z  * [new branch]        clover-subagent/subagent-sa-0-c0019e79 -> origin/clover-subagent/subagent-sa-0-c0019e79
+2026-10-24T01:30:26.2022420Z  * [new branch]        dependabot/github_actions/actions-minor-patch-5760f6059a -> origin/dependabot/github_actions/actions-minor-patch-5760f6059a
+2026-10-24T01:30:26.2023390Z  * [new branch]        dependabot/github_actions/actions/upload-artifact-7.0.1 -> origin/dependabot/github_actions/actions/upload-artifact-7.0.1
+2026-10-24T01:30:26.2024400Z  * [new branch]        dependabot/github_actions/astral-sh/setup-uv-10.0.1 -> origin/dependabot/github_actions/astral-sh/setup-uv-10.0.1
+2026-10-24T01:30:26.2025090Z  * [new branch]        docs/release-notes-1.5.5 -> origin/docs/release-notes-1.5.5
+2026-10-24T01:30:26.2025620Z  * [new branch]        feat/agent-job-in-card  -> origin/feat/agent-job-in-card
+2026-10-24T01:30:26.2026340Z  * [new branch]        feat/backstop-full-handoff -> origin/feat/backstop-full-handoff
+2026-10-24T01:30:26.2027010Z  * [new branch]        feat/clo-is-default     -> origin/feat/clo-is-default
+2026-10-24T01:30:26.2027580Z  * [new branch]        feat/delegation-decision-check -> origin/feat/delegation-decision-check
+2026-10-24T01:30:26.2028340Z  * [new branch]        feat/desktop-clover-decor-20261008 -> origin/feat/desktop-clover-decor-20261008
+2026-10-24T01:30:26.2028980Z  * [new branch]        feat/helper-card-unified -> origin/feat/helper-card-unified
+2026-10-24T01:30:26.2029650Z  * [new branch]        feat/mirror-session     -> origin/feat/mirror-session
+2026-10-24T01:30:26.2030290Z  * [new branch]        feat/proactive-menu-156-maintenance -> origin/feat/proactive-menu-156-maintenance
+2026-10-24T01:30:26.2030910Z  * [new branch]        feat/router-haiku-thinking -> origin/feat/router-haiku-thinking
+2026-10-24T01:30:26.2031890Z  * [new branch]        fix/automatic-helper-checklists-156-reviewed -> origin/fix/automatic-helper-checklists-156-reviewed
+2026-10-24T01:30:26.2032880Z  * [new branch]        fix/card-always-and-restart-resume -> origin/fix/card-always-and-restart-resume
+2026-10-24T01:30:26.2033460Z  * [new branch]        fix/card-before-154     -> origin/fix/card-before-154
+2026-10-24T01:30:26.2033980Z  * [new branch]        fix/card-finished-jobs  -> origin/fix/card-finished-jobs
+2026-10-24T01:30:26.2034530Z  * [new branch]        fix/card-goal-tool-phrases -> origin/fix/card-goal-tool-phrases
+2026-10-24T01:30:26.2035070Z  * [new branch]        fix/card-joined-title   -> origin/fix/card-joined-title
+2026-10-24T01:30:26.2035570Z  * [new branch]        fix/card-merge-say      -> origin/fix/card-merge-say
+2026-10-24T01:30:26.2036220Z  * [new branch]        fix/card-tool-lines-and-title -> origin/fix/card-tool-lines-and-title
+2026-10-24T01:30:26.2036940Z  * [new branch]        fix/completion-clock-and-titles -> origin/fix/completion-clock-and-titles
+2026-10-24T01:30:26.2037670Z  * [new branch]        fix/cron-clean-output-default -> origin/fix/cron-clean-output-default
+2026-10-24T01:30:26.2038340Z  * [new branch]        fix/cron-wrap-response-default-false -> origin/fix/cron-wrap-response-default-false
+2026-10-24T01:30:26.2039030Z  * [new branch]        fix/direct-backstop     -> origin/fix/direct-backstop
+2026-10-24T01:30:26.2039990Z  * [new branch]        fix/dispatch-answers-questions -> origin/fix/dispatch-answers-questions
+2026-10-24T01:30:26.2040750Z  * [new branch]        fix/finished-card-queued-completion -> origin/fix/finished-card-queued-completion
+2026-10-24T01:30:26.2041530Z  * [new branch]        fix/handoff-title-from-work -> origin/fix/handoff-title-from-work
+2026-10-24T01:30:26.2042180Z  * [new branch]        fix/helper-start-non-git-cwd -> origin/fix/helper-start-non-git-cwd
+2026-10-24T01:30:26.2042800Z  * [new branch]        fix/legacy-156-update-proceeds -> origin/fix/legacy-156-update-proceeds
+2026-10-24T01:30:26.2043380Z  * [new branch]        fix/macos-cold-audit    -> origin/fix/macos-cold-audit
+2026-10-24T01:30:26.2044310Z  * [new branch]        fix/opener-always-voice -> origin/fix/opener-always-voice
+2026-10-24T01:30:26.2044830Z  * [new branch]        fix/plain-handoff-ack   -> origin/fix/plain-handoff-ack
+2026-10-24T01:30:26.2045440Z  * [new branch]        fix/pr63-first-update-isolation -> origin/fix/pr63-first-update-isolation
+2026-10-24T01:30:26.2046090Z  * [new branch]        fix/presence-native-finalization -> origin/fix/presence-native-finalization
+2026-10-24T01:30:26.2046720Z  * [new branch]        fix/presence-native-recovery -> origin/fix/presence-native-recovery
+2026-10-24T01:30:26.2047470Z  * [new branch]        fix/presence-native-store -> origin/fix/presence-native-store
+2026-10-24T01:30:26.2048390Z  * [new branch]        fix/proactive-simple-controls-reviewed -> origin/fix/proactive-simple-controls-reviewed
+2026-10-24T01:30:26.2049130Z  * [new branch]        fix/release-publish-slow-aggregate -> origin/fix/release-publish-slow-aggregate
+2026-10-24T01:30:26.2049890Z  * [new branch]        fix/reliability-product-runtime-20261022 -> origin/fix/reliability-product-runtime-20261022
+2026-10-24T01:30:26.2050640Z  * [new branch]        fix/required-ci-corrections-20261022 -> origin/fix/required-ci-corrections-20261022
+2026-10-24T01:30:26.2051410Z  * [new branch]        fix/residual-storage-reader-release-20261023 -> origin/fix/residual-storage-reader-release-20261023
+2026-10-24T01:30:26.2052090Z  * [new branch]        fix/router-ack-checklist -> origin/fix/router-ack-checklist
+2026-10-24T01:30:26.2052760Z  * [new branch]        fix/router-calibration-v2 -> origin/fix/router-calibration-v2
+2026-10-24T01:30:26.2053340Z  * [new branch]        fix/router-fast-model-auto -> origin/fix/router-fast-model-auto
+2026-10-24T01:30:26.2054000Z  * [new branch]        fix/router-handback-ux  -> origin/fix/router-handback-ux
+2026-10-24T01:30:26.2054650Z  * [new branch]        fix/state-db-lock-retry -> origin/fix/state-db-lock-retry
+2026-10-24T01:30:26.2055810Z  * [new branch]        fix/stop-ends-background-subagents -> origin/fix/stop-ends-background-subagents
+2026-10-24T01:30:26.2056510Z  * [new branch]        fix/subagent-sandbox-and-rename -> origin/fix/subagent-sandbox-and-rename
+2026-10-24T01:30:26.2057350Z  * [new branch]        fix/telegram-simple-repair-20261006 -> origin/fix/telegram-simple-repair-20261006
+2026-10-24T01:30:26.2058010Z  * [new branch]        fix/time-limit-handoff  -> origin/fix/time-limit-handoff
+2026-10-24T01:30:26.2058780Z  * [new branch]        fix/verified-owner-onboarding-release -> origin/fix/verified-owner-onboarding-release
+2026-10-24T01:30:26.2059510Z  * [new branch]        fix/windows-ack-causal  -> origin/fix/windows-ack-causal
+2026-10-24T01:30:26.2060200Z  * [new branch]        fix/windows-home-import-fixtures -> origin/fix/windows-home-import-fixtures
+2026-10-24T01:30:26.2061000Z  * [new branch]        fix/windows-installer-module-20261022 -> origin/fix/windows-installer-module-20261022
+2026-10-24T01:30:26.2061770Z  * [new branch]        fix/windows-presence-settlement -> origin/fix/windows-presence-settlement
+2026-10-24T01:30:26.2062450Z  * [new branch]        integration/presence-release-joined -> origin/integration/presence-release-joined
+2026-10-24T01:30:26.2063070Z  * [new branch]        known-good-update-20261003 -> origin/known-good-update-20261003
+2026-10-24T01:30:26.2063600Z  * [new branch]        main                    -> origin/main
+2026-10-24T01:30:26.2064120Z  * [new branch]        proof/linux-catchup-windows -> origin/proof/linux-catchup-windows
+2026-10-24T01:30:26.2064640Z  * [new branch]        release/c1.3.0          -> origin/release/c1.3.0
+2026-10-24T01:30:26.2065100Z  * [new branch]        release/c1.5.0          -> origin/release/c1.5.0
+2026-10-24T01:30:26.2065550Z  * [new branch]        release/c1.5.1          -> origin/release/c1.5.1
+2026-10-24T01:30:26.2066000Z  * [new branch]        release/c1.5.2          -> origin/release/c1.5.2
+2026-10-24T01:30:26.2066450Z  * [new branch]        release/c1.5.3          -> origin/release/c1.5.3
+2026-10-24T01:30:26.2067250Z  * [new branch]        release/c1.5.4          -> origin/release/c1.5.4
+2026-10-24T01:30:26.2067700Z  * [new branch]        release/c1.5.5          -> origin/release/c1.5.5
+2026-10-24T01:30:26.2068220Z  * [new branch]        release/c1.5.7          -> origin/release/c1.5.7
+2026-10-24T01:30:26.2068730Z  * [new branch]        release/c1.5.8          -> origin/release/c1.5.8
+2026-10-24T01:30:26.2069240Z  * [new branch]        release/c1.5.9          -> origin/release/c1.5.9
+2026-10-24T01:30:26.2069720Z  * [new branch]        release/notes-1.5.1     -> origin/release/notes-1.5.1
+2026-10-24T01:30:26.2070220Z  * [new branch]        release/notes-1.5.2     -> origin/release/notes-1.5.2
+2026-10-24T01:30:26.2070730Z  * [new branch]        release/notes-1.5.3     -> origin/release/notes-1.5.3
+2026-10-24T01:30:26.2071360Z  * [new branch]        release/reliability-integration-20261023 -> origin/release/reliability-integration-20261023
+2026-10-24T01:30:26.2072170Z  * [new branch]        release/selective-delegation-20261005 -> origin/release/selective-delegation-20261005
+2026-10-24T01:30:26.2072900Z  * [new branch]        repair/joined-platform-capabilities -> origin/repair/joined-platform-capabilities
+2026-10-24T01:30:26.2073600Z  * [new branch]        repair/joined-windows-secure-reader -> origin/repair/joined-windows-secure-reader
+2026-10-24T01:30:26.2074200Z  * [new branch]        review/joined-deadline  -> origin/review/joined-deadline
+2026-10-24T01:30:26.2074880Z  * [new branch]        review/joined-deadline-provider-control -> origin/review/joined-deadline-provider-control
+2026-10-24T01:30:26.2075680Z  * [new branch]        review/proactivity-album-release -> origin/review/proactivity-album-release
+2026-10-24T01:30:26.2076250Z  * [new branch]        test/octavia-fixes      -> origin/test/octavia-fixes
+2026-10-24T01:30:26.2076860Z  * [new branch]        wine2e/proactive-156-20261015T185744Z -> origin/wine2e/proactive-156-20261015T185744Z
+2026-10-24T01:30:26.2077660Z  * [new branch]        wine2e/proactive-156-5b3f6fb -> origin/wine2e/proactive-156-5b3f6fb
+2026-10-24T01:30:26.2078370Z  * [new branch]        wine2e/proactive-156-baseline-4b0518f -> origin/wine2e/proactive-156-baseline-4b0518f
+2026-10-24T01:30:26.2079240Z  * [new branch]        wine2e/proactive-156-native-r2-c3-20261015T200243Z -> origin/wine2e/proactive-156-native-r2-c3-20261015T200243Z
+2026-10-24T01:30:26.2079860Z  * [new tag]           v1.1.0                  -> v1.1.0
+2026-10-24T01:30:26.2080250Z  * [new tag]           v1.1.1                  -> v1.1.1
+2026-10-24T01:30:26.2080680Z  * [new tag]           v1.1.2                  -> v1.1.2
+2026-10-24T01:30:26.2081090Z  * [new tag]           v1.1.3                  -> v1.1.3
+2026-10-24T01:30:26.2081560Z  * [new tag]           v1.1.4                  -> v1.1.4
+2026-10-24T01:30:26.2081950Z  * [new tag]           v1.2.0                  -> v1.2.0
+2026-10-24T01:30:26.2082390Z  * [new tag]           v1.3.0                  -> v1.3.0
+2026-10-24T01:30:26.2082870Z  * [new tag]           v1.5.0                  -> v1.5.0
+2026-10-24T01:30:26.2083250Z  * [new tag]           v1.5.1                  -> v1.5.1
+2026-10-24T01:30:26.2083680Z  * [new tag]           v1.5.2                  -> v1.5.2
+2026-10-24T01:30:26.2084090Z  * [new tag]           v1.5.3                  -> v1.5.3
+2026-10-24T01:30:26.2084460Z  * [new tag]           v1.5.4                  -> v1.5.4
+2026-10-24T01:30:26.2084830Z  * [new tag]           v1.5.5                  -> v1.5.5
+2026-10-24T01:30:26.2085190Z  * [new tag]           v1.5.6                  -> v1.5.6
+2026-10-24T01:30:26.2085560Z  * [new tag]           v1.5.7                  -> v1.5.7
+2026-10-24T01:30:26.2085920Z  * [new tag]           v1.5.8                  -> v1.5.8
+2026-10-24T01:30:26.2086290Z  * [new tag]           v1.5.9                  -> v1.5.9
+2026-10-24T01:30:26.2087920Z [command]/opt/homebrew/bin/git branch --list --remote origin/clover-subagent/subagent-sa-0-578b1794
+2026-10-24T01:30:26.2088550Z   origin/clover-subagent/subagent-sa-0-578b1794
+2026-10-24T01:30:26.2089620Z [command]/opt/homebrew/bin/git rev-parse refs/remotes/origin/clover-subagent/subagent-sa-0-578b1794
+2026-10-24T01:30:26.2090140Z 9195c15e6d40410ada6fd23b125e1e6137ad6547
+2026-10-24T01:30:26.2090950Z ##[endgroup]
+2026-10-24T01:30:26.2091400Z ##[group]Determining the checkout info
+2026-10-24T01:30:26.2091980Z ##[endgroup]
+2026-10-24T01:30:26.2092310Z [command]/opt/homebrew/bin/git sparse-checkout disable
+2026-10-24T01:30:26.2093220Z [command]/opt/homebrew/bin/git config --local --unset-all extensions.worktreeConfig
+2026-10-24T01:30:26.2131740Z ##[group]Checking out the ref
+2026-10-24T01:30:26.2135500Z [command]/opt/homebrew/bin/git checkout --progress --force -B clover-subagent/subagent-sa-0-578b1794 refs/remotes/origin/clover-subagent/subagent-sa-0-578b1794
+2026-10-24T01:30:27.3021170Z Updating files:  57% (5659/9853)
+2026-10-24T01:30:27.3163650Z Updating files:  58% (5715/9853)
+2026-10-24T01:30:27.3316410Z Updating files:  59% (5814/9853)
+2026-10-24T01:30:27.3554130Z Updating files:  60% (5912/9853)
+2026-10-24T01:30:27.3666020Z Updating files:  61% (6011/9853)
+2026-10-24T01:30:27.3814590Z Updating files:  62% (6109/9853)
+2026-10-24T01:30:27.3928610Z Updating files:  63% (6208/9853)
+2026-10-24T01:30:27.4063580Z Updating files:  64% (6306/9853)
+2026-10-24T01:30:27.4164060Z Updating files:  65% (6405/9853)
+2026-10-24T01:30:27.4279710Z Updating files:  66% (6503/9853)
+2026-10-24T01:30:27.4385870Z Updating files:  67% (6602/9853)
+2026-10-24T01:30:27.4498040Z Updating files:  68% (6701/9853)
+2026-10-24T01:30:27.4609740Z Updating files:  69% (6799/9853)
+2026-10-24T01:30:27.4711310Z Updating files:  70% (6898/9853)
+2026-10-24T01:30:27.4800620Z Updating files:  71% (6996/9853)
+2026-10-24T01:30:27.4918340Z Updating files:  72% (7095/9853)
+2026-10-24T01:30:27.5076140Z Updating files:  73% (7193/9853)
+2026-10-24T01:30:27.5190830Z Updating files:  74% (7292/9853)
+2026-10-24T01:30:27.5288140Z Updating files:  75% (7390/9853)
+2026-10-24T01:30:27.5397020Z Updating files:  76% (7489/9853)
+2026-10-24T01:30:27.5573080Z Updating files:  77% (7587/9853)
+2026-10-24T01:30:27.5666170Z Updating files:  78% (7686/9853)
+2026-10-24T01:30:27.5782950Z Updating files:  79% (7784/9853)
+2026-10-24T01:30:27.6041640Z Updating files:  80% (7883/9853)
+2026-10-24T01:30:27.6471300Z Updating files:  81% (7981/9853)
+2026-10-24T01:30:27.6819970Z Updating files:  82% (8080/9853)
+2026-10-24T01:30:27.6921450Z Updating files:  83% (8178/9853)
+2026-10-24T01:30:27.7181290Z Updating files:  84% (8277/9853)
+2026-10-24T01:30:27.7443360Z Updating files:  85% (8376/9853)
+2026-10-24T01:30:27.7674040Z Updating files:  86% (8474/9853)
+2026-10-24T01:30:27.7983170Z Updating files:  87% (8573/9853)
+2026-10-24T01:30:27.8386900Z Updating files:  88% (8671/9853)
+2026-10-24T01:30:27.8526030Z Updating files:  89% (8770/9853)
+2026-10-24T01:30:27.8685170Z Updating files:  90% (8868/9853)
+2026-10-24T01:30:27.8814640Z Updating files:  91% (8967/9853)
+2026-10-24T01:30:27.9120990Z Updating files:  92% (9065/9853)
+2026-10-24T01:30:27.9291180Z Updating files:  93% (9164/9853)
+2026-10-24T01:30:27.9417920Z Updating files:  94% (9262/9853)
+2026-10-24T01:30:27.9535960Z Updating files:  95% (9361/9853)
+2026-10-24T01:30:27.9672500Z Updating files:  96% (9459/9853)
+2026-10-24T01:30:27.9868930Z Updating files:  97% (9558/9853)
+2026-10-24T01:30:28.0019830Z Updating files:  98% (9656/9853)
+2026-10-24T01:30:28.0139300Z Updating files:  99% (9755/9853)
+2026-10-24T01:30:28.0139720Z Updating files: 100% (9853/9853)
+2026-10-24T01:30:28.0140110Z Updating files: 100% (9853/9853), done.
+2026-10-24T01:30:28.0290090Z Switched to a new branch 'clover-subagent/subagent-sa-0-578b1794'
+2026-10-24T01:30:28.0314030Z branch 'clover-subagent/subagent-sa-0-578b1794' set up to track 'origin/clover-subagent/subagent-sa-0-578b1794'.
+2026-10-24T01:30:28.0331480Z ##[endgroup]
+2026-10-24T01:30:28.0601050Z [command]/opt/homebrew/bin/git log -1 --format=%H
+2026-10-24T01:30:28.0708400Z 9195c15e6d40410ada6fd23b125e1e6137ad6547
+2026-10-24T01:30:28.0916500Z ##[group]Removing auth
+2026-10-24T01:30:28.1427350Z Removing SSH command configuration
+2026-10-24T01:30:28.1427710Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-24T01:30:28.1429730Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-24T01:30:28.2151080Z Removing HTTP extra header
+2026-10-24T01:30:28.2155370Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-24T01:30:28.2206180Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-24T01:30:28.3102190Z Removing includeIf entries pointing to credentials config files
+2026-10-24T01:30:28.3130600Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-24T01:30:28.3176450Z includeif.gitdir:/Users/runner/work/clover-c1/clover-c1/.git.path
+2026-10-24T01:30:28.3177140Z includeif.gitdir:/Users/runner/work/clover-c1/clover-c1/.git/worktrees/*.path
+2026-10-24T01:30:28.3177610Z includeif.gitdir:/github/workspace/.git.path
+2026-10-24T01:30:28.3178120Z includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-24T01:30:28.3179850Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/Users/runner/work/clover-c1/clover-c1/.git.path
+2026-10-24T01:30:28.3235430Z /Users/runner/work/_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:28.3247190Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/Users/runner/work/clover-c1/clover-c1/.git.path /Users/runner/work/_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:28.3315140Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/Users/runner/work/clover-c1/clover-c1/.git/worktrees/*.path
+2026-10-24T01:30:28.3377680Z /Users/runner/work/_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:28.3385070Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/Users/runner/work/clover-c1/clover-c1/.git/worktrees/*.path /Users/runner/work/_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:28.3452340Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git.path
+2026-10-24T01:30:28.3507120Z /github/runner_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:28.3512190Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/github/workspace/.git.path /github/runner_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:28.3571070Z [command]/opt/homebrew/bin/git config --local --get-all includeif.gitdir:/github/workspace/.git/worktrees/*.path
+2026-10-24T01:30:28.3612070Z /github/runner_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:28.3625450Z [command]/opt/homebrew/bin/git config --local --unset includeif.gitdir:/github/workspace/.git/worktrees/*.path /github/runner_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config
+2026-10-24T01:30:28.3684570Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-24T01:30:28.4382820Z Removing credentials config '/Users/runner/work/_temp/git-credentials-d02aff1f-c682-486f-8e53-dbfd5a87b958.config'
+2026-10-24T01:30:28.4401470Z ##[endgroup]
+2026-10-24T01:30:28.4640560Z ##[group]Run python3 -c 'import os,re; assert all(re.fullmatch("[0-9a-f]{40}", os.environ[k]) for k in ("PRODUCT_SHA", "OLD_SHA"))'
+2026-10-24T01:30:28.4641330Z [36;1mpython3 -c 'import os,re; assert all(re.fullmatch("[0-9a-f]{40}", os.environ[k]) for k in ("PRODUCT_SHA", "OLD_SHA"))'[0m
+2026-10-24T01:30:28.4641850Z [36;1mtest "$(git rev-parse "$PRODUCT_SHA^{commit}")" = "$PRODUCT_SHA"[0m
+2026-10-24T01:30:28.4642600Z [36;1mgit merge-base --is-ancestor "$OLD_SHA" "$PRODUCT_SHA"[0m
+2026-10-24T01:30:28.4642950Z [36;1mmkdir -p artifacts/suni-ownership/hosted[0m
+2026-10-24T01:30:28.4710290Z shell: /bin/bash -e {0}
+2026-10-24T01:30:28.4710490Z env:
+2026-10-24T01:30:28.4710700Z   PRODUCT_SHA: 9195c15e6d40410ada6fd23b125e1e6137ad6547
+2026-10-24T01:30:28.4710980Z   OLD_SHA: 9535350bee1d57cf7e466672e6f416403886bec1
+2026-10-24T01:30:28.4711230Z   PYTHONDONTWRITEBYTECODE: 1
+2026-10-24T01:30:28.4711410Z ##[endgroup]
+2026-10-24T01:30:28.7199110Z ##[group]Run unset VIRTUAL_ENV PYTHONPATH PYTHONHOME
+2026-10-24T01:30:28.7199530Z [36;1munset VIRTUAL_ENV PYTHONPATH PYTHONHOME[0m
+2026-10-24T01:30:28.7200100Z [36;1mif ! test -x "$(brew --prefix)/opt/python@3.12/bin/python3.12"; then brew install python@3.12; fi[0m
+2026-10-24T01:30:28.7200680Z [36;1m"$(brew --prefix python@3.12)/bin/python3.12" -m venv .macos-proof-venv[0m
+2026-10-24T01:30:28.7201200Z [36;1m.macos-proof-venv/bin/python -m pip install psutil==7.2.2[0m
+2026-10-24T01:30:28.7257510Z shell: /bin/bash -e {0}
+2026-10-24T01:30:28.7257750Z env:
+2026-10-24T01:30:28.7257990Z   PRODUCT_SHA: 9195c15e6d40410ada6fd23b125e1e6137ad6547
+2026-10-24T01:30:28.7258290Z   OLD_SHA: 9535350bee1d57cf7e466672e6f416403886bec1
+2026-10-24T01:30:28.7258560Z   PYTHONDONTWRITEBYTECODE: 1
+2026-10-24T01:30:28.7258760Z ##[endgroup]
+2026-10-24T01:30:31.9565460Z [32m==>[0m [1mDownloading bottle manifests[0m
+2026-10-24T01:30:32.3023300Z ✔︎ Bottle Manifest python@3.12 (3.12.14)
+2026-10-24T01:30:32.3024920Z [34m==>[0m [1mWould install 1 formula:[0m
+2026-10-24T01:30:32.3025440Z python@3.12
+2026-10-24T01:30:32.4207500Z [32m==>[0m [1mFetching downloads for: [32mpython@3.12[39m[0m
+2026-10-24T01:30:33.8293850Z ✔︎ Bottle python@3.12 (3.12.14)
+2026-10-24T01:30:33.8446590Z [34m==>[0m [1mPouring python@3.12--3.12.14.arm64_sonoma.bottle.tar.gz[0m
+2026-10-24T01:30:36.7494060Z 🍺  /opt/homebrew/Cellar/python@3.12/3.12.14: 3,615 files, 68.4MB
+2026-10-24T01:30:36.7500410Z [32m==>[0m [1mCaveats[0m
+2026-10-24T01:30:36.7501180Z [34m==>[0m [1mpython@3.12[0m
+2026-10-24T01:30:36.7501570Z Python is installed as
+2026-10-24T01:30:36.7502040Z   /opt/homebrew/bin/python3.12
+2026-10-24T01:30:36.7502480Z 
+2026-10-24T01:30:36.7503100Z Unversioned and major-versioned symlinks `python`, `python3`, `python-config`, `python3-config`, `pip`, `pip3`, etc. pointing to
+2026-10-24T01:30:36.7505320Z `python3.12`, `python3.12-config`, `pip3.12` etc., respectively, are installed into
+2026-10-24T01:30:36.7507120Z   /opt/homebrew/opt/python@3.12/libexec/bin
+2026-10-24T01:30:36.7507700Z 
+2026-10-24T01:30:36.7508070Z If you do not need a specific version of Python, and always want Homebrew's `python3` in your PATH:
+2026-10-24T01:30:36.7508610Z   brew install python3
+2026-10-24T01:30:36.7508800Z 
+2026-10-24T01:30:36.7509050Z `idle3.12` requires tkinter, which is available separately:
+2026-10-24T01:30:36.7509470Z   brew install python-tk@3.12
+2026-10-24T01:30:36.7509710Z 
+2026-10-24T01:30:36.7509860Z `dbm.gnu` is available separately:
+2026-10-24T01:30:36.7510200Z   brew install python-gdbm@3.12
+2026-10-24T01:30:36.7510330Z 
+2026-10-24T01:30:36.7510660Z For more information about Homebrew and Python, see: https://docs.brew.sh/Homebrew-and-Python
+2026-10-24T01:30:40.7676540Z Collecting psutil==7.2.2
+2026-10-24T01:30:40.8618300Z   Downloading psutil-7.2.2-cp36-abi3-macosx_11_0_arm64.whl.metadata (22 kB)
+2026-10-24T01:30:40.9073520Z Downloading psutil-7.2.2-cp36-abi3-macosx_11_0_arm64.whl (129 kB)
+2026-10-24T01:30:40.9782470Z Installing collected packages: psutil
+2026-10-24T01:30:41.0533140Z Successfully installed psutil-7.2.2
+2026-10-24T01:30:41.0539850Z 
+2026-10-24T01:30:41.0540080Z [notice] A new release of pip is available: 26.2.1 -> 26.2.2
+2026-10-24T01:30:41.0540970Z [notice] To update, run: /Users/runner/work/clover-c1/clover-c1/.macos-proof-venv/bin/python -m pip install --upgrade pip
+2026-10-24T01:30:41.1494330Z ##[group]Run unset VIRTUAL_ENV PYTHONPATH PYTHONHOME
+2026-10-24T01:30:41.1514610Z [36;1munset VIRTUAL_ENV PYTHONPATH PYTHONHOME[0m
+2026-10-24T01:30:41.1514930Z [36;1mset +e[0m
+2026-10-24T01:30:41.1515690Z [36;1m.macos-proof-venv/bin/python -B artifacts/suni-ownership/native_owner_case.py --source-ref 3b54f413376eb99f8b83bfd4a0a340d01825014d --evidence artifacts/suni-ownership/hosted/red[0m
+2026-10-24T01:30:41.1518470Z [36;1mred=$?[0m
+2026-10-24T01:30:41.1523550Z [36;1mset -e[0m
+2026-10-24T01:30:41.1524650Z [36;1mtest "$red" = 1[0m
+2026-10-24T01:30:41.1526970Z [36;1m.macos-proof-venv/bin/python -c 'import json; r=json.load(open("artifacts/suni-ownership/hosted/red/native-owner-case.json")); assert r["framework_alias_exercised"] and not r["owner_admission"] and r["identity_stable"] and r["fixture_label_absent_after_cleanup"]'[0m
+2026-10-24T01:30:41.1530930Z [36;1m.macos-proof-venv/bin/python -B artifacts/suni-ownership/native_owner_case.py --source-ref "$PRODUCT_SHA" --evidence artifacts/suni-ownership/hosted/green[0m
+2026-10-24T01:30:41.1533660Z [36;1mSUNI_SOURCE_REF="$PRODUCT_SHA" .macos-proof-venv/bin/python -B tests/clover_cli/test_suni_macos_wrapper_acceptance.py > artifacts/suni-ownership/hosted/replay.log 2>&1[0m
+2026-10-24T01:30:41.1608020Z shell: /bin/bash -e {0}
+2026-10-24T01:30:41.1608300Z env:
+2026-10-24T01:30:41.1608620Z   PRODUCT_SHA: 9195c15e6d40410ada6fd23b125e1e6137ad6547
+2026-10-24T01:30:41.1609000Z   OLD_SHA: 9535350bee1d57cf7e466672e6f416403886bec1
+2026-10-24T01:30:41.1609390Z   PYTHONDONTWRITEBYTECODE: 1
+2026-10-24T01:30:41.1609720Z ##[endgroup]
+2026-10-24T01:30:42.3170890Z {"passed": false, "scope": "native-macos-launchd-process-seam", "evidence": "/Users/runner/work/clover-c1/clover-c1/artifacts/suni-ownership/hosted/red/native-owner-case.json"}
+2026-10-24T01:30:43.3491990Z {"passed": true, "scope": "native-macos-launchd-process-seam", "evidence": "/Users/runner/work/clover-c1/clover-c1/artifacts/suni-ownership/hosted/green/native-owner-case.json"}
+2026-10-24T01:30:45.7726560Z ##[group]Run actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+2026-10-24T01:30:45.7727060Z with:
+2026-10-24T01:30:45.7727290Z   name: macos-framework-owner-40050040331
+2026-10-24T01:30:45.7727580Z   path: artifacts/suni-ownership/hosted
+2026-10-24T01:30:45.7727840Z   if-no-files-found: error
+2026-10-24T01:30:45.7728070Z   compression-level: 6
+2026-10-24T01:30:45.7728270Z   overwrite: false
+2026-10-24T01:30:45.7728590Z   include-hidden-files: false
+2026-10-24T01:30:45.7728840Z env:
+2026-10-24T01:30:45.7729110Z   PRODUCT_SHA: 9195c15e6d40410ada6fd23b125e1e6137ad6547
+2026-10-24T01:30:45.7729530Z   OLD_SHA: 9535350bee1d57cf7e466672e6f416403886bec1
+2026-10-24T01:30:45.7729840Z   PYTHONDONTWRITEBYTECODE: 1
+2026-10-24T01:30:45.7730160Z ##[endgroup]
+2026-10-24T01:30:46.0479590Z (node:3245) [DEP0040] DeprecationWarning: The `punycode` module is deprecated. Please use a userland alternative instead.
+2026-10-24T01:30:46.0555700Z (Use `node --trace-deprecation ...` to show where the warning was created)
+2026-10-24T01:30:46.0608730Z With the provided path, there will be 3 files uploaded
+2026-10-24T01:30:46.0611080Z Artifact name is valid!
+2026-10-24T01:30:46.0624380Z Root directory input is valid!
+2026-10-24T01:30:46.5358030Z (node:3245) [DEP0169] DeprecationWarning: `url.parse()` behavior is not standardized and prone to errors that have security implications. Use the WHATWG URL API instead. CVEs are not issued for `url.parse()` vulnerabilities.
+2026-10-24T01:30:46.5364620Z Beginning upload of artifact content to blob storage
+2026-10-24T01:30:46.8413000Z Uploaded bytes 2786
+2026-10-24T01:30:46.9383440Z Finished uploading artifact content to blob storage!
+2026-10-24T01:30:46.9489350Z SHA256 digest of uploaded artifact zip is c9360e3f5e920570f541d358251f62a3486153c07f1d43ab29da5d1cf8526afc
+2026-10-24T01:30:46.9548750Z Finalizing artifact upload
+2026-10-24T01:30:47.4220650Z Artifact macos-framework-owner-40050040331.zip successfully finalized. Artifact ID 12543097162
+2026-10-24T01:30:47.4223050Z Artifact macos-framework-owner-40050040331 has been successfully uploaded! Final size is 2786 bytes. Artifact ID is 12543097162
+2026-10-24T01:30:47.4227690Z Artifact download URL: https://github.com/oaostarboy/clover-c1/actions/runs/40050040331/artifacts/12543097162
+2026-10-24T01:30:47.4338430Z Post job cleanup.
+2026-10-24T01:30:47.5564720Z [command]/opt/homebrew/bin/git version
+2026-10-24T01:30:47.5638080Z git version 2.55.0
+2026-10-24T01:30:47.5669730Z Copying '/Users/runner/.gitconfig' to '/Users/runner/work/_temp/ae64e169-56eb-40c4-a292-8d67498240cf/.gitconfig'
+2026-10-24T01:30:47.5680110Z Temporarily overriding HOME='/Users/runner/work/_temp/ae64e169-56eb-40c4-a292-8d67498240cf' before making global git config changes
+2026-10-24T01:30:47.5681040Z Adding repository directory to the temporary git global config as a safe directory
+2026-10-24T01:30:47.5682060Z [command]/opt/homebrew/bin/git config --global --add safe.directory /Users/runner/work/clover-c1/clover-c1
+2026-10-24T01:30:47.5746740Z Removing SSH command configuration
+2026-10-24T01:30:47.5754950Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp core\.sshCommand
+2026-10-24T01:30:47.5829200Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'core\.sshCommand' && git config --local --unset-all 'core.sshCommand' || :"
+2026-10-24T01:30:47.6745520Z Removing HTTP extra header
+2026-10-24T01:30:47.6755430Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp http\.https\:\/\/github\.com\/\.extraheader
+2026-10-24T01:30:47.6815810Z [command]/opt/homebrew/bin/git submodule foreach --recursive sh -c "git config --local --name-only --get-regexp 'http\.https\:\/\/github\.com\/\.extraheader' && git config --local --unset-all 'http.https://github.com/.extraheader' || :"
+2026-10-24T01:30:47.8428570Z Removing includeIf entries pointing to credentials config files
+2026-10-24T01:30:47.8529950Z [command]/opt/homebrew/bin/git config --local --name-only --get-regexp ^includeIf\.gitdir:
+2026-10-24T01:30:47.8842300Z [command]/opt/homebrew/bin/git submodule foreach --recursive git config --local --show-origin --name-only --get-regexp remote.origin.url
+2026-10-24T01:30:47.9832510Z Cleaning up orphan processes
+2026-10-24T01:30:48.9105960Z ##[warning]Node.js 20 is deprecated. The following actions target Node.js 20 but are being forced to run on Node.js 24: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02. For more information see: https://github.blog/changelog/2025-09-19-deprecation-of-node-20-on-github-actions-runners/

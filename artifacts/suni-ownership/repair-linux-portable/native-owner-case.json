@@ -1,0 +1,51 @@
+{
+  "scope": "LINUX-PORTABLE-FIXTURE-NOT-MACOS-PROOF",
+  "source_ref": "WORKTREE",
+  "python": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/.venv/bin/python",
+  "native_update_acceptance": "NOT EXERCISED",
+  "source_tree": "72831d7811b2ee6d67d03cce19f60e1a14ff9a9e",
+  "observed": {
+    "worker_pid": 375614,
+    "wrapper_pid": 375613,
+    "worker_ppid": 375613,
+    "worker_argv": [
+      "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/artifacts/suni-ownership/repair-linux-portable/private-fixture-9qfcglj9/venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "wrapper_argv": [
+      "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/artifacts/suni-ownership/repair-linux-portable/private-fixture-9qfcglj9/venv/bin/python",
+      "-m",
+      "clover_cli.stderr_timestamp",
+      "--error-log",
+      "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/artifacts/suni-ownership/repair-linux-portable/private-fixture-9qfcglj9/home/logs/gateway.error.log",
+      "--",
+      "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/artifacts/suni-ownership/repair-linux-portable/private-fixture-9qfcglj9/venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "worker_exe": "/home/starboy/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+    "wrapper_exe": "/home/starboy/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+    "venv_python": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-578b1794/artifacts/suni-ownership/repair-linux-portable/private-fixture-9qfcglj9/venv/bin/python",
+    "venv_python_resolved": "/home/starboy/.local/share/uv/python/cpython-3.11.15-linux-x86_64-gnu/bin/python3.11",
+    "port": 44867,
+    "launchd_label": null
+  },
+  "guard_sha256": "f16befb42735a4336a3ee4e13440d56f8574be24d9787fce5726846050baacd0",
+  "false_return_lines": [],
+  "worker_start": 94381770,
+  "wrapper_start": 94381768,
+  "owner_admission": true,
+  "stale_worker_rejected": true,
+  "wrong_home_rejected": true,
+  "unadmitted_rejected": true,
+  "identity_stable": true,
+  "framework_alias_exercised": false,
+  "passed": true
+}

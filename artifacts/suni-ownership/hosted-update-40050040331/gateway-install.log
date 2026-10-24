@@ -1,0 +1,7 @@
+Installing launchd service to: /Users/runner/Library/LaunchAgents/ai.clover.gateway.plist
+
+✓ Service installed and loaded!
+
+Next steps:
+  clover gateway status             # Check status
+  tail -f ~/.clover/logs/gateway.log  # View logs
