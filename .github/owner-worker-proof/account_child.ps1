@@ -7,6 +7,84 @@ if (-not $IsWindows -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONME
 $c = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
 . (Join-Path $PSScriptRoot 'account_common.ps1')
 $exitCode = 1
+# Finite product-free counterfactual, never an acceptance path. A successful
+# shell-managed Create followed by normal lookup would justify testing that
+# provisioning change on a NEW account, not accepting this already failed one.
+function Invoke-AccountStartupCounterfactual {
+    param([string]$ValidatedStartup, [string]$AppData, [string]$Profile, [string]$ExpectedSid)
+    $result = [ordered]@{
+        phase='post_failure_counterfactual'; state='not_attempted'
+        identity_matches=$null; environment_matches=$null; directory_exists=$null
+        mappings=@{}; before_normal=$null; before_do_not_verify=$null
+        create=@{attempted=$false; path_empty=$null; equals_validated_os_path=$null; exception_category='none'}
+        after_normal=$null; managed_after_empty=$null; managed_after_agrees=$null
+    }
+    try {
+        $result.identity_matches = [Security.Principal.WindowsIdentity]::GetCurrent().User.Value -eq $ExpectedSid
+        $result.environment_matches = $env:USERPROFILE -eq $Profile -and $env:HOME -eq $Profile -and $env:APPDATA -eq $AppData
+        $result.directory_exists = [IO.Directory]::Exists($ValidatedStartup)
+        if (-not ($result.identity_matches -and $result.environment_matches -and $result.directory_exists -and
+            (Test-AccountOwnedStartupLocation -Startup $ValidatedStartup -AppData $AppData -Profile $Profile))) {
+            $result.state = 'precondition_rejected'; return $result
+        }
+        # Read-only HKCU vs exact-SID hive comparison. Equality of values is NOT
+        # proof that HKCU is mapped to that hive. Do not serialize paths or values.
+        $subkey = 'Software\Microsoft\Windows\CurrentVersion\Explorer\User Shell Folders'
+        $currentKey = $null; $sidKey = $null
+        try {
+            $currentKey = [Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subkey)
+            $sidKey = [Microsoft.Win32.Registry]::Users.OpenSubKey("$ExpectedSid\$subkey")
+            foreach ($name in @('Startup','Start Menu','Programs','AppData')) {
+                $mapping = @{present=$null; kind='unknown'; matches_sid_hive=$null; expanded_owned=$null; expanded_exists=$null; equals_validated_os_path=$null}
+                $result.mappings[$name] = $mapping
+                if ($null -eq $currentKey -or $null -eq $sidKey) { continue }
+                $raw = $currentKey.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                $sidRaw = $sidKey.GetValue($name, $null, [Microsoft.Win32.RegistryValueOptions]::DoNotExpandEnvironmentNames)
+                $mapping.present = $null -ne $raw
+                if ($null -eq $raw) { continue }
+                $kind = $currentKey.GetValueKind($name).ToString()
+                $mapping.kind = if ($kind -in @('String','ExpandString')) { $kind } else { 'other' }
+                if ($kind -notin @('String','ExpandString') -or $raw -isnot [string]) { continue }
+                $mapping.matches_sid_hive = $sidRaw -is [string] -and $kind -eq $sidKey.GetValueKind($name).ToString() -and $raw -ceq $sidRaw
+                $expanded = if ($kind -eq 'ExpandString') { [Environment]::ExpandEnvironmentVariables($raw) } else { $raw }
+                $mapping.expanded_owned = Test-AccountOwnedStartupLocation -Startup $expanded -AppData $AppData -Profile $Profile
+                $mapping.expanded_exists = [IO.Directory]::Exists($expanded)
+                $mapping.equals_validated_os_path = $expanded -eq $ValidatedStartup
+            }
+        } catch { # Missing/unavailable registry observations remain unknown.
+        } finally {
+            if ($null -ne $currentKey) { $currentKey.Dispose() }
+            if ($null -ne $sidKey) { $sidKey.Dispose() }
+        }
+        $query = @{ValidatedStartup=$ValidatedStartup; RecordedDefaultNormal=$null; AppData=$AppData; Profile=$Profile}
+        $result.before_normal = Get-AccountStartupNativeObservation -Flags 0 @query
+        $result.before_do_not_verify = Get-AccountStartupNativeObservation -Flags 0x4000 @query
+        # One variable changes: replace raw mkdir with the OS Create operation.
+        # Require a fresh, exact owned registration and the observed Win32 2
+        # symptom immediately before that operation. No repair on ambiguity.
+        if ($result.before_normal.reason -ne 'returned' -or $result.before_normal.native_code -ne 2 -or
+            $result.before_do_not_verify.reason -ne 'returned' -or $result.before_do_not_verify.hresult_signed -ne 0 -or
+            $result.before_do_not_verify.owned_path -ne $true -or $result.before_do_not_verify.equals_validated_os_path -ne $true) {
+            $result.state = 'precondition_rejected'; return $result
+        }
+        $result.create.attempted = $true
+        try {
+            # SpecialFolderOption.Create is KF_FLAG_CREATE (0x8000); unlike
+            # DoNotVerify this asks the shell to provision the known folder.
+            $created = [Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::Create)
+            $result.create.path_empty = [string]::IsNullOrEmpty($created)
+            $result.create.equals_validated_os_path = $created -eq $ValidatedStartup
+        } catch {
+            $result.create.exception_category = (Get-AccountExceptionObservation $_.Exception).exception_category
+        }
+        $result.after_normal = Get-AccountStartupNativeObservation -Flags 0 @query
+        $managed = [Environment]::GetFolderPath('Startup')
+        $result.managed_after_empty = [string]::IsNullOrEmpty($managed)
+        $result.managed_after_agrees = $managed -eq $ValidatedStartup
+        $result.state = 'observed'
+    } catch { $result.state = 'observer_unavailable' }
+    return $result
+}
 $script:childStage = [ordered]@{
     phase='credential_isolation'; state='unknown'; predicate_id='credential_isolation'; predicate_passed=$null
     reason='none'; exception_category='none'; hresult_signed=$null; native_code=$null
@@ -128,6 +206,16 @@ try {
             $script:childStage.post_failure_observation.do_not_verify = Get-AccountStartupNativeObservation -Flags 0x4000 -ValidatedStartup $validatedStartup -RecordedDefaultNormal $startupDefault -AppData $env:APPDATA -Profile $c.profile
             $script:childStage | ConvertTo-Json -Depth 4 |
                 Set-Content -LiteralPath (Join-Path $c.evidence 'child-stage.json') -Encoding utf8 -ErrorAction Stop
+        }
+    } catch { }
+    # Isolated receipt: never overwrite the original stage or reset its exit.
+    # One counterfactual only, on this precise symptom after real raw creation.
+    try {
+        if ($script:childStage.phase -eq 'startup_create' -and $script:childStage.reason -eq 'predicate_mismatch' -and
+            $script:childStage.startup.resolved_owned -eq $true -and $script:childStage.startup.exists -eq $true -and
+            $script:childStage.startup.readback_empty -eq $true) {
+            Invoke-AccountStartupCounterfactual -ValidatedStartup $startup -AppData $env:APPDATA -Profile $c.profile -ExpectedSid $c.expected_sid |
+                ConvertTo-Json -Depth 5 | Set-Content -LiteralPath (Join-Path $c.evidence 'startup-counterfactual.json') -Encoding utf8 -ErrorAction Stop
         }
     } catch { }
     # Fixed generic fallback survives even diagnostic persistence/classifier failure.

@@ -20,11 +20,31 @@ PHASES = ('credential_isolation identity token acl_denial profile_userprofile '
           'startup_write startup_read startup_remove access_receipt').split()
 
 
+class StartupProbeSourceContract(unittest.TestCase):
+    def test_probe_is_after_original_failure_and_cannot_change_acceptance(self):
+        child = (HERE / 'account_child.ps1').read_text()
+        catch = child[child.index('} catch {\n    $originalFailure'):]
+        self.assertIn('Invoke-AccountStartupCounterfactual', catch)
+        self.assertLess(catch.index('$exitCode = 1'), catch.index('Invoke-AccountStartupCounterfactual'))
+        self.assertIn("$script:childStage.phase -eq 'startup_create'", catch)
+        self.assertIn("$script:childStage.startup.readback_empty -eq $true", catch)
+        self.assertIn("'startup-counterfactual.json'", catch)
+        self.assertNotIn('$exitCode = 0', catch)
+        self.assertNotIn("'access.json'", catch)
+        self.assertIn("[Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::Create)", child)
+        # Native assertion and real file operations stay mandatory, not probe outputs.
+        self.assertIn('$script:childStage.startup.exists -and $script:childStage.startup.readback_agrees -and', child)
+        for operation in ("[IO.File]::WriteAllText($readiness,", "[IO.File]::ReadAllText($readiness)",
+                          'Remove-Item -LiteralPath $readiness'):
+            self.assertIn(operation, child[:child.index('} catch {\n    $originalFailure')])
+
+
 @unittest.skipUnless(PWSH, 'PowerShell required for portable fixture execution')
 class ChildStageDiagnostics(unittest.TestCase):
     def run_child_body(self, phase=None, predicate=False, diagnostic_failure=False,
                        fallback_failure=False, real_write_failure=False, boundary_failure=None,
-                       startup_case=None, native_case='owned', runtime_case=None):
+                       startup_case=None, native_case='owned', runtime_case=None,
+                       probe_case='normal-already-recovers', mapping_case='expand', probe_receipt_failure=False):
         with tempfile.TemporaryDirectory(dir=HERE) as directory:
             assert PWSH is not None
             root = Path(directory)
@@ -34,12 +54,21 @@ class ChildStageDiagnostics(unittest.TestCase):
                 (evidence / 'child-stage.json').mkdir()
             if fallback_failure:
                 (evidence / 'child-failure.txt').mkdir()
+            if probe_receipt_failure:
+                (evidence / 'startup-counterfactual.json').mkdir()
             body = (HERE / 'account_child.ps1').read_text()
             body = body[body.index('$exitCode = 1'):]
             # Test-only seams for platform APIs; the actual hosted entry is never run.
-            body = body.replace('[Security.Principal.WindowsIdentity]::GetCurrent()',
-                                "([pscustomobject]@{User=[pscustomobject]@{Value='owned-sid'}})")
+            body = body.replace('[Security.Principal.WindowsIdentity]::GetCurrent()', '(Get-PortableIdentity)')
+            body = body.replace('$env:HOME -eq $Profile', '(Get-PortableProbeHome) -eq $Profile')
+            body = body.replace('[IO.Directory]::Exists($ValidatedStartup)', '(Test-PortableProbeDirectory $ValidatedStartup)')
             body = body.replace('([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)', '$false')
+            body = body.replace("[Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::Create)",
+                                '(Invoke-PortableStartupCreate)')
+            body = body.replace('[Microsoft.Win32.Registry]::CurrentUser.OpenSubKey($subkey)',
+                                '(Open-PortableRegistryKey)')
+            body = body.replace('[Microsoft.Win32.Registry]::Users.OpenSubKey("$ExpectedSid\\$subkey")',
+                                '(Open-PortableRegistryKey -SidHive)')
             if startup_case:
                 body = body.replace("[Environment]::GetFolderPath('Startup', [Environment+SpecialFolderOption]::DoNotVerify)",
                                     '(Get-PortableStartup -DoNotVerify)')
@@ -137,17 +166,77 @@ function Observe-PortableToken {
 $script:nativeCase='NATIVE'; $script:runtimeCase='RUNTIME'
 $script:nativeCalls=[Collections.Generic.List[object]]::new(); $script:allocated=0; $script:freed=0
 $script:managedNormalCalls=0; $script:managedDoNotVerifyCalls=0
+$script:probeCase='PROBE'; $script:mappingCase='MAPPING'; $script:createCalls=0; $script:probeRepaired=$false
+$script:probeCalls=[Collections.Generic.List[object]]::new(); $script:probeAllocated=0; $script:probeFreed=0
+function Test-PortableProbeScope { return (Get-PSCallStack).FunctionName -contains 'Invoke-AccountStartupCounterfactual' }
+function Get-PortableIdentity {
+    $sid=if ((Test-PortableProbeScope) -and $script:probeCase -eq 'identity-changed') { 'foreign-sid' } else { 'owned-sid' }
+    return [pscustomobject]@{User=[pscustomobject]@{Value=$sid}}
+}
+function Get-PortableProbeHome {
+    if ($script:probeCase -eq 'environment-changed') { return 'foreign-profile' }
+    return $env:HOME
+}
+function Test-PortableProbeDirectory {
+    param([string]$Path)
+    if ($script:probeCase -eq 'directory-disappeared') { Remove-Item -LiteralPath $Path }
+    return [IO.Directory]::Exists($Path)
+}
+function Open-PortableRegistryKey {
+    param([switch]$SidHive)
+    if ($script:mappingCase -eq 'unavailable') { throw [NotSupportedException]::new('sentinel-secret') }
+    if ($script:mappingCase -eq 'missing-key') { return $null }
+    $key=[pscustomobject]@{sid_hive=[bool]$SidHive}
+    $key | Add-Member ScriptMethod GetValue {
+        param($name,$default,$options)
+        if ($script:mappingCase -eq 'missing-value') { return $null }
+        if ($script:mappingCase -eq 'binary') { return [byte[]]@(1,2) }
+        if ($script:mappingCase -eq 'sid-mismatch' -and $this.sid_hive) { return 'sentinel-secret C:\private\foreign' }
+        if ($script:mappingCase -eq 'string') { return $script:registeredStartup }
+        return '%PORTABLE_STARTUP_MAPPING%'
+    }
+    $key | Add-Member ScriptMethod GetValueKind {
+        param($name)
+        if ($script:mappingCase -eq 'binary') { return [Microsoft.Win32.RegistryValueKind]::Binary }
+        if ($script:mappingCase -eq 'string') { return [Microsoft.Win32.RegistryValueKind]::String }
+        return [Microsoft.Win32.RegistryValueKind]::ExpandString
+    }
+    $key | Add-Member ScriptMethod Dispose { }
+    return $key
+}
+function Invoke-PortableStartupCreate {
+    $script:createCalls++
+    if ($script:probeCase -eq 'create-throws') { throw [IO.IOException]::new('sentinel-secret') }
+    if ($script:probeCase -eq 'create-empty') { return '' }
+    if ($script:probeCase -eq 'create-foreign') { return 'sentinel-secret C:\private\foreign' }
+    if ($script:probeCase -eq 'create-repairs') { $script:probeRepaired=$true }
+    return $script:registeredStartup
+}
 function Get-PortableRuntimeValue {
     if ($script:runtimeCase -eq 'unavailable') { throw [NotSupportedException]::new('sentinel-secret') }
     return 'sentinel-secret C:\private\path'
 }
 function Invoke-PortableNative {
     param([uint32]$Flags, [ref]$Buffer)
-    $script:nativeCalls.Add(@{flags=$Flags; phase=$script:childStage.phase; state=$script:childStage.state; exit=$exitCode})
+    $call=@{flags=$Flags; phase=$script:childStage.phase; state=$script:childStage.state; exit=$exitCode}
+    $inProbe=Test-PortableProbeScope
+    if ($inProbe) { $script:probeCalls.Add($call) } else { $script:nativeCalls.Add($call) }
     if ($script:nativeCase -eq 'unavailable') { throw [DllNotFoundException]::new('sentinel-secret') }
     $path = if ($script:nativeCase -eq 'empty') { '' } else { $script:registeredStartup }
-    $Buffer.Value=[Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($path); $script:allocated++
+    $Buffer.Value=[Runtime.InteropServices.Marshal]::StringToCoTaskMemUni($path)
+    if ($inProbe) { $script:probeAllocated++ } else { $script:allocated++ }
     if ($script:nativeCase -eq 'invoke-throws') { throw [IO.IOException]::new('sentinel-secret') }
+    if ($inProbe) {
+        if ($script:probeCase -eq 'normal-already-recovers') { return 0 }
+        if ($script:probeCase -eq 'dnv-denied' -and $Flags -eq 16384) { return -2147024891 }
+        if ($script:probeCase -eq 'dnv-foreign' -and $Flags -eq 16384) {
+            [Runtime.InteropServices.Marshal]::FreeCoTaskMem($Buffer.Value); $script:probeFreed++
+            $Buffer.Value=[Runtime.InteropServices.Marshal]::StringToCoTaskMemUni('sentinel-secret C:\private\foreign'); $script:probeAllocated++
+            return 0
+        }
+        if ($Flags -eq 0 -and -not $script:probeRepaired) { return -2147024894 }
+        return 0
+    }
     if ($script:nativeCase -eq 'win32') { return -2147024891 }
     if ($script:nativeCase -eq 'other') { return -2147467259 }
     return 0
@@ -159,15 +248,18 @@ function Convert-PortableNativePath {
 }
 function Free-PortableNativePath {
     param([IntPtr]$Buffer)
-    [Runtime.InteropServices.Marshal]::FreeCoTaskMem($Buffer); $script:freed++
+    [Runtime.InteropServices.Marshal]::FreeCoTaskMem($Buffer)
+    if (Test-PortableProbeScope) { $script:probeFreed++ } else { $script:freed++ }
 }
-""".replace('NATIVE', native_case).replace('RUNTIME', runtime_case or '')
+""".replace('NATIVE', native_case).replace('RUNTIME', runtime_case or '').replace('PROBE', probe_case).replace("'MAPPING'", "'" + mapping_case + "'")
             # Save seam counters without replacing the production catch or exit.
             marker = 'exit $exitCode'
             self.assertEqual(body.count(marker), 1)
             body = body.replace(marker, r"""
 @{calls=@($script:nativeCalls.ToArray()); allocated=$script:allocated; freed=$script:freed;
   managed_normal=$script:managedNormalCalls; managed_do_not_verify=$script:managedDoNotVerifyCalls;
+  probe_calls=@($script:probeCalls.ToArray()); create_calls=$script:createCalls;
+  probe_allocated=$script:probeAllocated; probe_freed=$script:probeFreed;
   runtime_expected=@{ps_version=$PSVersionTable.PSVersion.ToString(); framework_description=[Runtime.InteropServices.RuntimeInformation]::FrameworkDescription;
     process_architecture=[Runtime.InteropServices.RuntimeInformation]::ProcessArchitecture.ToString(); os_architecture=[Runtime.InteropServices.RuntimeInformation]::OSArchitecture.ToString()}} |
     ConvertTo-Json -Depth 5 | Set-Content (Join-Path $c.evidence 'portable-native-state.json')
@@ -192,6 +284,10 @@ switch ($script:startupCase) {
 }
 function Get-PortableStartup {
     param([switch]$DoNotVerify)
+    if (Test-PortableProbeScope) {
+        if ($DoNotVerify -or $script:probeRepaired) { return $script:registeredStartup }
+        return ''
+    }
     if ($DoNotVerify) { $script:managedDoNotVerifyCalls++; return $script:registeredStartup }
     $script:managedNormalCalls++
     if ($script:startupCase -eq 'default-disagrees') { return (Join-Path $env:APPDATA 'other-registration') }
@@ -203,7 +299,7 @@ function Get-PortableStartup {
 }
 """.replace('CASE', startup_case or '')
             script = root / 'body.ps1'
-            script.write_text(prelude + startup_prelude + native_prelude + body)
+            script.write_text(prelude + startup_prelude + native_prelude + '\n$env:PORTABLE_STARTUP_MAPPING=$script:registeredStartup\n' + body)
             result = subprocess.run([PWSH, '-NoLogo', '-NoProfile', '-NonInteractive', '-File', str(script)],
                                     capture_output=True, text=True, timeout=25)
             receipts = {p.name: p.read_text(encoding='utf-8-sig') for p in evidence.iterdir() if p.is_file()}
@@ -216,6 +312,117 @@ function Get-PortableStartup {
                     'readiness_count': len(list(root.rglob('clover-fixture-readiness.txt'))),
                 })
             return result, receipts
+
+    def test_counterfactual_never_accepts_even_if_shell_create_changes_normal_lookup(self):
+        for case in ('create-repairs', 'create-no-effect', 'create-empty', 'create-throws', 'create-foreign'):
+            with self.subTest(probe=case):
+                result, receipts = self.run_child_body(startup_case='readback-empty', probe_case=case)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('access.json', receipts)
+                d = json.loads(receipts['child-stage.json'])
+                self.assertEqual((d['phase'], d['state'], d['reason'], d['predicate_passed']),
+                                 ('startup_create', 'failed', 'predicate_mismatch', False))
+                self.assertIs(d['startup']['readback_empty'], True)
+                self.assertIs(d['startup']['readback_agrees'], False)
+                self.assertIsNone(d['hresult_signed'])
+                probe = json.loads(receipts['startup-counterfactual.json'])
+                self.assertEqual((probe['phase'], probe['state']), ('post_failure_counterfactual', 'observed'))
+                self.assertEqual(probe['before_normal']['native_code'], 2)
+                self.assertEqual(probe['before_do_not_verify']['hresult_signed'], 0)
+                self.assertIs(probe['create']['attempted'], True)
+                repaired = case == 'create-repairs'
+                self.assertEqual(probe['after_normal']['hresult_signed'], 0 if repaired else -2147024894)
+                self.assertIs(probe['managed_after_agrees'], repaired)
+                self.assertIs(probe['managed_after_empty'], not repaired)
+                if case == 'create-throws':
+                    self.assertEqual(probe['create']['exception_category'], 'io')
+                    self.assertIsNone(probe['create']['path_empty'])
+                else:
+                    self.assertIs(probe['create']['path_empty'], case == 'create-empty')
+                    self.assertIs(probe['create']['equals_validated_os_path'], case not in ('create-empty', 'create-foreign'))
+                seam = json.loads(receipts['portable-native-state.json'])
+                self.assertEqual(seam['create_calls'], 1)
+                self.assertEqual(seam['probe_calls'], [dict(flags=f, phase='startup_create', state='failed', exit=1)
+                                                     for f in (0, 16384, 0)])
+                self.assertEqual(seam['probe_allocated'], seam['probe_freed'])
+                self.assertEqual(json.loads(receipts['portable-startup-state.json'])['readiness_count'], 0)
+                for forbidden in ('sentinel-secret', 'private', 'OS-registered-startup', 'owned-sid', 'PORTABLE_STARTUP_MAPPING'):
+                    self.assertNotIn(forbidden, receipts['startup-counterfactual.json'] + result.stdout + result.stderr)
+
+    def test_counterfactual_rechecks_native_registration_and_exact_failure_before_mutation(self):
+        for case in ('normal-already-recovers', 'dnv-denied', 'dnv-foreign'):
+            with self.subTest(probe=case):
+                result, receipts = self.run_child_body(startup_case='readback-empty', probe_case=case)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('access.json', receipts)
+                probe = json.loads(receipts['startup-counterfactual.json'])
+                self.assertEqual(probe['state'], 'precondition_rejected')
+                self.assertIs(probe['create']['attempted'], False)
+                self.assertIsNone(probe['after_normal'])
+                seam = json.loads(receipts['portable-native-state.json'])
+                self.assertEqual(seam['create_calls'], 0)
+                self.assertEqual([c['flags'] for c in seam['probe_calls']], [0, 16384])
+                self.assertEqual(seam['probe_allocated'], seam['probe_freed'])
+        for startup_case in ('existing', 'missing', 'readback-disagrees', 'foreign'):
+            with self.subTest(startup=startup_case):
+                _, receipts = self.run_child_body(startup_case=startup_case, probe_case='create-repairs')
+                self.assertNotIn('startup-counterfactual.json', receipts)
+                self.assertEqual(json.loads(receipts['portable-native-state.json'])['create_calls'], 0)
+        for diagnostic_failure in (False, True):
+            result, receipts = self.run_child_body(startup_case='readback-empty', probe_case='create-repairs',
+                                                   probe_receipt_failure=True, diagnostic_failure=diagnostic_failure)
+            self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+            self.assertNotIn('startup-counterfactual.json', receipts)
+            self.assertNotIn('access.json', receipts)
+            self.assertIn('child-failure.txt', receipts)
+
+    def test_counterfactual_rechecks_live_identity_environment_and_directory(self):
+        for case, rejected_field in (('identity-changed', 'identity_matches'),
+                                     ('environment-changed', 'environment_matches'),
+                                     ('directory-disappeared', 'directory_exists')):
+            with self.subTest(probe=case):
+                result, receipts = self.run_child_body(startup_case='readback-empty', probe_case=case)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                self.assertNotIn('access.json', receipts)
+                probe = json.loads(receipts['startup-counterfactual.json'])
+                self.assertEqual(probe['state'], 'precondition_rejected')
+                self.assertIs(probe[rejected_field], False)
+                self.assertIs(probe['create']['attempted'], False)
+                seam = json.loads(receipts['portable-native-state.json'])
+                self.assertEqual(seam['create_calls'], 0)
+                self.assertEqual(seam['probe_calls'], [])
+
+    def test_counterfactual_registry_comparisons_are_typed_redacted_and_unknown_when_unavailable(self):
+        for case in ('expand', 'string', 'sid-mismatch', 'binary', 'missing-value', 'missing-key', 'unavailable'):
+            with self.subTest(mapping=case):
+                result, receipts = self.run_child_body(startup_case='readback-empty', probe_case='create-repairs', mapping_case=case)
+                self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                probe = json.loads(receipts['startup-counterfactual.json'])
+                self.assertEqual(probe['state'], 'observed')
+                self.assertNotIn('access.json', receipts)
+                mappings = probe['mappings']
+                if case == 'unavailable':
+                    self.assertEqual(mappings, {})
+                    continue
+                self.assertEqual(set(mappings), {'Startup', 'Start Menu', 'Programs', 'AppData'})
+                for mapping in mappings.values():
+                    if case == 'missing-key':
+                        self.assertIsNone(mapping['present'])
+                    else:
+                        self.assertIs(mapping['present'], case != 'missing-value')
+                    self.assertEqual(mapping['kind'], {'expand': 'ExpandString', 'string': 'String',
+                                                      'sid-mismatch': 'ExpandString', 'binary': 'other'}.get(case, 'unknown'))
+                    if case in ('expand', 'string', 'sid-mismatch'):
+                        self.assertIs(mapping['matches_sid_hive'], case != 'sid-mismatch')
+                        self.assertIs(mapping['expanded_owned'], True)
+                        self.assertIs(mapping['expanded_exists'], True)
+                        self.assertIs(mapping['equals_validated_os_path'], True)
+                    else:
+                        self.assertIsNone(mapping['matches_sid_hive'])
+                        self.assertIsNone(mapping['expanded_owned'])
+                    self.assertTrue(all(v is None or type(v) is bool for k, v in mapping.items() if k != 'kind'))
+                for forbidden in ('sentinel-secret', 'private', 'OS-registered-startup', 'owned-sid', 'PORTABLE_STARTUP_MAPPING'):
+                    self.assertNotIn(forbidden, receipts['startup-counterfactual.json'] + result.stdout + result.stderr)
 
     def test_later_s_ok_never_accepts_the_original_startup_failure(self):
         for startup_case in ('readback-empty', 'readback-disagrees', 'foreign'):
