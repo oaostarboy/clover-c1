@@ -60,6 +60,9 @@ class TurnContext:
     _LONG_TOOL_THRESHOLD_S: float = 30.0
     _cleanup_progress: bool = False
     _cleanup_msg_ids: List[str] = field(default_factory=list)
+    # Platform requests survive progress-sender cancellation so their receipts
+    # can still be collected before post-delivery cleanup edits/deletes them.
+    _progress_requests: set = field(default_factory=set)
 
     # --- collapsed turn-summary card -------------------------------------
     # When cleanup_progress is on, the tracked bubbles are not simply deleted:
