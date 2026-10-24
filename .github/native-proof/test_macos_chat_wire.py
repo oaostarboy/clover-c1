@@ -28,6 +28,46 @@ class ChatWireTests(unittest.TestCase):
         self.messages: Any = [{'role': 'user', 'content': 'MAC_NATIVE_ACCEPTANCE'}]
         self.tools: Any = [{'type': 'function', 'function': {'name': 'write_file', 'parameters': {'type': 'object'}}}]
 
+    def checkpoint(self, **changes):
+        from types import SimpleNamespace
+        from macos_updater_checkpoint import live_updater
+        row = dict(updater_pid=42, updater_create_time=17.125, repo=str(self.root / 'install'),
+                   venv_python=str(self.root / 'install/venv/bin/python'))
+        row.update(changes)
+        beacon = self.root / 'beacon.json'
+        beacon.write_text(json.dumps(row))
+        proc = SimpleNamespace(pid=42, cmdline=lambda: ['python', str(self.root / 'install/venv/bin/clover'), 'update', '--gateway'],
+                               create_time=lambda: 17.125, uids=lambda: (501, 501, 501),
+                               environ=lambda: {'CLOVER_HOME': str(self.root)})
+        return live_updater, beacon, proc
+
+    def test_live_updater_checkpoint_does_not_wait_for_final_receipt(self):
+        check, beacon, proc = self.checkpoint()
+        self.assertIsNotNone(check(beacon, self.root / 'install', self.root, 501, lambda pid: proc))
+        self.assertFalse((self.root / 'logs/update_receipts/latest.json').exists())
+
+    def test_no_pull_pre_pause_beacon_without_repo_still_requires_exact_console_script(self):
+        check, beacon, proc = self.checkpoint(repo=None)
+        self.assertIsNotNone(check(beacon, self.root / 'install', self.root, 501, lambda pid: proc))
+        proc.cmdline = lambda: ['python', str(self.root / 'foreign/venv/bin/clover'), 'update', '--gateway']
+        self.assertIsNone(check(beacon, self.root / 'install', self.root, 501, lambda pid: proc))
+
+    def test_reused_updater_pid_checkpoint_rejected(self):
+        check, beacon, proc = self.checkpoint(updater_create_time=16.0)
+        self.assertIsNone(check(beacon, self.root / 'install', self.root, 501, lambda pid: proc))
+
+    def test_foreign_repo_checkpoint_rejected(self):
+        check, beacon, proc = self.checkpoint(repo=str(self.root / 'foreign'))
+        self.assertIsNone(check(beacon, self.root / 'install', self.root, 501, lambda pid: proc))
+
+    def test_cross_uid_checkpoint_rejected(self):
+        check, beacon, proc = self.checkpoint()
+        self.assertIsNone(check(beacon, self.root / 'install', self.root, 502, lambda pid: proc))
+
+    def test_unknown_updater_start_checkpoint_rejected(self):
+        check, beacon, proc = self.checkpoint(updater_create_time=None)
+        self.assertIsNone(check(beacon, self.root / 'install', self.root, 501, lambda pid: proc))
+
     def test_sdk_nonstream_requests_one_file_tool_without_faking_its_effect(self):
         reply = self.client.chat.completions.create(model='native-fixture', messages=self.messages, tools=self.tools)
         call = reply.choices[0].message.tool_calls[0]

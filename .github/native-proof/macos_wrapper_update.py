@@ -165,14 +165,29 @@ def main() -> int:
             chat_started = True
             wait_until(lambda: (clover_home / '.update_pending.json').is_file(), 'real chat update handler did not accept command')
             (evidence / 'chat-pending-origin.json').write_bytes((clover_home / '.update_pending.json').read_bytes())
-            wait_until(lambda: (clover_home / 'logs/update_receipts/latest.json').is_file(),
-                       'chat updater did not publish its real run receipt')
+            from macos_updater_checkpoint import live_updater
+            checkpoint = {}
+            def updater_started():
+                identity = live_updater(clover_home / '.clover-update-heartbeat.json', install,
+                                        clover_home, os.getuid(), psutil.Process)
+                if identity is None:
+                    return False
+                checkpoint.update(identity)
+                return True
+            wait_until(updater_started, 'chat updater did not establish a live PID/start/repo checkpoint')
+            (evidence / 'live-chat-updater.json').write_text(json.dumps(checkpoint, indent=2) + '\n')
             chat.record('controller_releases_accepted_turn')
             chat.release.set()
             wait_until(lambda: chat.bot_messages().count(chat.token) == 1, 'accepted turn did not deliver its complete reply')
             wait_until(lambda: (clover_home / '.update_exit_code').is_file(), 'chat updater did not finish', seconds=900)
             exit_code = int((clover_home / '.update_exit_code').read_text().strip())
             chat_finished = True
+            report['updater_exit_code'] = exit_code
+            actual_receipt = clover_home / 'logs/update_receipts/latest.json'
+            if actual_receipt.is_file():
+                (evidence / 'actual-update-receipt.json').write_bytes(actual_receipt.read_bytes())
+            if exit_code != 0:
+                raise ValueError(f'chat updater failed with exit {exit_code}; preserved its actual receipt')
             wait_until(lambda: sum('Clover update finished' in m for m in chat.bot_messages()) == 1,
                        'chat completion report missing or duplicated', seconds=180)
             output = clover_home / '.update_output.txt'
@@ -213,6 +228,13 @@ def main() -> int:
     except Exception as exc:
         report['error'] = f'{type(exc).__name__}: {exc}'
     finally:
+        # Capture a failed/provisional producer BEFORE the gateway consumes IPC.
+        for source_name, target_name in [('logs/update_receipts/latest.json', 'actual-update-receipt.json'),
+                                         ('.update_output.txt', 'update-output-before-cleanup.log'),
+                                         ('.update_exit_code', 'update-exit-before-cleanup.txt')]:
+            source_path = clover_home / source_name
+            if source_path.is_file():
+                (evidence / target_name).write_bytes(source_path.read_bytes()[-200000:])
         if chat is not None:
             chat.release.set()
         if owned and (updater is None or updater.poll() is not None) and (not chat_started or chat_finished):
