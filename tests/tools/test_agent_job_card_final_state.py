@@ -94,19 +94,21 @@ async def test_verified_success_ends_on_the_done_mark(hermetic_terminal, name, b
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("name,body,parser", [
-    ("lifecycle_only", LIFECYCLE_ONLY, "none"),
-    ("clover_no_result", CLOVER_NO_RESULT, "clover-activity"),
-    ("claude_prose_only", CLAUDE_PROSE_ONLY, "claude-stream-json"),
-    ("clover_prose_only", CLOVER_PROSE_ONLY, "clover-activity"),
+@pytest.mark.parametrize("name,body,parser,lifecycle_state", [
+    ("lifecycle_only", LIFECYCLE_ONLY, "none", "incomplete"),
+    ("clover_no_result", CLOVER_NO_RESULT, "clover-activity", "incomplete"),
+    ("claude_prose_only", CLAUDE_PROSE_ONLY, "claude-stream-json", "completed"),
+    ("clover_prose_only", CLOVER_PROSE_ONLY, "clover-activity", "completed"),
 ])
 async def test_unverifiable_clean_exit_says_so_instead_of_hourglass(
-    hermetic_terminal, name, body, parser  # noqa: F811
+    hermetic_terminal, name, body, parser, lifecycle_state  # noqa: F811
 ):
     snap, final = await _run_worker(hermetic_terminal, name, body, parser)
     head = final.splitlines()[0]
-    # Terminal, and never a false success.
-    assert snap["state"] == "incomplete", snap
+    # Parser-result envelopes can complete the process lifecycle without verifying
+    # the task. Missing result envelopes retain the existing incomplete lifecycle.
+    assert snap["state"] == lifecycle_state, snap
+    # Neither lifecycle is evidence of task success: the terminal card must say so.
     assert not head.startswith("✅"), final
     # Not the "still waiting" hourglass, and not the turn-cap wording.
     assert not head.startswith("⏳"), final
