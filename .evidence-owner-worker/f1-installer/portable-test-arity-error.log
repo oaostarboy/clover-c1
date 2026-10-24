@@ -1,0 +1,18 @@
+..........F.......                                         [100%]
+=================================== FAILURES ===================================
+_______ Contracts.test_installer_side_effect_entry_is_native_hosted_only _______
+
+self = <test_contract.Contracts testMethod=test_installer_side_effect_entry_is_native_hosted_only>
+
+    def test_installer_side_effect_entry_is_native_hosted_only(self):
+        import sys
+        if sys.platform == 'win32':
+            self.skipTest('portable non-Windows refusal control')
+        with self.assertRaisesRegex(RuntimeError, 'disposable hosted Windows'):
+>           load('released_installer').install(*([None] * 11))
+E           TypeError: install() takes 10 positional arguments but 11 were given
+
+.github/owner-worker-proof/test_contract.py:129: TypeError
+=========================== short test summary info ============================
+FAILED .github/owner-worker-proof/test_contract.py::Contracts::test_installer_side_effect_entry_is_native_hosted_only
+1 failed, 17 passed, 14 subtests passed in 0.49s

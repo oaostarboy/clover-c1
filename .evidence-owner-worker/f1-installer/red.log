@@ -1,0 +1,14 @@
+test_old_environment_is_created_by_released_installer_not_direct_uv (__main__.Contracts.test_old_environment_is_created_by_released_installer_not_direct_uv) ... FAIL
+
+======================================================================
+FAIL: test_old_environment_is_created_by_released_installer_not_direct_uv (__main__.Contracts.test_old_environment_is_created_by_released_installer_not_direct_uv)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-24bba162/.github/owner-worker-proof/test_contract.py", line 29, in test_old_environment_is_created_by_released_installer_not_direct_uv
+    self.assertEqual(len(installs), 1, 'F1: exact released install.ps1 must create the old install')
+AssertionError: 0 != 1 : F1: exact released install.ps1 must create the old install
+
+----------------------------------------------------------------------
+Ran 1 test in 0.009s
+
+FAILED (failures=1)

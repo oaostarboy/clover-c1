@@ -1,0 +1,48 @@
+{
+  "status": "LOCAL_FIXTURE_CHECKS_PASS_NOT_NATIVE_CERTIFICATION",
+  "reviewed_base": "8883828f78049272e7c98b590e142a8ec56d8359",
+  "product_target": "1a606496182ef48eafd78889eea8878165b829ae",
+  "product_tree": "43825538944a3d836e8a28ad509f39b0eca7710e",
+  "fixture_branch": "clover-subagent/subagent-sa-0-24bba162",
+  "portable_tests": 20,
+  "portable_subtests": 21,
+  "junit_entries": 41,
+  "junit_failures": 0,
+  "junit_errors": 0,
+  "junit_skips": 0,
+  "matrix_rows": 16,
+  "retained_native_functions": [
+    "native_guard",
+    "observe",
+    "wait_update_exit",
+    "wait_update_receipt",
+    "legacy_stop_witness"
+  ],
+  "native_safety_job_byte_identical": true,
+  "native_negative_postpull_cases": 16,
+  "validation": [
+    "pytest",
+    "compileall",
+    "scoped Ruff",
+    "git diff --check",
+    "ancestry",
+    "real local Git rewrites with file-only transport",
+    "released Git blob/hash/command contracts"
+  ],
+  "windows_installer_execution": "NOT_EXERCISED: held for parent independent delta review",
+  "powershell_execution": "NOT_EXERCISED on Linux; no pwsh present",
+  "bootstrap_uv_download": "NOT_EXERCISED: intentionally preinstalled verified uv",
+  "final_gate_dispatched": false,
+  "pushed": false,
+  "ci_reviewed_added": false,
+  "preserved_fixture_controls": "portable contract compares reviewed checkout bytes, including existing .ps1 CRLF attributes",
+  "changed_file_sha256": {
+    ".github/owner-worker-proof/README.md": "7a0cbfdd450c184e5081e6d5e808bafc734c9b3c6d98961089d546f057539927",
+    ".github/owner-worker-proof/pins.json": "b3b6ff53bb0570cb06c9c11c51d3e0161fd9ce3c04863588dc1b6a33c8907bf7",
+    ".github/owner-worker-proof/test_contract.py": "887da4e122d234ef4d00cf0edb7c4572ad2a0ea124d329719c779946ab33aa2a",
+    ".github/owner-worker-proof/windows_update.py": "18523a6877de29b81763c1abfa5f59c2520f3fabdad2f69dea8f4fde5fc6010f",
+    ".github/owner-worker-proof/released_installer.py": "7526eddbff5efee793efe972e1ed96c2ef10ae793375567c904e912e7f12896e",
+    ".github/owner-worker-proof/register_startup.ps1": "8ff3020229035f367531e30df7945c762b61261a269fe3944e0d7bc1629232a7",
+    ".github/workflows/windows-owner-worker-proof.yml": "4772f13edd83a609dce65403110d59f953bd4a2d868f2a9bef10c75a684456b9"
+  }
+}

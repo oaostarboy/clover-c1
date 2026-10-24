@@ -1,0 +1,129 @@
+{
+  "mode": "candidate",
+  "scope": "full",
+  "full_matrix": true,
+  "target": "1a606496182ef48eafd78889eea8878165b829ae",
+  "target_tree": "43825538944a3d836e8a28ad509f39b0eca7710e",
+  "historical_helpers": "93cf13e9f66be56428993402c1e80422d9005d85",
+  "matrix": {
+    "include": [
+      {
+        "caller": "1.5.6-suni",
+        "old": "9535350bee1d57cf7e466672e6f416403886bec1",
+        "setup": "zyra",
+        "entry": "terminal",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.6-suni",
+        "old": "9535350bee1d57cf7e466672e6f416403886bec1",
+        "setup": "zyra",
+        "entry": "gateway",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.6-suni",
+        "old": "9535350bee1d57cf7e466672e6f416403886bec1",
+        "setup": "troy",
+        "entry": "terminal",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.6-suni",
+        "old": "9535350bee1d57cf7e466672e6f416403886bec1",
+        "setup": "troy",
+        "entry": "gateway",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.8",
+        "old": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+        "setup": "zyra",
+        "entry": "terminal",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.8",
+        "old": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+        "setup": "zyra",
+        "entry": "gateway",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.8",
+        "old": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+        "setup": "troy",
+        "entry": "terminal",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.8",
+        "old": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+        "setup": "troy",
+        "entry": "gateway",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.9",
+        "old": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+        "setup": "zyra",
+        "entry": "terminal",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.9",
+        "old": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+        "setup": "zyra",
+        "entry": "gateway",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.9",
+        "old": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+        "setup": "troy",
+        "entry": "terminal",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "1.5.9",
+        "old": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+        "setup": "troy",
+        "entry": "gateway",
+        "turn_mode": "completed"
+      },
+      {
+        "caller": "candidate",
+        "old": "1a606496182ef48eafd78889eea8878165b829ae",
+        "setup": "zyra",
+        "entry": "terminal",
+        "turn_mode": "inflight"
+      },
+      {
+        "caller": "candidate",
+        "old": "1a606496182ef48eafd78889eea8878165b829ae",
+        "setup": "zyra",
+        "entry": "gateway",
+        "turn_mode": "inflight"
+      },
+      {
+        "caller": "candidate",
+        "old": "1a606496182ef48eafd78889eea8878165b829ae",
+        "setup": "troy",
+        "entry": "terminal",
+        "turn_mode": "inflight"
+      },
+      {
+        "caller": "candidate",
+        "old": "1a606496182ef48eafd78889eea8878165b829ae",
+        "setup": "troy",
+        "entry": "gateway",
+        "turn_mode": "inflight"
+      }
+    ]
+  },
+  "not_certified": [
+    "live Telegram",
+    "busy frozen Windows first stop",
+    "frozen pre-pull refusal repaired by target code"
+  ]
+}

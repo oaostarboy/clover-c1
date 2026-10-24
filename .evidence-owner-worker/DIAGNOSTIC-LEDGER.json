@@ -1,0 +1,661 @@
+{
+  "recorded_at": "2026-10-24T02:44:39.405736+00:00",
+  "old_diagnostic_product": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+  "required_new_lock_source": "27f507acb4f12c30d237471095f137007952c312",
+  "baseline": {
+    "cases": 70,
+    "passed": 64,
+    "failures": [
+      {
+        "classname": "tests.clover_cli.test_windows_handoff_clock_native",
+        "name": "test_measured_windows_child_beacon_keeps_strict_birth_boundary[modern-inverted]",
+        "time": "0.088"
+      },
+      {
+        "classname": "tests.clover_cli.test_legacy_gateway_restart_idle_wait",
+        "name": "test_sigusr1_restart_waits_before_signalling_and_still_signals",
+        "time": "0.054"
+      },
+      {
+        "classname": "tests.clover_cli.test_legacy_gateway_restart_idle_wait",
+        "name": "test_idle_wait_failure_never_blocks_the_restart",
+        "time": "0.052"
+      },
+      {
+        "classname": "",
+        "name": "test_real_reporter_preserves_live_owner_identity_and_restart_contract",
+        "time": "0.726"
+      }
+    ],
+    "skipped": [
+      {
+        "classname": "tests.clover_cli.test_update_delivery_guard_wrappers",
+        "name": "test_real_stderr_wrapper_and_direct_worker_identity[False]",
+        "time": "0.000"
+      },
+      {
+        "classname": "tests.clover_cli.test_update_delivery_guard_wrappers",
+        "name": "test_real_stderr_wrapper_and_direct_worker_identity[True]",
+        "time": "0.000"
+      }
+    ]
+  },
+  "first_candidate_native_safety": {
+    "cases": 58,
+    "passed": 56,
+    "failures": [],
+    "skipped": [
+      {
+        "classname": "tests.clover_cli.test_update_delivery_guard_wrappers",
+        "name": "test_real_stderr_wrapper_and_direct_worker_identity[False]",
+        "time": "0.000"
+      },
+      {
+        "classname": "tests.clover_cli.test_update_delivery_guard_wrappers",
+        "name": "test_real_stderr_wrapper_and_direct_worker_identity[True]",
+        "time": "0.000"
+      }
+    ]
+  },
+  "initial_full_gate": {
+    "run": "40049740582",
+    "workflow_sha": "4ad39194db817d4672348effd548eaa4a6684bb8",
+    "success": 8,
+    "failed_troy_observer": 8,
+    "acceptance_passed": false
+  },
+  "corrected_task_cohort": {
+    "run": "40050690083",
+    "workflow_sha": "7a288e257c562784bc11286d9535ecdb1ad3936a",
+    "success": 8,
+    "partial_scope": true,
+    "acceptance_passed": false
+  },
+  "verified_old_source_diagnostic_cases": [
+    {
+      "caller": "1.5.6-suni",
+      "setup": "zyra",
+      "entry": "gateway",
+      "source": "9535350bee1d57cf7e466672e6f416403886bec1",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 93.6699948310852,
+      "owner_pid": 5276,
+      "owner_start": 179280615468,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": false,
+      "driver_restart": false,
+      "run": "40049740582",
+      "artifact": "owner-worker-1.5.6-suni-zyra-gateway-40049740582",
+      "fresh_final_update_notices": 1
+    },
+    {
+      "caller": "1.5.6-suni",
+      "setup": "zyra",
+      "entry": "terminal",
+      "source": "9535350bee1d57cf7e466672e6f416403886bec1",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.38634085655212,
+      "owner_pid": 728,
+      "owner_start": 179280544970,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": false,
+      "driver_restart": false,
+      "run": "40049740582",
+      "artifact": "owner-worker-1.5.6-suni-zyra-terminal-40049740582"
+    },
+    {
+      "caller": "1.5.8",
+      "setup": "zyra",
+      "entry": "gateway",
+      "source": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.04255652427673,
+      "owner_pid": 4656,
+      "owner_start": 179280620810,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": false,
+      "driver_restart": false,
+      "run": "40049740582",
+      "artifact": "owner-worker-1.5.8-zyra-gateway-40049740582",
+      "fresh_final_update_notices": 1
+    },
+    {
+      "caller": "1.5.8",
+      "setup": "zyra",
+      "entry": "terminal",
+      "source": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 93.13385272026062,
+      "owner_pid": 8392,
+      "owner_start": 179280544972,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": false,
+      "driver_restart": false,
+      "run": "40049740582",
+      "artifact": "owner-worker-1.5.8-zyra-terminal-40049740582"
+    },
+    {
+      "caller": "1.5.9",
+      "setup": "zyra",
+      "entry": "gateway",
+      "source": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 93.82776999473572,
+      "owner_pid": 1384,
+      "owner_start": 179280618466,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": false,
+      "driver_restart": false,
+      "run": "40049740582",
+      "artifact": "owner-worker-1.5.9-zyra-gateway-40049740582",
+      "fresh_final_update_notices": 1
+    },
+    {
+      "caller": "1.5.9",
+      "setup": "zyra",
+      "entry": "terminal",
+      "source": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 93.25565552711487,
+      "owner_pid": 4216,
+      "owner_start": 179280545305,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": false,
+      "driver_restart": false,
+      "run": "40049740582",
+      "artifact": "owner-worker-1.5.9-zyra-terminal-40049740582"
+    },
+    {
+      "caller": "candidate",
+      "setup": "zyra",
+      "entry": "gateway",
+      "source": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target": "5897a383fa71864b2c9dc9140bf52a060907dfab",
+      "target_tree": "eda3b18cfc33fb4d60227f935e413d5c3552d4a0",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 91.56567597389221,
+      "owner_pid": 4492,
+      "owner_start": 179280628134,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "inflight",
+      "via_schedule_before": false,
+      "driver_restart": false,
+      "run": "40049740582",
+      "artifact": "owner-worker-candidate-zyra-gateway-40049740582",
+      "fresh_final_update_notices": 1
+    },
+    {
+      "caller": "candidate",
+      "setup": "zyra",
+      "entry": "terminal",
+      "source": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target": "5897a383fa71864b2c9dc9140bf52a060907dfab",
+      "target_tree": "eda3b18cfc33fb4d60227f935e413d5c3552d4a0",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 93.98785185813904,
+      "owner_pid": 6788,
+      "owner_start": 179280544579,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "inflight",
+      "via_schedule_before": false,
+      "driver_restart": false,
+      "run": "40049740582",
+      "artifact": "owner-worker-candidate-zyra-terminal-40049740582"
+    },
+    {
+      "caller": "1.5.6-suni",
+      "setup": "troy",
+      "entry": "gateway",
+      "source": "9535350bee1d57cf7e466672e6f416403886bec1",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.5139307975769,
+      "owner_pid": 8420,
+      "owner_start": 179280692709,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": true,
+      "driver_restart": false,
+      "run": "40050690083",
+      "artifact": "owner-worker-1.5.6-suni-troy-gateway-40050690083",
+      "fresh_final_update_notices": 1
+    },
+    {
+      "caller": "1.5.6-suni",
+      "setup": "troy",
+      "entry": "terminal",
+      "source": "9535350bee1d57cf7e466672e6f416403886bec1",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.42489624023438,
+      "owner_pid": 6896,
+      "owner_start": 179280623479,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": true,
+      "driver_restart": false,
+      "run": "40050690083",
+      "artifact": "owner-worker-1.5.6-suni-troy-terminal-40050690083"
+    },
+    {
+      "caller": "1.5.8",
+      "setup": "troy",
+      "entry": "gateway",
+      "source": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.44775223731995,
+      "owner_pid": 6052,
+      "owner_start": 179280686371,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": true,
+      "driver_restart": false,
+      "run": "40050690083",
+      "artifact": "owner-worker-1.5.8-troy-gateway-40050690083",
+      "fresh_final_update_notices": 1
+    },
+    {
+      "caller": "1.5.8",
+      "setup": "troy",
+      "entry": "terminal",
+      "source": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.61422204971313,
+      "owner_pid": 8276,
+      "owner_start": 179280632991,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": true,
+      "driver_restart": false,
+      "run": "40050690083",
+      "artifact": "owner-worker-1.5.8-troy-terminal-40050690083"
+    },
+    {
+      "caller": "1.5.9",
+      "setup": "troy",
+      "entry": "gateway",
+      "source": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.97330379486084,
+      "owner_pid": 2636,
+      "owner_start": 179280707163,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": true,
+      "driver_restart": false,
+      "run": "40050690083",
+      "artifact": "owner-worker-1.5.9-troy-gateway-40050690083",
+      "fresh_final_update_notices": 1
+    },
+    {
+      "caller": "1.5.9",
+      "setup": "troy",
+      "entry": "terminal",
+      "source": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+      "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 95.8353054523468,
+      "owner_pid": 7956,
+      "owner_start": 179280636016,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "completed",
+      "via_schedule_before": true,
+      "driver_restart": false,
+      "run": "40050690083",
+      "artifact": "owner-worker-1.5.9-troy-terminal-40050690083"
+    },
+    {
+      "caller": "candidate",
+      "setup": "troy",
+      "entry": "gateway",
+      "source": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target": "5897a383fa71864b2c9dc9140bf52a060907dfab",
+      "target_tree": "eda3b18cfc33fb4d60227f935e413d5c3552d4a0",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.48702454566956,
+      "owner_pid": 4268,
+      "owner_start": 179280691890,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "inflight",
+      "via_schedule_before": true,
+      "driver_restart": false,
+      "run": "40050690083",
+      "artifact": "owner-worker-candidate-troy-gateway-40050690083",
+      "fresh_final_update_notices": 1
+    },
+    {
+      "caller": "candidate",
+      "setup": "troy",
+      "entry": "terminal",
+      "source": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+      "target": "5897a383fa71864b2c9dc9140bf52a060907dfab",
+      "target_tree": "eda3b18cfc33fb4d60227f935e413d5c3552d4a0",
+      "result": "PASS_DIAGNOSTIC_OLD_SOURCE",
+      "stable_seconds": 94.17181301116943,
+      "owner_pid": 5728,
+      "owner_start": 179280621962,
+      "effect_count": 1,
+      "reply_count": 1,
+      "turn_mode": "inflight",
+      "via_schedule_before": true,
+      "driver_restart": false,
+      "run": "40050690083",
+      "artifact": "owner-worker-candidate-troy-terminal-40050690083"
+    }
+  ],
+  "not_one_green_full_gate": "Cases come from two fixture revisions; do not certify the combined product from this aggregate.",
+  "security_test_introduction_commit": "f93170470f60c8fbbd6b67167d9daebb53f1ee6b",
+  "native_security_result": {
+    "run": "40052775499",
+    "url": "https://github.com/oaostarboy/clover-c1/actions/runs/40052775499",
+    "workflow_sha": "6ac34feebea34aa35ad1a9182788d25d48ad46c6",
+    "product_sha": "27f507acb4f12c30d237471095f137007952c312",
+    "product_tree": "56ef6f6990bdb3d0d56fca31f582980857dca15e",
+    "passed": 63,
+    "failed": [],
+    "skipped": [
+      {
+        "classname": "tests.clover_cli.test_update_delivery_guard_wrappers",
+        "name": "test_real_stderr_wrapper_and_direct_worker_identity[False]",
+        "time": "0.000"
+      },
+      {
+        "classname": "tests.clover_cli.test_update_delivery_guard_wrappers",
+        "name": "test_real_stderr_wrapper_and_direct_worker_identity[True]",
+        "time": "0.000"
+      }
+    ],
+    "native_security_cases": [
+      {
+        "classname": "",
+        "name": "test_native_fdopen_rplus_locks_one_stable_file[False]",
+        "time": "0.017",
+        "properties": [
+          {
+            "name": "acl_isolation",
+            "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+          },
+          {
+            "name": "native_lock",
+            "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+          }
+        ]
+      },
+      {
+        "classname": "",
+        "name": "test_native_fdopen_rplus_locks_one_stable_file[True]",
+        "time": "0.018",
+        "properties": [
+          {
+            "name": "acl_isolation",
+            "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+          },
+          {
+            "name": "native_lock",
+            "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+          }
+        ]
+      },
+      {
+        "classname": "",
+        "name": "test_real_other_process_cannot_enter_held_native_byte_range",
+        "time": "1.707",
+        "properties": [
+          {
+            "name": "acl_isolation",
+            "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+          },
+          {
+            "name": "native_lock",
+            "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+          },
+          {
+            "name": "contender_wait_seconds",
+            "value": "1.0"
+          }
+        ]
+      },
+      {
+        "classname": "",
+        "name": "test_native_process_exit_releases_same_lock_inode",
+        "time": "0.321",
+        "properties": [
+          {
+            "name": "acl_isolation",
+            "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+          },
+          {
+            "name": "native_lock",
+            "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+          }
+        ]
+      },
+      {
+        "classname": "",
+        "name": "test_native_hardlink_lock_is_rejected_without_touching_target",
+        "time": "0.005",
+        "properties": [
+          {
+            "name": "acl_isolation",
+            "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+          },
+          {
+            "name": "native_lock",
+            "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+          }
+        ]
+      },
+      {
+        "classname": "",
+        "name": "test_native_file_reparse_lock_is_rejected_without_touching_target",
+        "time": "0.005",
+        "properties": [
+          {
+            "name": "acl_isolation",
+            "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+          },
+          {
+            "name": "native_lock",
+            "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+          },
+          {
+            "name": "native_object",
+            "value": "real file symlink/reparse point"
+          }
+        ]
+      },
+      {
+        "classname": "",
+        "name": "test_native_directory_lock_is_rejected_without_status_publish",
+        "time": "0.004",
+        "properties": [
+          {
+            "name": "acl_isolation",
+            "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+          },
+          {
+            "name": "native_lock",
+            "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+          }
+        ]
+      }
+    ],
+    "raw_logs_sha256": "bbf07d856de029d7005f32138d8bdb47be8568c59709b7d2eef067db6b1f2433",
+    "raw_zip_crc_verified": true,
+    "declared_artifacts": 2,
+    "updater_matrix": "SKIPPED/NOT EXERCISED by design",
+    "full_combined_acceptance": false,
+    "windows_acl_isolation": "NOT EXERCISED; inherited-home ACL prerequisite",
+    "jobs": [
+      {
+        "name": "plan",
+        "conclusion": "success"
+      },
+      {
+        "name": "Native Windows child identity and refusal controls",
+        "conclusion": "success"
+      },
+      {
+        "name": "Windows / ${{ matrix.caller }} / ${{ matrix.setup }} / ${{ matrix.entry }}",
+        "conclusion": "skipped"
+      }
+    ]
+  },
+  "security_native_executed_on_reviewed_27f507": true,
+  "final_combined_source": null,
+  "final_combined_acceptance": false,
+  "pending_combined_cases": [
+    {
+      "caller": "1.5.6-suni",
+      "setup": "troy",
+      "entry": "gateway",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.6-suni",
+      "setup": "troy",
+      "entry": "terminal",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.6-suni",
+      "setup": "zyra",
+      "entry": "gateway",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.6-suni",
+      "setup": "zyra",
+      "entry": "terminal",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.8",
+      "setup": "troy",
+      "entry": "gateway",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.8",
+      "setup": "troy",
+      "entry": "terminal",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.8",
+      "setup": "zyra",
+      "entry": "gateway",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.8",
+      "setup": "zyra",
+      "entry": "terminal",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.9",
+      "setup": "troy",
+      "entry": "gateway",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.9",
+      "setup": "troy",
+      "entry": "terminal",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.9",
+      "setup": "zyra",
+      "entry": "gateway",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "1.5.9",
+      "setup": "zyra",
+      "entry": "terminal",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "candidate",
+      "setup": "troy",
+      "entry": "gateway",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "candidate",
+      "setup": "troy",
+      "entry": "terminal",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "candidate",
+      "setup": "zyra",
+      "entry": "gateway",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    },
+    {
+      "caller": "candidate",
+      "setup": "zyra",
+      "entry": "terminal",
+      "result": "NOT_EXERCISED_FINAL_COMBINED_SOURCE"
+    }
+  ],
+  "staged_native_old_call_seams": "16 original-call/handler seams; NOT NATIVE-EXERCISED yet",
+  "staged_bootstrap_and_scm_update_corrections": "NOT NATIVE-EXERCISED yet",
+  "ordinary_ci_recheck": "40052777927 remains RED; local fixture corrections verified, hosted recheck pending",
+  "pending": [
+    "parent exact combined SHA/tree including27f507 and the Mac guard repair",
+    "one final full16-row update plus native-safety gate on that exact combined source",
+    "parent fixture review before ci-reviewed"
+  ],
+  "not_claimed": [
+    "Windows ACL/cross-UID isolation",
+    "live Telegram",
+    "busy frozen Windows first-stop protection",
+    "release/publication/live activation"
+  ]
+}
