@@ -198,6 +198,20 @@ class Contracts(unittest.TestCase):
         original = subprocess.check_output(['git', '-C', str(repo), 'show',
             reviewed + ':.github/owner-worker-proof/windows_update.py']).decode('utf-8')
         current = (HERE / 'windows_update.py').read_text(encoding='utf-8')
+        # The parent-authorized reader-source correction is not an acceptance
+        # waiver. Permit this exact source/audit block only; compare every other
+        # native acceptance statement byte-for-byte with the reviewed driver.
+        approved_reader = """        # Only the archive comes from immutable control history. The frozen
+        # reader still opens this installed home's real DB with its live Python.
+        reader_archive = account_update.historical_archive_identity(a.source, scratch)
+        dump(evidence / 'historical-reader-archive.json', reader_archive)
+        dump(evidence / 'state-db-readable-by-1.5.6.json', legacy.readable_by_156(a.source, home, python(live), 'native-inflight', scratch))
+        assert account_update.digest(scratch / 'v156.tar') == reader_archive['archive_sha256']
+        assert account_update.historical_reader_identity(a.source) == account_update.READER_PIN"""
+        original_reader = "        dump(evidence / 'state-db-readable-by-1.5.6.json', legacy.readable_by_156(source, home, python(live), 'native-inflight', scratch))"
+        self.assertEqual(current.count(approved_reader), 1)
+        self.assertEqual(original.count(original_reader), 1)
+        current = current.replace(approved_reader, original_reader, 1)
         start, end = '        before = wait_for(initial, 180)', "\n\nif __name__ == '__main__':"
         self.assertEqual(current.split(start, 1)[1].split(end, 1)[0],
                          original.split(start, 1)[1].split(end, 1)[0])

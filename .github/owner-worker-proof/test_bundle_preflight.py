@@ -22,7 +22,7 @@ def git(repo, *args):
 
 
 @pytest.fixture
-def inputs(tmp_path):
+def inputs(tmp_path, monkeypatch):
     repo = tmp_path / 'origin'
     repo.mkdir()
     git(repo, 'init', '-q')
@@ -34,6 +34,21 @@ def inputs(tmp_path):
         git(repo, 'add', '.')
         git(repo, 'commit', '-qm', f'fixture {n}')
         refs.append(git(repo, 'rev-parse', 'HEAD'))
+    # Private toy repositories cannot impersonate the official released tag.
+    # Supply an explicit private expected identity only in these transport tests.
+    import hashlib
+    import sys
+    git(repo, 'tag', 'v1.5.6')
+    expected = dict(ref='refs/tags/v1.5.6', object=refs[-1], commit=refs[-1],
+                    tree=git(repo, 'rev-parse', 'HEAD^{tree}'), reader_blobs={
+                        'input.py': dict(oid=git(repo, 'rev-parse', 'HEAD:input.py'),
+                            sha256=hashlib.sha256((repo / 'input.py').read_bytes()).hexdigest())})
+    original_load = load
+    def load_private_pin():
+        module = original_load()
+        setattr(module, 'READER_PIN', expected)
+        return module
+    monkeypatch.setattr(sys.modules[__name__], 'load', load_private_pin)
     helpers = tmp_path / 'historical'
     helpers.mkdir()
     (helpers / 'proof.py').write_text('# exact historical input\n')
@@ -88,6 +103,8 @@ def test_full_staging_bundle_clone_and_pre_account_preflight(inputs, tmp_path):
     m = load()
     config = m.prepare(path, profile, repo)
     assert config['packaging']['fixture_bundle']['head'] == git(repo, 'rev-parse', 'HEAD')
+    assert config['packaging']['source_bundle']['historical_reader'] == m.READER_PIN
+    assert config['packaging']['source_bundle']['refs']['refs/tags/v1.5.6']['commit'] == m.READER_PIN['commit']
     assert config['packaging']['source_bundle']['refs'][request['old']]['tree'] == git(repo, 'rev-parse', request['old'] + '^{tree}')
     m.clone_bundles(config, profile, lambda argv: subprocess.run(argv, check=True, capture_output=True))
     for name in ['source', 'fixture']:
@@ -104,6 +121,16 @@ def test_full_staging_bundle_clone_and_pre_account_preflight(inputs, tmp_path):
     assert list(controls.iterdir()) == []
     assert Path(config['uv']).read_bytes() == b'inert tool bytes; never execute'
     assert config['helper_hashes'] == {'proof.py': m.digest(Path(request['helpers']) / 'proof.py')}
+
+
+def test_missing_literal_reader_tag_fails_before_private_staging(inputs, tmp_path):
+    repo, path, request = inputs
+    git(repo, 'tag', '-d', 'v1.5.6')
+    profile = tmp_path / 'private-profile'
+    profile.mkdir()
+    with pytest.raises(ValueError, match='historical reader'):
+        load().prepare(path, profile, repo)
+    assert not (profile / 'update-inputs').exists()
 
 
 def test_rendered_workflow_checks_helpers_not_just_source_and_preflights_before_account():
@@ -175,4 +202,41 @@ def test_preflight_refuses_mismatched_target_tree(inputs, tmp_path):
     controls.mkdir()
     with pytest.raises(ValueError, match='target tree'):
         load().preflight(path, repo, controls)
+    assert list(controls.iterdir()) == []
+
+
+@pytest.mark.parametrize('field', ['object', 'commit', 'tree', 'blob-oid', 'blob-sha256', 'ref'])
+def test_wrong_historical_identity_fails_before_staging(inputs, tmp_path, field):
+    import copy
+    repo, path, request = inputs
+    module = load()
+    setattr(module, 'READER_PIN', copy.deepcopy(module.READER_PIN))
+    if field.startswith('blob-'):
+        key = 'oid' if field == 'blob-oid' else 'sha256'
+        module.READER_PIN['reader_blobs']['input.py'][key] = '0' * (40 if key == 'oid' else 64)
+    else:
+        module.READER_PIN[field] = 'refs/tags/1.5.6-sunisha' if field == 'ref' else '0' * 40
+    profile = tmp_path / 'private-profile'
+    profile.mkdir()
+    with pytest.raises(ValueError, match='historical reader'):
+        module.prepare(path, profile, repo)
+    assert not (profile / 'update-inputs').exists()
+
+
+def test_source_bundle_missing_reader_tag_fails_actual_clone(inputs, tmp_path, monkeypatch):
+    repo, path, request = inputs
+    module = load()
+    real_run = module.subprocess.run
+    def command(argv, **kwargs):
+        # Drop the tag but retain requested update commits. This bundle still
+        # verifies/clones; only the reader readback exposes the lost ref.
+        if argv[:2] == ['git', '-C'] and 'bundle' in argv and 'create' in argv:
+            if 'source_bundle.bundle' in str(argv):
+                argv = [v for v in argv if v not in ('--all', module.REQUIRED_HISTORICAL_REF)] + ['HEAD']
+        return real_run(argv, **kwargs)
+    monkeypatch.setattr(module.subprocess, 'run', command)
+    controls = tmp_path / 'controls'
+    controls.mkdir()
+    with pytest.raises(ValueError, match='historical reader'):
+        module.preflight(path, repo, controls)
     assert list(controls.iterdir()) == []

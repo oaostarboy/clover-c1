@@ -333,6 +333,8 @@ def main(a):
     # replacement-origin contract has independent review and native evidence.
     if a.setup == 'troy':
         raise RuntimeError('Public Task origin contract unresolved; no synthetic Task acceptance')
+    import account_update
+    account_update.historical_reader_identity(a.source)
     uv = bootstrap.resolve(a.uv)
     for value in [a.target, a.tree, a.old, a.candidate]:
         assert re.fullmatch('[0-9a-f]{40}', value)
@@ -717,7 +719,13 @@ def main(a):
         proof.check_receipt(read_json(receipt), began, a.old, a.target)
         shutil.copy2(service['path'], evidence / 'installed-after.definition')
         dump(evidence / 'state-db-check.json', legacy.state_db_check(home))
-        dump(evidence / 'state-db-readable-by-1.5.6.json', legacy.readable_by_156(source, home, python(live), 'native-inflight', scratch))
+        # Only the archive comes from immutable control history. The frozen
+        # reader still opens this installed home's real DB with its live Python.
+        reader_archive = account_update.historical_archive_identity(a.source, scratch)
+        dump(evidence / 'historical-reader-archive.json', reader_archive)
+        dump(evidence / 'state-db-readable-by-1.5.6.json', legacy.readable_by_156(a.source, home, python(live), 'native-inflight', scratch))
+        assert account_update.digest(scratch / 'v156.tar') == reader_archive['archive_sha256']
+        assert account_update.historical_reader_identity(a.source) == account_update.READER_PIN
         if large_lane:
             assert health_watch.wait(timeout=120) == 0, 'large state first health failed'
             run([live_python, HELPERS/'legacy156_large_state.py', 'rollback', '--source',source,

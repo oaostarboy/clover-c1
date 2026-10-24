@@ -1,5 +1,35 @@
 # Windows owner/worker proof (test-only)
 
+## Historical database reader: immutable control history
+
+`windows_update.py` passes **`a.source` only for the frozen reader's archive**;
+`home`, `python(live)`, session and scratch remain the actual installed targets.
+A released shallow/main-only installed checkout is not required to carry tags.
+The pinned `93cf13e9f66be56428993402c1e80422d9005d85` reader remains unchanged.
+
+Before staging or account creation, `account_update.py` requires the literal
+`refs/tags/v1.5.6`, its approved annotated object, peeled commit, tree and reader
+blob/SHA256. Missing history, a different release alias or any identity mismatch
+fails closed. The source bundle explicitly includes this ref; an actual clone
+must read back its complete history, identical identity and every proof blob.
+The workflow and direct account entry already call this preflight before any
+credentials/account; full-history source/helper checkouts remain mandatory.
+
+The driver independently validates the control history before installation, then
+persists `historical-reader-archive.json` (exact ref/object/commit/tree/blob and
+deterministic archive SHA256) before the old reader runs. It compares the archive
+hash after the unchanged old helper recreates and reads it. It never fetches tags
+into or changes the installed checkout.
+
+`test_historical_reader.py` exercises actual staging → bundles → child clones →
+old Git archive → old SessionDB, with a real new-schema private database seeded
+by the exact candidate. It reproduces archive exit128 on a shallow/no-tag install,
+then reads that same DB using control history and the installed private Python.
+It checks complete message fields, transitive import origins, unchanged DB bytes
+and a clean, still-tagless install. This is **local Linux fixture evidence**, not
+native upgrade acceptance. No native run is authorized by this repair; the prior
+0/8 acceptance and unknown cleanup observation remain failures.
+
 ## Real-account prerequisite build: partial, review required
 
 The synthetic restricted-token launcher is removed. `restricted_token.py` now

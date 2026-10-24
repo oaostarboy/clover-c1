@@ -15,6 +15,61 @@ import time
 import tempfile
 
 
+REQUIRED_HISTORICAL_REF = 'refs/tags/v1.5.6'
+# Official GitHub ref read once during this fixture repair. Never replace a
+# published tag, accept a similarly named release, or fetch into an install.
+READER_PIN: dict = dict(
+    ref=REQUIRED_HISTORICAL_REF,
+    object='9037790894e70240857a30cbf7a6cd1658834d8a',
+    commit='32d3e6728c71d1f7c8684b7b41ac1785cb8117a9',
+    tree='a600da1247dd260998dda62f865ff988cdf9eb42',
+    reader_blobs={'clover_state.py': dict(
+        oid='77933270188e4a8fb3d28c9fd61e774a561c204a',
+        sha256='9cf23a0db6ffd60339a0e437a5b1bdfa10bf5477a518ffe4afecadbd4a48f495')})
+
+
+def historical_reader_identity(repo):
+    """Verify the literal approved tag before staging or any account exists."""
+    pin = READER_PIN
+    if pin['ref'] != REQUIRED_HISTORICAL_REF:
+        raise ValueError('Invalid historical reader ref')
+    def git(*args):
+        return subprocess.run(['git', '--no-replace-objects', '-C', str(repo), *args],
+                              check=True, capture_output=True).stdout
+    try:
+        git('check-ref-format', pin['ref'])
+        def rev(ref):
+            return git('rev-parse', '--verify', ref).decode().strip()
+        actual = dict(ref=pin['ref'], object=rev(pin['ref']),
+                      commit=rev(pin['ref'] + '^{commit}'), tree=rev(pin['ref'] + '^{tree}'),
+                      reader_blobs={name: dict(oid=rev(pin['ref'] + ':' + name),
+                          sha256=hashlib.sha256(git('show', pin['ref'] + ':' + name)).hexdigest())
+                          for name in pin['reader_blobs']})
+    except subprocess.CalledProcessError as exc:
+        raise ValueError('Required historical reader history missing') from exc
+    if actual != pin:
+        raise ValueError('Pinned historical reader identity or proof blob mismatch')
+    return actual
+
+
+def historical_archive_identity(repo, scratch):
+    """Persist identity + archive hash before executing the frozen old reader.
+
+    The pinned helper recreates this exact deterministic archive at v156.tar;
+    its caller compares that hash after the real read as well.
+    """
+    identity = historical_reader_identity(repo)
+    archive = Path(scratch) / 'v156.tar'
+    subprocess.run(['git', '--no-replace-objects', '-C', str(repo), 'archive',
+                    '--format=tar', '-o', str(archive), REQUIRED_HISTORICAL_REF],
+                   check=True, capture_output=True)
+    return dict(identity, archive_sha256=digest(archive))
+
+
+def source_refs(request):
+    return [request[k] for k in ('old', 'candidate', 'target')] + [REQUIRED_HISTORICAL_REF]
+
+
 def require_complete(repo, refs):
     """Never turn a shallow boundary into an apparently self-contained bundle."""
     def git(*args):
@@ -79,7 +134,8 @@ def repo_identity(repo, refs) -> dict:
 
 def verify_packaging(config, fixture, stage):
     request = config['request']
-    refs = [request[k] for k in ('old', 'candidate', 'target')]
+    refs = source_refs(request)
+    reader = historical_reader_identity(request['source'])
     originals = dict(source_bundle=repo_identity(request['source'], refs),
                      fixture_bundle=repo_identity(fixture, ['HEAD']))
     if originals['source_bundle']['refs'][request['target']]['tree'] != request['tree']:
@@ -93,9 +149,12 @@ def verify_packaging(config, fixture, stage):
         source, cloned_fixture = clone_bundles(config, control, command)
         for key, clone, required in [('source_bundle', source, refs),
                                      ('fixture_bundle', cloned_fixture, ['HEAD'])]:
+            if key == 'source_bundle' and historical_reader_identity(clone) != reader:
+                raise ValueError('Cloned historical reader changed')
             require_complete(clone, required)
             if repo_identity(clone, required) != originals[key]:
                 raise ValueError('Bundle clone identity or fixture blob mismatch')
+    originals['source_bundle']['historical_reader'] = reader
     return originals
 
 
@@ -107,13 +166,14 @@ def preflight(request_file, fixture, control_root):
 
 def prepare(request_file, profile, fixture):
     request = validate_request(json.loads(Path(request_file).read_text(encoding='utf-8-sig')))
-    require_complete(request['source'], [request[k] for k in ('old', 'candidate', 'target')])
+    historical_reader_identity(request['source'])
+    require_complete(request['source'], source_refs(request))
     require_complete(fixture, ['HEAD'])
     stage = Path(profile) / 'update-inputs'
     stage.mkdir()  # Fresh private account profile only; never overwrite inputs.
-    config: dict = dict(request=request)
+    config: dict = dict(request=request, source_refs=source_refs(request))
     for key, repo, refs in [('source_bundle', request['source'],
-                             [request[k] for k in ('old', 'candidate', 'target')]),
+                             source_refs(request)),
                             ('fixture_bundle', str(fixture), ['HEAD'])]:
         path = stage / (key + '.bundle')
         subprocess.run(['git', '-C', str(repo), 'bundle', 'create', str(path), '--all', *refs],
