@@ -328,11 +328,20 @@ def main(a):
     assert spec is not None and spec.loader is not None
     bootstrap = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bootstrap)
+    # The legacy direct-pythonw Task does not prove the public launch contract.
+    # Keep its live-Schedule assertion below; refuse acceptance until the precise
+    # replacement-origin contract has independent review and native evidence.
+    if a.setup == 'troy':
+        raise RuntimeError('Public Task origin contract unresolved; no synthetic Task acceptance')
     uv = bootstrap.resolve(a.uv)
     for value in [a.target, a.tree, a.old, a.candidate]:
         assert re.fullmatch('[0-9a-f]{40}', value)
     evidence = Path(a.evidence).resolve()
     evidence.mkdir(parents=True, exist_ok=True)
+    if WINDOWS:
+        import restricted_token
+        restricted_token.main(['--evidence', str(evidence / 'driver-token.json'),
+                               '--expected-sid', os.environ['CLOVER_FIXTURE_ACCOUNT_SID']])
     scratch = Path.home() / ('owner-worker-' + os.environ['GITHUB_RUN_ID'])
     scratch.mkdir()
     home = Path(os.environ['LOCALAPPDATA']) / 'clover'
@@ -342,7 +351,7 @@ def main(a):
     home.mkdir()
     env = {k: v for k, v in os.environ.items() if k in {
         'PATH', 'HOME', 'OS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'TMPDIR', 'RUNNER_TEMP', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT',
-        'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'USERDOMAIN', 'USERNAME', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PSModuleAnalysisCachePath'}}
+        'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'USERDOMAIN', 'USERNAME', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PSModuleAnalysisCachePath', 'CLOVER_FIXTURE_ACCOUNT_SID'}}
     env.update(CLOVER_HOME=str(home), CLOVER_PROOF_HELPERS=str(HELPERS), UV_PYTHON_INSTALL_DIR=str(scratch / 'python'),
         UV_CACHE_DIR=str(scratch / 'cache'), PYTHONUNBUFFERED='1')
     uv_version = subprocess.check_output([uv, '--version'], cwd=scratch, env=env, text=True).strip()
@@ -466,7 +475,8 @@ def main(a):
             # Use the supported gateway install CLI, declining UAC in an
             # actually non-admin token. No private entry-generation helpers.
             run(['pwsh', '-NoProfile', '-File', Path(script).with_name('register_startup.ps1'),
-                 '-Python', python(live), '-Source', source, '-Evidence', evidence],
+                 '-Python', python(live), '-Source', source, '-Evidence', evidence,
+                 '-ExpectedSid', os.environ['CLOVER_FIXTURE_ACCOUNT_SID']],
                 'gateway-startup-registration', timeout=180)
             service=call('service','service-definition')
             if a.setup == 'troy':

@@ -52,6 +52,12 @@ try {
        clover_home=$env:CLOVER_HOME; startup=$startup; pid=$PID } |
         ConvertTo-Json | Set-Content (Join-Path $c.evidence 'access.json') -Encoding utf8
 
+    if ($c.PSObject.Properties.Name -contains 'update') {
+        # This synchronous child owns installer, running gateway, actual update,
+        # completion/state checks and the full stability window before logoff.
+        & $c.python -I (Join-Path $PSScriptRoot 'account_update.py') 'run' --config $Config
+        if ($LASTEXITCODE -ne 0) { throw 'Full Startup update driver failed' }
+    }
 } catch {
     # Fixed safe diagnostic only; never serialize arbitrary exceptions/locals/env.
     [IO.File]::WriteAllText((Join-Path $c.evidence 'child-failure.txt'), 'Actual account child failed; inspect phase-specific nonsecret receipts')

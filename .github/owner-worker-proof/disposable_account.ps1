@@ -1,5 +1,6 @@
 param([Parameter(Mandatory=$true)][string]$Python,
-      [Parameter(Mandatory=$true)][string]$Evidence)
+      [Parameter(Mandatory=$true)][string]$Evidence,
+      [string]$RequestFile)
 $ErrorActionPreference = 'Stop'
 Set-StrictMode -Version Latest
 . (Join-Path $PSScriptRoot 'account_common.ps1')
@@ -108,6 +109,12 @@ public static class CloverDisposableProfile {
     # The child creates and tests its own per-test Clover home.
     $config = @{ expected_sid=$sid; runner_sid=$runner.User.Value; profile=$profile;
         python=$Python; evidence=$childEvidence; protected=$protected }
+    if ($RequestFile) {
+        $updateConfig = Join-Path $Evidence 'update-inputs.json'
+        & $Python -I (Join-Path $PSScriptRoot 'account_update.py') 'prepare' --request $RequestFile --profile $profile --output $updateConfig
+        if ($LASTEXITCODE -ne 0) { throw 'Private update input staging failed' }
+        $config.update = Get-Content -LiteralPath $updateConfig -Raw | ConvertFrom-Json
+    }
     $configPath = Join-Path $Evidence 'request.json'
     $config | ConvertTo-Json -Depth 8 | Set-Content -LiteralPath $configPath -Encoding utf8
     @{ sid=$sid; runner_sid=$runner.User.Value; name=$name; profile=$profile;
@@ -131,13 +138,18 @@ public static class CloverDisposableProfile {
     # Never capture/render ProcessStartInfo or a native exception with credentials.
     try { if (-not $process.Start()) { throw 'start returned false' } }
     catch { throw 'Credentialed process launch failed (details deliberately redacted)' }
-    $limit = 90000
+    $limit = if ($RequestFile) { 4560000 } else { 90000 }
     if (-not $process.WaitForExit($limit)) { throw 'Owned account child timed out' }
     $childExit = $process.ExitCode
     $receiptPath = Join-Path $childEvidence 'access.json'
     if (-not (Test-Path -LiteralPath $receiptPath)) { throw 'No actual child receipt; never infer logon from launch success' }
     $result = Get-Content -LiteralPath $receiptPath -Raw | ConvertFrom-Json
     Assert-AccountResult -Result $result -ExitCode $childExit -ExpectedSid $sid -RunnerSid $runner.User.Value -Profile $profile -CloverHome $childEnv.CLOVER_HOME
+    if ($RequestFile) {
+        . (Join-Path $PSScriptRoot 'account_update_contract.ps1')
+        $updateResult = Get-Content -LiteralPath (Join-Path $childEvidence 'update-result.json') -Raw | ConvertFrom-Json
+        Assert-AccountUpdateResult -Result $updateResult -ExpectedSid $sid -Profile $profile -Request $config.update.request
+    }
     $passed = $true
 } finally {
     # Continue all cleanup steps on failure. Every target is the unique created SID.
@@ -214,7 +226,8 @@ public static class CloverDisposableProfile {
         if ($secret) { $secret.Dispose() }
         @{ passed=($passed -and $cleanupPassed); exit=$childExit; cleanup_passed=$cleanupPassed;
            account_created=($null -ne $sid); profile_created=($null -ne $profile);
-           credentials_recorded=$false; installer_runs=0; update_cases=0 } |
+           credentials_recorded=$false; update_requested=([bool]$RequestFile);
+           update_accepted=([bool]$RequestFile -and $passed -and $cleanupPassed) } |
             ConvertTo-Json | Set-Content (Join-Path $Evidence 'RESULT.json') -Encoding utf8
     }
 }
