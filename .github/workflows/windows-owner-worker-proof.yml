@@ -1,0 +1,146 @@
+name: Windows owner-worker exact-source proof
+# Test-only branch. No release, secrets, live gateways, replacement refs or retries.
+on:
+  push:
+    branches: ['clover-subagent/subagent-sa-0-af0ff5ad']
+    paths:
+      - '.github/owner-worker-proof/**'
+      - '.github/workflows/windows-owner-worker-proof.yml'
+permissions:
+  contents: read
+concurrency:
+  group: owner-worker-${{ github.run_id }}
+  cancel-in-progress: false
+jobs:
+  plan:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    outputs:
+      mode: ${{ steps.pins.outputs.mode }}
+      target: ${{ steps.pins.outputs.target }}
+      target_tree: ${{ steps.pins.outputs.target_tree }}
+      historical_helpers: ${{ steps.pins.outputs.historical_helpers }}
+      matrix: ${{ steps.pins.outputs.matrix }}
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          persist-credentials: false
+      - id: pins
+        run: python .github/owner-worker-proof/plan.py .github/owner-worker-proof/pins.json "$RUNNER_TEMP/evidence/plan.json"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: owner-worker-plan-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+  native-safety:
+    name: Native Windows child identity and refusal controls
+    needs: plan
+    runs-on: windows-2025
+    timeout-minutes: 35
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: source
+          ref: ${{ needs.plan.outputs.target }}
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+          enable-cache: false
+      - name: Locked native test environment
+        working-directory: source
+        run: uv sync --locked --python 3.11 --extra all --extra dev --extra messaging
+      - name: Exercise real native processes plus retained product safety contracts
+        working-directory: source
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force "$env:RUNNER_TEMP/evidence" | Out-Null
+          uv run --no-sync python -m pytest -q -o addopts= --timeout=90 --timeout-method=thread `
+            tests/clover_cli/test_windows_process_witness_native.py `
+            tests/clover_cli/test_windows_handoff_clock_native.py `
+            tests/clover_cli/test_update_delivery_guard.py `
+            tests/clover_cli/test_update_delivery_guard_wrappers.py `
+            tests/clover_cli/test_legacy_gateway_restart_idle_wait.py `
+            ../helpers/.github/owner-worker-proof/test_owner_worker_native.py `
+            --junitxml="$env:RUNNER_TEMP/evidence/native-safety.xml"
+          exit $LASTEXITCODE
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: owner-worker-native-safety-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+          if-no-files-found: error
+  updates:
+    name: Windows / ${{ matrix.caller }} / ${{ matrix.setup }} / ${{ matrix.entry }}
+    needs: plan
+    if: needs.plan.outputs.mode == 'candidate'
+    runs-on: windows-2025
+    timeout-minutes: 80
+    strategy:
+      fail-fast: false
+      matrix: ${{ fromJSON(needs.plan.outputs.matrix) }}
+    env:
+      PYTHONUTF8: '1'
+      PYTHONIOENCODING: utf-8
+      GIT_CONFIG_COUNT: '1'
+      GIT_CONFIG_KEY_0: core.autocrlf
+      GIT_CONFIG_VALUE_0: 'false'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: helpers
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: historical
+          ref: ${{ needs.plan.outputs.historical_helpers }}
+          persist-credentials: false
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
+        with:
+          path: source
+          ref: ${{ needs.plan.outputs.target }}
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.9.28'
+          enable-cache: false
+      - name: Prepare exact candidate or candidate-plus-marker target
+        shell: bash
+        env:
+          CANDIDATE_SHA: ${{ needs.plan.outputs.target }}
+          CANDIDATE_TREE: ${{ needs.plan.outputs.target_tree }}
+          CALLER: ${{ matrix.caller }}
+        run: python helpers/.github/owner-worker-proof/target.py source "$RUNNER_TEMP/evidence"
+      - name: Real installer-shipped Startup VBS or native Scheduled Task; no driver restart
+        shell: bash
+        env:
+          OLD_SHA: ${{ matrix.old }}
+          ENTRY: ${{ matrix.entry }}
+          SETUP: ${{ matrix.setup }}
+          TURN_MODE: ${{ matrix.turn_mode }}
+          CLOVER_PROOF_HELPERS: ${{ github.workspace }}/historical/.github/native-proof
+        run: |
+          set -euo pipefail
+          uv run --no-project --with psutil python helpers/.github/owner-worker-proof/windows_update.py \
+            --source "$GITHUB_WORKSPACE/source" --old "$OLD_SHA" --entry "$ENTRY" \
+            --setup "$SETUP" --turn-mode "$TURN_MODE" --target "$UPDATE_TARGET" --tree "$UPDATE_TREE" \
+            --evidence "$RUNNER_TEMP/evidence"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        if: always()
+        with:
+          name: owner-worker-${{ matrix.caller }}-${{ matrix.setup }}-${{ matrix.entry }}-${{ github.run_id }}
+          path: ${{ runner.temp }}/evidence
+          include-hidden-files: true
+          if-no-files-found: error

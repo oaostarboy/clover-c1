@@ -1,0 +1,11 @@
+{
+  "mode": "baseline",
+  "target": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+  "historical_helpers": "93cf13e9f66be56428993402c1e80422d9005d85",
+  "old_callers": {
+    "1.5.6-suni": "9535350bee1d57cf7e466672e6f416403886bec1",
+    "1.5.8": "0c8f3cd0e0ba6caca6948e13f9de92ba519c2029",
+    "1.5.9": "3b54f413376eb99f8b83bfd4a0a340d01825014d"
+  },
+  "candidate_handoff": "Parent must supply exact reviewed commit and tree. baseline is not fixed acceptance."
+}
