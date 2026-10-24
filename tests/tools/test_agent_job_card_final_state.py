@@ -6,10 +6,12 @@ one worker per parser, each exiting 0:
 
 * a worker that reported a verified result -> done mark, summary shown;
 * a worker whose success the observer cannot verify (``none`` parser, or a
-  ``clover-activity`` stream that never wrote a ``result`` record) -> an
+  ``clover-activity`` stream that never wrote a ``result`` record, or a
+  successful parser envelope with only prose and no task verdict) -> an
   explicit "exited, result not verified" end state. Not the done mark (that
   would be a false success), and not ⏳ / "ran out of steps" (it did neither).
-* a worker that really hit its turn cap keeps ⏳ / "ran out of steps".
+* a worker that really hit its turn cap uses the skin's incomplete mark and
+  keeps "ran out of steps" wording, distinct from an unverified result.
 """
 
 from __future__ import annotations
@@ -20,6 +22,7 @@ import textwrap
 
 import pytest
 
+from agent.clover_flavor import outcome_mark
 from agent.delegation_activity import bind_activity_sink
 from tests.gateway.test_delegation_activity import FakeTelegramAdapter, _make_publisher
 from tests.tools.test_agent_job_observer import (  # noqa: F401  (fixture + helpers)
@@ -33,7 +36,7 @@ CLAUDE_VERIFIED = textwrap.dedent("""
     import json
     print(json.dumps({"type": "system", "subtype": "init", "model": "claude-opus-5-5"}), flush=True)
     print(json.dumps({"type": "result", "subtype": "success", "is_error": False,
-                      "result": "All done: 3 files changed."}), flush=True)
+                      "result": "Result: done\\nAll done: 3 files changed."}), flush=True)
 """)
 CLAUDE_TURN_CAP = textwrap.dedent("""
     import json
@@ -46,17 +49,18 @@ CLOVER_VERIFIED = textwrap.dedent("""
         k["clover_activity"] = 1
         sys.stderr.write(json.dumps(k) + "\\n"); sys.stderr.flush()
     ev(event="start", model="luna-large")
-    ev(event="result", status="completed", text="All done: 3 files changed.")
+    ev(event="result", status="completed", text="Result: done\\nAll done: 3 files changed.")
     print("All done: 3 files changed.")
 """)
+# Same successful parser envelopes, but without authoritative task verdicts.
+CLAUDE_PROSE_ONLY = CLAUDE_VERIFIED.replace("Result: done\\n", "")
+CLOVER_PROSE_ONLY = CLOVER_VERIFIED.replace("Result: done\\n", "")
 CLOVER_NO_RESULT = textwrap.dedent("""
     import json, sys
     sys.stderr.write(json.dumps({"clover_activity": 1, "event": "start", "model": "luna-large"}) + "\\n")
     print("All done.")
 """)
 LIFECYCLE_ONLY = "print('All done: 3 files changed.')\n"
-
-UNVERIFIED_MARK = "❔"
 
 
 async def _run_worker(hermetic_terminal, name, body, parser):  # noqa: F811
@@ -93,6 +97,8 @@ async def test_verified_success_ends_on_the_done_mark(hermetic_terminal, name, b
 @pytest.mark.parametrize("name,body,parser", [
     ("lifecycle_only", LIFECYCLE_ONLY, "none"),
     ("clover_no_result", CLOVER_NO_RESULT, "clover-activity"),
+    ("claude_prose_only", CLAUDE_PROSE_ONLY, "claude-stream-json"),
+    ("clover_prose_only", CLOVER_PROSE_ONLY, "clover-activity"),
 ])
 async def test_unverifiable_clean_exit_says_so_instead_of_hourglass(
     hermetic_terminal, name, body, parser  # noqa: F811
@@ -105,7 +111,8 @@ async def test_unverifiable_clean_exit_says_so_instead_of_hourglass(
     # Not the "still waiting" hourglass, and not the turn-cap wording.
     assert not head.startswith("⏳"), final
     assert "ran out of steps" not in final, final
-    assert head.startswith(UNVERIFIED_MARK), final
+    assert head.startswith(outcome_mark("unverified", "☘️")), final
+    assert not head.startswith(outcome_mark("done", "✅")), final
     assert "exited" in final and "not verified" in final, final
 
 
@@ -115,5 +122,9 @@ async def test_real_turn_cap_keeps_the_hourglass_and_wording(hermetic_terminal):
         hermetic_terminal, "turn_cap", CLAUDE_TURN_CAP, "claude-stream-json"
     )
     assert snap["state"] == "incomplete", snap
-    assert final.splitlines()[0].startswith("⏳"), final
+    head = final.splitlines()[0]
+    assert head.startswith(outcome_mark("unfinished", "☘️")), final
+    assert not head.startswith("✅"), final
+    assert not head.startswith(outcome_mark("done", "✅")), final
+    assert "not verified" not in final, final
     assert "ran out of steps before finishing" in final, final

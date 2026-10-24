@@ -106,7 +106,7 @@ async def settle():
 
 
 @pytest.fixture
-def native(harness, monkeypatch):
+def native(harness, monkeypatch, _clean_registry):
     """Real admission, async registry, receipt and child-event relay; fake work."""
     jobs = {}
     releases = []
@@ -114,7 +114,7 @@ def native(harness, monkeypatch):
 
     def build(**kw):
         child = build_child(**kw)
-        child._subagent_id = "native-child-" + kw["parent_agent"]._current_turn_id
+        child._subagent_id = f"native-child-{kw['parent_agent']._current_turn_id}-{kw['task_index']}"
         child.session_id = child._subagent_id
         child._progress_identity_ref = {"session_id": child.session_id}
         child.tool_progress_callback = dt._build_child_progress_callback(
@@ -129,8 +129,8 @@ def native(harness, monkeypatch):
         cb = child.tool_progress_callback
         cb("subagent.start")
         cb("tool.started", "read_file", "links.txt", {"path": "links.txt"})
-        job["cb"] = cb
-        job["started"].set()
+        job["callbacks"][task_index] = cb
+        job["started"][task_index].set()
         job["release"].wait(45)
         return {"task_index": task_index, "status": "completed",
                 "summary": "Plain summary: Finished the offline check.", "api_calls": 1,
@@ -140,7 +140,7 @@ def native(harness, monkeypatch):
     monkeypatch.setattr(dt, "_run_single_child", run)
     monkeypatch.setattr(dt, "_get_max_async_children", lambda: 8)
 
-    async def launch(pub, turn_id, *, say="", title="checking links", model="claude-sonnet-5-5"):
+    async def launch(pub, turn_id, *, say="", title="checking links", model="claude-sonnet-5-5", tasks=None):
         root = _root()
         root.platform = "telegram"
         root.model = model
@@ -148,7 +148,9 @@ def native(harness, monkeypatch):
         root.tool_progress_callback = _turn_runner(pub).progress_callback
         release = threading.Event()
         releases.append(release)
-        job = jobs[turn_id] = {"release": release, "started": threading.Event()}
+        tasks = tasks or [{"goal": title, "title": title, "steps": ["inspect links", "verify result"]}]
+        job = jobs[turn_id] = {"release": release, "callbacks": {},
+                              "started": [threading.Event() for _ in tasks]}
         bind_activity_sink(pub)
         tokens = set_session_vars(platform="telegram", source="telegram", chat_id=pub._chat_id,
                                   thread_id=str((pub._metadata or {}).get("thread_id") or ""),
@@ -157,13 +159,14 @@ def native(harness, monkeypatch):
         try:
             result = json.loads(await asyncio.to_thread(
                 dt.delegate_task, parent_agent=root,
-                tasks=[{"goal": title, "title": title, "steps": ["inspect links", "verify result"]}],
+                tasks=tasks,
                 background=True, handoff={"work": title, "outcome": "a checked result", "say": say},
             ))
         finally:
             clear_session_vars(tokens)
         assert result["status"] == "dispatched", result
-        assert await asyncio.to_thread(job["started"].wait, 3)
+        for started in job["started"]:
+            assert await asyncio.to_thread(started.wait, 3)
         receipts = fl.own_dispatch_receipts(root)
         assert len(receipts) == 1 and receipts[0].turn_id == turn_id
         reply = rb._ack_text(receipts, root, [])
@@ -172,14 +175,23 @@ def native(harness, monkeypatch):
         for editor in da._ACK_EDITORS.values():
             editor._min_interval = 0
         await asyncio.sleep(da.ACK_MIN_INTERVAL + 0.05)  # First finalize=True edit.
-        cb = job["cb"]
-        cb.delegation_id = result["delegation_id"]
-        cb.release = release
-        return cb
+        callbacks = tuple(job["callbacks"][index] for index in range(len(tasks)))
+        for cb in callbacks:
+            cb.delegation_id = result["delegation_id"]
+            cb.release = release
+        callbacks[0].callbacks = callbacks
+        return callbacks[0]
 
     yield launch
     for release in releases:
         release.set()
+    # Publication belongs to this fixture too. Join before _clean_registry
+    # clears the batch records, otherwise a released child races the next test.
+    from tools import async_delegation as ad
+
+    executor = ad._executor
+    ad._reset_for_tests(drain_timeout=5)
+    assert executor is None or all(not worker.is_alive() for worker in executor._threads)
 
 
 @pytest.mark.asyncio
@@ -211,7 +223,7 @@ async def test_native_empty_say_handoffs_join_and_follow_after_160_turns(monkeyp
         assert {p.delegation_id for p in editor.card.parts} == {first.delegation_id, second.delegation_id}
         for did in (first.delegation_id, second.delegation_id):
             assert delegation_inflight.read_record(did)["card"]["message_id"] == str(current)
-        first("tool.finished", "read_file", "links.txt")
+        first("tool.completed", "read_file", "links.txt")
         second("tool.started", "web_search", "check links", {"query": "check links"})
         await settle()
         assert int(editor._message_id) == current

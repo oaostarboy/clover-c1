@@ -14,6 +14,7 @@ import tools.async_delegation as ad
 import tools.delegate_tool as dt
 from agent import ack_checklist as ac
 from agent import foreground_time_limit as fl
+from agent.task_outcome import task_outcome
 
 pytestmark = pytest.mark.unified_card
 
@@ -185,8 +186,9 @@ def test_todo_events_tick_only_their_own_helpers_steps():
 def test_a_finished_helper_keeps_its_steps_with_final_icons():
     card = _card3()
     ac.on_child_event("subagent.todo", delegation_id="dm", task_index=0, todos=_todos("completed", "in_progress"))
+    summary = "Result: done\nPlain summary: Tidy."
     ac.on_child_event("subagent.complete", delegation_id="dm", task_index=0, task_count=3, status="completed",
-                      summary="Result: done\nPlain summary: Tidy.")
+                      summary=summary, task_outcome=task_outcome({}, summary))
     ac.on_child_event("subagent.complete", delegation_id="dm", task_index=2, task_count=3, status="failed",
                       summary="Plain summary: broke.")
     kids = card.parts[0].checklist.kids
@@ -215,8 +217,9 @@ def test_three_helpers_render_name_steps_tools_stats_inside_one_quote():
     ac.on_child_event("subagent.todo", delegation_id="dm", task_index=2, todos=_todos("completed", "in_progress", "pending"))
     ac.on_child_event("subagent.tool", delegation_id="dm", task_index=2, task_count=3, tool_name="read_file",
                       preview="x.md", args={"path": "x.md"}, tool_call_id="t", tool_count=1)
+    summary = "Result: done\nPlain summary: Tidy."
     ac.on_child_event("subagent.complete", delegation_id="dm", task_index=0, task_count=3, status="completed",
-                      summary="Result: done\nPlain summary: Tidy.")
+                      summary=summary, task_outcome=task_outcome({}, summary))
     lines = card.render().splitlines()
     assert lines[0].startswith("\U0001f500 **3 subagents**") and "1 of 3 done" in lines[0]
     assert lines[1] == "> **checking the 3 sites**"
@@ -248,8 +251,9 @@ def test_over_six_helpers_finished_ones_still_collapse_to_one_line():
     card = ac.card_for([r])
     for i in range(n):
         ac.on_child_event("subagent.start", delegation_id="big", task_index=i, task_count=n, title=f"site {i}")
+    summary = "Result: done\nPlain summary: Fine."
     ac.on_child_event("subagent.complete", delegation_id="big", task_index=0, task_count=n, status="completed",
-                      summary="Result: done\nPlain summary: Fine.")
+                      summary=summary, task_outcome=task_outcome({}, summary))
     text = card.render()
     line = next(ln for ln in text.splitlines() if "site 0" in ln)
     assert line.startswith("> \U0001f340 **site 0** \u00b7 done"), "finished helper = one line"
