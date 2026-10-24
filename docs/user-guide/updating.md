@@ -37,6 +37,32 @@ a running-gateway update. WAL files, unreadable headers, unknown ownership and
 incomplete inventories still stop the update. Built-in database openers retain their vulnerable-SQLite WAL fallback.
 An offline runtime repair is retried by a later update.
 
+## Clover 1.5.8: refusal before downloading
+
+The released 1.5.8 updater checks a live, owner-bound restart capability **before
+pulling new code**. A secondary health reporter could replace that owner's
+identity in the shared status file and remove its capability. A later owner
+active-work write can restore the PID without restoring the capability.
+New status writers preserve an already validated owner's identity and contract;
+only the loaded gateway runner can establish a missing contract.
+
+A release downloaded elsewhere does not repair this already loaded 1.5.8
+caller. If its receipt says the capability is missing and no pull occurred,
+leave the working gateway running and retain the receipt. Do not repeatedly
+retry, edit the status field, clear pending records, reload modules, or use an
+ordinary chat restart as a safety bypass. Request operator-managed recovery.
+A transition needs either a supported owner-side attestation operation (not
+provided by the existing observation-only control socket), or separately
+approved maintenance after all producers, reply carriers, delivery ACKs and
+uncertain external actions have been reconciled. Zero active agents alone is
+not sufficient. This is not a request for the user to run terminal commands.
+
+An unidentified supervisor/wrapper PID reported after a 1.5.6 pull is a
+**different condition**. Its serving child can legitimately own the status
+file; a non-serving parent must instead be positively identified as the exact
+wrapper of that identified child. Do not create a parent status record or
+waive PID-reuse/foreign-owner checks to get past that refusal.
+
 ## Windows: the first update from 1.5.6
 
 The released Windows updater pauses and may force-stop the gateway **before**

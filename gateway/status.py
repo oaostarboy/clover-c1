@@ -24,6 +24,7 @@ import sys
 import threading
 import time
 from datetime import datetime, timezone
+from functools import wraps
 from dataclasses import dataclass
 from pathlib import Path
 from clover_constants import get_clover_home, _get_platform_default_clover_home
@@ -1095,6 +1096,28 @@ def write_pid_file() -> None:
         raise
 
 
+def _serialize_runtime_status(write):
+    """Serialize the entire merge, not just atomic replacement of its result."""
+    @wraps(write)
+    def locked_write(*args, **kwargs):
+        path = _get_runtime_status_path().with_suffix(".lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        # Separate from gateway.lock: status reporters must never acquire or
+        # release the lifetime ownership lock. Never unlink this lock file.
+        with open(path, "a+", encoding="utf-8") as handle:
+            deadline = time.monotonic() + 1.0
+            while not _try_acquire_file_lock(handle):
+                if time.monotonic() >= deadline:
+                    raise TimeoutError("runtime status writer is busy")
+                time.sleep(0.01)
+            try:
+                return write(*args, **kwargs)
+            finally:
+                _release_file_lock(handle)
+    return locked_write
+
+
+@_serialize_runtime_status
 def write_runtime_status(
     *,
     gateway_state: Any = _UNSET,
@@ -1117,7 +1140,40 @@ def write_runtime_status(
     payload = _read_json_file(path) or _build_runtime_status_record()
     previous_payload = copy.deepcopy(payload)
     current_record = _build_pid_record()
-    if (payload.get("pid"), payload.get("start_time")) != (
+    owner = _read_pid_record()
+    health_writer = bool(owner and (owner.get("pid"), owner.get("start_time")) != (
+        current_record.get("pid"), current_record.get("start_time")
+    ))
+    if health_writer and owner is not None:
+        # Only health fields are subordinate-owned. In particular, a freshly
+        # imported helper must not attest a contract for the loaded runner.
+        if clear_profile_platforms or any(value is not _UNSET for value in (
+            gateway_state, exit_reason, restart_requested, active_agents,
+            served_profiles, update_restart_capability,
+        )):
+            return
+        # A platform/session-store reporter is not the gateway owner. Preserve
+        # ONLY an already owner-bound snapshot, never relabel its attestation
+        # (or code identity) with the reporter's PID. Unknown/replaced owners
+        # cannot be repaired by a health writer; wait for the loaded runner.
+        if not (
+            owner.get("kind") == _GATEWAY_KIND
+            and payload.get("kind") == _GATEWAY_KIND
+            and owner.get("start_time") is not None
+            and (payload.get("pid"), payload.get("start_time")) == (
+                owner.get("pid"), owner.get("start_time")
+            )
+            and isinstance(owner.get("clover_home"), str)
+            and owner["clover_home"].strip()
+            and isinstance(payload.get("clover_home"), str)
+            and payload["clover_home"].strip()
+            and _same_clover_home(owner["clover_home"], _get_process_clover_home())
+            and _same_clover_home(payload["clover_home"], _get_process_clover_home())
+            and _pid_exists(owner["pid"])
+            and _get_process_start_time(owner["pid"]) == owner["start_time"]
+        ):
+            return
+    if not health_writer and (payload.get("pid"), payload.get("start_time")) != (
         current_record.get("pid"), current_record.get("start_time")
     ):
         payload.pop("update_restart_capability", None)
@@ -1138,15 +1194,14 @@ def write_runtime_status(
             for key, value in platforms.items()
             if not isinstance(key, str) or ":" not in key
         }
-    payload["kind"] = current_record["kind"]
-    payload["pid"] = current_record["pid"]
-    payload["argv"] = current_record["argv"]
-    payload["start_time"] = current_record["start_time"]
+    if not health_writer:
+        payload["kind"] = current_record["kind"]
+        payload["pid"] = current_record["pid"]
+        payload["argv"] = current_record["argv"]
+        payload["start_time"] = current_record["start_time"]
+        # Code identity, like restart capability, belongs to the loaded owner.
+        payload.update(_get_code_identity_fields())
     payload["updated_at"] = _utc_now_iso()
-    # Re-stamp code identity on every write: the file can outlive the process
-    # that created it, and the top-level record must always describe the
-    # CURRENT writer's code (per-process cached, so this is a dict copy).
-    payload.update(_get_code_identity_fields())
 
     if gateway_state is not _UNSET:
         payload["gateway_state"] = gateway_state
@@ -1189,19 +1244,22 @@ def write_runtime_status(
             # continuous retry episode; None clears it on reconnect.
             platform_payload["retrying_since"] = retrying_since
         platform_payload["updated_at"] = _utc_now_iso()
-        # Writer identity: which PROCESS wrote this entry.  The top-level
-        # pid/start_time are refreshed on every write, so they only identify
-        # the file's most recent writer — per-entry provenance is what lets
-        # a reader (the /api/status cross-profile aggregation) distinguish
-        # "written by the current live process" from "preserved from a prior
-        # process" with exact (pid, start_time) equality instead of clock
-        # heuristics.  start_time is the same PID-reuse fingerprint the
-        # liveness checks use, so a recycled PID never masquerades as the
-        # original writer.
+        # Writer identity: which PROCESS wrote this entry. The top-level
+        # identity belongs to the validated gateway owner, not a subordinate
+        # health reporter. Per-entry provenance also distinguishes preserved
+        # entries from a prior process using exact (pid, start_time) equality
+        # instead of clock heuristics. start_time uses the PID-reuse fingerprint
+        # from liveness checks, so a recycled PID cannot masquerade as its
+        # predecessor.
         platform_payload["writer_pid"] = current_record["pid"]
         platform_payload["writer_start_time"] = current_record["start_time"]
         payload["platforms"][platform] = platform_payload
 
+    # PID ownership can change independently of the status-merge lock. Never
+    # commit a snapshot based on a predecessor's ownership observation. The
+    # updater still performs its own exact live-owner check at admission.
+    if _read_pid_record() != owner:
+        return
     _write_json_file(path, payload)
     try:
         from agent.monitoring.gateway_health import emit_runtime_status_transition
