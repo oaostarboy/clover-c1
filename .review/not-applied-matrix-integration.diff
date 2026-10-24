@@ -1,0 +1,124 @@
+diff --git a/.github/owner-worker-proof/start_troy.ps1 b/.github/owner-worker-proof/start_troy.ps1
+index 4b7b6866..5836153d 100644
+--- a/.github/owner-worker-proof/start_troy.ps1
++++ b/.github/owner-worker-proof/start_troy.ps1
+@@ -1,12 +1,16 @@
+ param([Parameter(Mandatory=$true)][string]$Python,
+-      [Parameter(Mandatory=$true)][string]$Source)
++      [Parameter(Mandatory=$true)][string]$Source,
++      [Parameter(Mandatory=$true)][string]$Evidence)
+ $ErrorActionPreference = 'Stop'
+ if ($env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONMENT -ne 'github-hosted') { throw 'Disposable hosted runner required' }
+-if (Get-ScheduledTask -TaskName 'Clover_OwnerWorker_Proof' -ErrorAction SilentlyContinue) { throw 'Refuse pre-existing task' }
+-# Same native action/principal/settings as the already exercised Troy proof.
+-$action = New-ScheduledTaskAction -Execute $Python -Argument '-m clover_cli.main gateway run' -WorkingDirectory $Source
+-$principal = New-ScheduledTaskPrincipal -UserId "$env:USERDOMAIN\$env:USERNAME" -LogonType S4U -RunLevel Limited
+-$settings = New-ScheduledTaskSettingsSet -ExecutionTimeLimit ([TimeSpan]::Zero) -MultipleInstances IgnoreNew -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries
+-Register-ScheduledTask -TaskName 'Clover_OwnerWorker_Proof' -Action $action -Principal $principal -Settings $settings | Out-Null
+-Start-ScheduledTask -TaskName 'Clover_OwnerWorker_Proof'
+-Export-ScheduledTask -TaskName 'Clover_OwnerWorker_Proof'
++if (Get-ScheduledTask -TaskName 'Clover_Gateway' -ErrorAction SilentlyContinue) { throw 'Refuse pre-existing public task' }
++Set-Location -LiteralPath $Source
++# The hosted admin account exercises the public supported Task install path.
++# No hand-built task action, principal, launcher or exported replacement XML.
++$env:CLOVER_HOME = Split-Path -Parent $Source
++$env:VIRTUAL_ENV = Split-Path -Parent (Split-Path -Parent $Python)
++& $Python -m clover_cli.main gateway install --no-start-now --start-on-login *> (Join-Path $Evidence 'task-registration-cli.log')
++if ($LASTEXITCODE -ne 0) { throw 'Public task registration failed' }
++$task = Get-ScheduledTask -TaskName 'Clover_Gateway' -ErrorAction Stop
++Export-ScheduledTask -TaskName $task.TaskName | Set-Content (Join-Path $Evidence 'public-task.xml') -Encoding utf8
++Start-ScheduledTask -InputObject $task
+diff --git a/.github/owner-worker-proof/windows_update.py b/.github/owner-worker-proof/windows_update.py
+index fbfd5450..b1dfa575 100644
+--- a/.github/owner-worker-proof/windows_update.py
++++ b/.github/owner-worker-proof/windows_update.py
+@@ -309,8 +309,8 @@ def child(a):
+             from clover_cli import gateway_windows as g
+             # Observation only: the public CLI, in a genuine limited token,
+             # must already have registered this Startup entry.
+-            path=g.get_startup_entry_path()
+-            assert path.is_file(), 'supported gateway install did not create Startup entry'
++            path = g.get_startup_entry_path() if a.setup == 'zyra' else g.get_task_script_path()
++            assert path.is_file(), 'supported gateway install did not create the selected entry'
+             result=dict(path=str(path), label=g.get_task_name())
+         else:
+             from clover_cli.gateway import get_launchd_plist_path, get_launchd_label
+@@ -463,18 +463,20 @@ def main(a):
+             trace_stop.wait(0.5)
+     try:
+         if WINDOWS:
+-            # Use the supported gateway install CLI, declining UAC in an
+-            # actually non-admin token. No private entry-generation helpers.
+-            run(['pwsh', '-NoProfile', '-File', Path(script).with_name('register_startup.ps1'),
+-                 '-Python', python(live), '-Source', source, '-Evidence', evidence],
+-                'gateway-startup-registration', timeout=180)
+-            service=call('service','service-definition')
+             if a.setup == 'troy':
+                 run(['pwsh', '-NoProfile', '-File', Path(script).with_name('start_troy.ps1'),
+-                     '-Python', python(live).with_name('pythonw.exe'), '-Source', source],
+-                    'scheduled-task-launch', timeout=90)
+-                service['task_name'] = 'Clover_OwnerWorker_Proof'
++                     '-Python', python(live), '-Source', source, '-Evidence', evidence],
++                    'public-task-registration-and-launch', timeout=180)
++                service = call('service', 'service-definition', '--setup', a.setup)
++                service['task_name'] = service['label']
+             else:
++                # The outer account fixture owns the entire driver lifetime.
++                # Its expected SID is input from account creation, not self-discovery.
++                run(['pwsh', '-NoProfile', '-File', Path(script).with_name('register_startup.ps1'),
++                     '-Python', python(live), '-Source', source, '-Evidence', evidence,
++                     '-ExpectedSid', os.environ['CLOVER_FIXTURE_ACCOUNT_SID']],
++                    'gateway-startup-registration', timeout=180)
++                service = call('service', 'service-definition', '--setup', a.setup)
+                 run(['wscript.exe','//B','//Nologo',service['path']],'startup-vbs-launch',timeout=30)
+         else:
+             run([bin, 'gateway', 'install'], 'service-install', timeout=180)
+diff --git a/.github/workflows/windows-owner-worker-proof.yml b/.github/workflows/windows-owner-worker-proof.yml
+index f2c0cccb..f368d3fe 100644
+--- a/.github/workflows/windows-owner-worker-proof.yml
++++ b/.github/workflows/windows-owner-worker-proof.yml
+@@ -139,8 +139,8 @@ jobs:
+           STATUS_LOCK_REPAIR_SHA: 27f507acb4f12c30d237471095f137007952c312
+           CALLER: ${{ matrix.caller }}
+         run: python helpers/.github/owner-worker-proof/target.py source "$RUNNER_TEMP/evidence"
+-      - name: Released installer, public Startup registration or legacy native Task; no driver restart
+-        shell: bash
++      - name: Released installer and public registration; Startup runs as disposable non-admin
++        shell: pwsh
+         env:
+           OLD_SHA: ${{ matrix.old }}
+           CANDIDATE_SHA: ${{ needs.plan.outputs.target }}
+@@ -150,11 +150,28 @@ jobs:
+           CLOVER_PROOF_HELPERS: ${{ github.workspace }}/historical/.github/native-proof
+           BOOTSTRAP_UV: ${{ steps.bootstrap-uv.outputs.uv-path }}
+         run: |
+-          set -euo pipefail
+-          uv run --no-project --with psutil python helpers/.github/owner-worker-proof/windows_update.py \
+-            --source "$GITHUB_WORKSPACE/source" --old "$OLD_SHA" --entry "$ENTRY" --candidate "$CANDIDATE_SHA" \
+-            --setup "$SETUP" --turn-mode "$TURN_MODE" --target "$UPDATE_TARGET" --tree "$UPDATE_TREE" \
+-            --evidence "$RUNNER_TEMP/evidence" --uv "$BOOTSTRAP_UV"
++          $python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
++          if (-not [IO.Path]::IsPathFullyQualified($python)) { throw 'Absolute machine Python required' }
++          $tools = "$env:RUNNER_TEMP/account-driver-tools"
++          & $env:BOOTSTRAP_UV venv --python $python $tools
++          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++          $driverPython = Join-Path $tools 'Scripts/python.exe'
++          & $env:BOOTSTRAP_UV pip install --python $driverPython psutil
++          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++          if ($env:SETUP -eq 'zyra') {
++            $request = @{ mode='update'; setup=$env:SETUP; source="$env:GITHUB_WORKSPACE/source";
++              old=$env:OLD_SHA; entry=$env:ENTRY; candidate=$env:CANDIDATE_SHA; turn_mode=$env:TURN_MODE;
++              target=$env:UPDATE_TARGET; tree=$env:UPDATE_TREE; helpers=$env:CLOVER_PROOF_HELPERS; uv=$env:BOOTSTRAP_UV }
++            $requestPath = "$env:RUNNER_TEMP/account-update-request.json"
++            $request | ConvertTo-Json | Set-Content -LiteralPath $requestPath -Encoding utf8
++            & helpers/.github/owner-worker-proof/disposable_account.ps1 -Python $driverPython -Evidence "$env:RUNNER_TEMP/evidence/account" -RequestFile $requestPath
++          } else {
++            & $driverPython helpers/.github/owner-worker-proof/windows_update.py `
++              --source "$env:GITHUB_WORKSPACE/source" --old $env:OLD_SHA --entry $env:ENTRY --candidate $env:CANDIDATE_SHA `
++              --setup $env:SETUP --turn-mode $env:TURN_MODE --target $env:UPDATE_TARGET --tree $env:UPDATE_TREE `
++              --evidence "$env:RUNNER_TEMP/evidence" --uv $env:BOOTSTRAP_UV
++            if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
++          }
+       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+         if: always()
+         with:

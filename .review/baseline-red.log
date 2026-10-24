@@ -1,0 +1,16 @@
+test_genuine_account_requires_new_sid_and_no_administrators_sid (__main__.AccountContracts.test_genuine_account_requires_new_sid_and_no_administrators_sid) ... ERROR
+
+======================================================================
+ERROR: test_genuine_account_requires_new_sid_and_no_administrators_sid (__main__.AccountContracts.test_genuine_account_requires_new_sid_and_no_administrators_sid)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.local-proof/red-baseline/test_disposable_account.py", line 23, in test_genuine_account_requires_new_sid_and_no_administrators_sid
+    helper.require_limited(good, expected, current=True)
+  File "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.local-proof/red-baseline/restricted_token.py", line 30, in require_limited
+    raise RuntimeError('Administrators SID must be deny-only, never enabled')
+RuntimeError: Administrators SID must be deny-only, never enabled
+
+----------------------------------------------------------------------
+Ran 1 test in 0.010s
+
+FAILED (errors=1)

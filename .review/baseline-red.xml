@@ -1,0 +1,27 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="1" skipped="0" tests="1" time="0.048" timestamp="2026-10-24T12:02:04.062201+00:00" hostname="OctaviaOS"><testcase classname=".venv..proof.red-baseline.test_disposable_account.AccountContracts" name="test_genuine_account_requires_new_sid_and_no_administrators_sid" time="0.005"><failure message="RuntimeError: Administrators SID must be deny-only, never enabled">self = &lt;test_disposable_account.AccountContracts testMethod=test_genuine_account_requires_new_sid_and_no_administrators_sid&gt;
+
+    def test_genuine_account_requires_new_sid_and_no_administrators_sid(self):
+        helper = load_token()
+        expected = 'S-1-5-21-111-222-333-1001'
+        good = dict(sid=expected, admin_member=False, elevated=False,
+                    integrity_rid=8192, groups={'S-1-5-32-545': 7},
+                    enabled_privileges=['SeChangeNotifyPrivilege'], is_user_an_admin=False)
+&gt;       helper.require_limited(good, expected, current=True)
+
+.venv/.proof/red-baseline/test_disposable_account.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'sid': 'S-1-5-21-111-222-333-1001', 'admin_member': False, 'elevated': False, 'integrity_rid': 8192, ...}
+sid = 'S-1-5-21-111-222-333-1001', current = True
+
+    def require_limited(value, sid, *, current=False):
+        """Fail closed on absent evidence, elevation, enabled admins or wrong owner."""
+        if (value['sid'] != sid or value['admin_member'] is not False
+                or value['elevated'] is not False or value['integrity_rid'] != MEDIUM):
+            raise RuntimeError('Not a same-owner medium non-admin token: ' + json.dumps(value))
+        attributes = value['groups'].get(ADMIN, 0)
+        if not attributes &amp; 0x10 or attributes &amp; 0x4:
+&gt;           raise RuntimeError('Administrators SID must be deny-only, never enabled')
+E           RuntimeError: Administrators SID must be deny-only, never enabled
+
+.venv/.proof/red-baseline/restricted_token.py:30: RuntimeError</failure></testcase></testsuite></testsuites>

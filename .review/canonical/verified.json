@@ -1,0 +1,192 @@
+{
+  "product_sha": "1a606496182ef48eafd78889eea8878165b829ae",
+  "product_tree": "43825538944a3d836e8a28ad509f39b0eca7710e",
+  "fixture_tests": 44,
+  "product_tests": 85,
+  "skipped": 0,
+  "failures": 0,
+  "native_runs": 0,
+  "update_cases": 0,
+  "cases": [
+    {
+      "file": ".github/owner-worker-proof/test_bootstrap_resolution.py",
+      "tests": 11,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_bootstrap_resolution.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/fixture-test_bootstrap_resolution.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669",
+      "log": ".review/canonical/fixture-test_bootstrap_resolution.log",
+      "xml": ".review/canonical/fixture-test_bootstrap_resolution.xml"
+    },
+    {
+      "file": ".github/owner-worker-proof/test_contract.py",
+      "tests": 20,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_contract.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/fixture-test_contract.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669",
+      "log": ".review/canonical/fixture-test_contract.log",
+      "xml": ".review/canonical/fixture-test_contract.xml"
+    },
+    {
+      "file": ".github/owner-worker-proof/test_disposable_account.py",
+      "tests": 1,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_disposable_account.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/fixture-test_disposable_account.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669",
+      "log": ".review/canonical/fixture-test_disposable_account.log",
+      "xml": ".review/canonical/fixture-test_disposable_account.xml"
+    },
+    {
+      "file": ".github/owner-worker-proof/test_restricted_token.py",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_restricted_token.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/fixture-test_restricted_token.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669",
+      "log": ".review/canonical/fixture-test_restricted_token.log",
+      "xml": ".review/canonical/fixture-test_restricted_token.xml"
+    },
+    {
+      "file": ".github/owner-worker-proof/test_token_observation.py",
+      "tests": 6,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        ".github/owner-worker-proof/test_token_observation.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/fixture-test_token_observation.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669",
+      "log": ".review/canonical/fixture-test_token_observation.log",
+      "xml": ".review/canonical/fixture-test_token_observation.xml"
+    },
+    {
+      "file": "tests/clover_cli/test_update_delivery_guard.py",
+      "tests": 19,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        "tests/clover_cli/test_update_delivery_guard.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/product-test_update_delivery_guard.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.venv/.proof/product-candidate",
+      "log": ".review/canonical/product-test_update_delivery_guard.log",
+      "xml": ".review/canonical/product-test_update_delivery_guard.xml"
+    },
+    {
+      "file": "tests/clover_cli/test_update_delivery_guard_wrappers.py",
+      "tests": 26,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        "tests/clover_cli/test_update_delivery_guard_wrappers.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/product-test_update_delivery_guard_wrappers.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.venv/.proof/product-candidate",
+      "log": ".review/canonical/product-test_update_delivery_guard_wrappers.log",
+      "xml": ".review/canonical/product-test_update_delivery_guard_wrappers.xml"
+    },
+    {
+      "file": "tests/gateway/test_status_lock_security.py",
+      "tests": 17,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        "tests/gateway/test_status_lock_security.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/product-test_status_lock_security.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.venv/.proof/product-candidate",
+      "log": ".review/canonical/product-test_status_lock_security.log",
+      "xml": ".review/canonical/product-test_status_lock_security.xml"
+    },
+    {
+      "file": "tests/gateway/test_status_update_owner.py",
+      "tests": 23,
+      "failures": 0,
+      "errors": 0,
+      "skipped": 0,
+      "command": [
+        "bash",
+        "scripts/run_tests.sh",
+        "tests/gateway/test_status_update_owner.py",
+        "-j",
+        "1",
+        "--file-retries",
+        "0",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/canonical/product-test_status_update_owner.xml"
+      ],
+      "cwd": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.venv/.proof/product-candidate",
+      "log": ".review/canonical/product-test_status_update_owner.log",
+      "xml": ".review/canonical/product-test_status_update_owner.xml"
+    }
+  ]
+}

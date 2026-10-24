@@ -21,7 +21,7 @@ class TokenInformationFixture:
         self.values = {20: elevated, 18: elevation_type}
         groups = helper.TG()
         groups.Count = 1
-        groups.Groups[0] = helper.SA(102, 0x10)
+        groups.Groups[0] = helper.SA(102, 0x7)
         self.variable = {1: helper.SA(101, 0), 2: groups,
                          3: helper.TP(), 25: helper.SA(103, 0x20)}
         self.api = object.__new__(helper.WinAPI)
@@ -31,7 +31,7 @@ class TokenInformationFixture:
         self.api.k = SimpleNamespace(CloseHandle=lambda handle: True)
         self.api.s = SimpleNamespace(IsUserAnAdmin=lambda: False)
         self.api.sid = lambda text: nullcontext(102)
-        self.api.sid_text = lambda sid: {101: 'S-1-5-21-fixture', 102: helper.ADMIN,
+        self.api.sid_text = lambda sid: {101: 'S-1-5-21-fixture', 102: 'S-1-5-32-545',
                                         103: 'S-1-16-8192'}[sid]
 
     def query(self, token, kind, buffer, size, returned):
@@ -148,12 +148,12 @@ class Contracts(unittest.TestCase):
         helper = load()
         # Synthetic inputs test only fail-closed validation, never OS identity.
         good = dict(sid='S-1-5-21-fixture', admin_member=False, elevated=False,
-                    integrity_rid=8192, groups={helper.ADMIN: 0x10},
+                    integrity_rid=8192, groups={'S-1-5-32-545': 7},
                     enabled_privileges=['SeChangeNotifyPrivilege'], is_user_an_admin=False)
         helper.require_limited(good, good['sid'])
         for key, bad in [('sid', 'foreign'), ('admin_member', True), ('admin_member', None),
                          ('elevated', True), ('elevated', None), ('integrity_rid', 12288),
-                         ('groups', {}), ('groups', {helper.ADMIN: 0x14}),
+                         ('groups', {}), ('groups', {helper.ADMIN: 0x10}),
                          ('enabled_privileges', ['SeDebugPrivilege']), ('is_user_an_admin', True)]:
             with self.subTest(key=key, bad=bad), self.assertRaises(RuntimeError):
                 helper.require_limited(dict(good, **{key: bad}), good['sid'])
@@ -164,19 +164,6 @@ class Contracts(unittest.TestCase):
             del missing[key]
             with self.subTest(missing=key), self.assertRaises((KeyError, RuntimeError)):
                 helper.require_limited(missing, good['sid'])
-
-    def test_child_environment_is_allowlisted_and_keeps_owned_profile(self):
-        helper = load()
-        env = dict(USERPROFILE='owned-profile', HOME='private-home', CLOVER_HOME='private-clover',
-                   PATH='system-path', SystemRoot='windows', GITHUB_TOKEN='not-a-real-token',
-                   ACTIONS_RUNTIME_TOKEN='not-a-real-token', OPENAI_API_KEY='not-a-real-key',
-                   PYTHONPATH='foreign-imports', PYTHONHOME='foreign-runtime', LD_PRELOAD='foreign')
-        limited = helper.child_environment(env)
-        for key in ('USERPROFILE', 'HOME', 'CLOVER_HOME', 'PATH', 'SystemRoot'):
-            self.assertEqual(limited[key], env[key])
-        self.assertTrue(all(k not in limited for k in ('GITHUB_TOKEN', 'ACTIONS_RUNTIME_TOKEN',
-                            'OPENAI_API_KEY', 'PYTHONPATH', 'PYTHONHOME', 'LD_PRELOAD')))
-        self.assertEqual(limited['PYTHONNOUSERSITE'], '1')
 
     def test_non_windows_entry_refuses_before_native_actions(self):
         import sys

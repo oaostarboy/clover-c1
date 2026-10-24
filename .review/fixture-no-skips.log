@@ -1,0 +1,25 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 5 test files (~44 tests) under ['.github/owner-worker-proof/test_contract.py', '.github/owner-worker-proof/test_restricted_token.py', '.github/owner-worker-proof/test_token_observation.py', '.github/owner-worker-proof/test_disposable_account.py', '.github/owner-worker-proof/test_bootstrap_resolution.py']; running with -j 1
+[ 25.0% |    11/~44 | ✓11 | ✗ 0] ✓ .github/owner-worker-proof/test_bootstrap_resolution.py (11✓, 0.2s)
+[ 70.5% |    31/~44 | ✓31 | ✗ 0] ✓ .github/owner-worker-proof/test_contract.py (20✓, 0.7s)
+[ 72.7% |    32/~44 | ✓32 | ✗ 0] ✓ .github/owner-worker-proof/test_disposable_account.py (1✓, 0.2s)
+[ 86.4% |    38/~44 | ✓38 | ✗ 0] ✓ .github/owner-worker-proof/test_restricted_token.py (6✓, 0.2s)
+[100.0% |    44/~44 | ✓44 | ✗ 0] ✓ .github/owner-worker-proof/test_token_observation.py (6✓, 4.9s)
+
+=== Summary: 5 files, 44 tests passed, 0 failed (100% complete) in 6.3s (1 workers) ===
+  Durations cached to test_durations.json (5 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   5
+  Total subprocess CPU-wall: 6.3s  (runner wall: 6.3s, parallelism: 1x)
+  P50: 0.22s  P90: 4.90s  P95: 4.90s  P99: 4.90s  Max: 4.90s
+  <1s: 4 files (80%)  <2s: 4 files (80%)
+  Top 10 slowest:
+      4.90s  .github/owner-worker-proof/test_token_observation.py
+      0.73s  .github/owner-worker-proof/test_contract.py
+      0.22s  .github/owner-worker-proof/test_bootstrap_resolution.py
+      0.22s  .github/owner-worker-proof/test_restricted_token.py
+      0.21s  .github/owner-worker-proof/test_disposable_account.py

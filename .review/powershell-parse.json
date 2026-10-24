@@ -1,0 +1,31 @@
+{
+  "powershell": "7.4.13",
+  "native_execution": false,
+  "platform": "Linux",
+  "parsed": [
+    {
+      "path": "account_child.ps1",
+      "parse_errors": 0
+    },
+    {
+      "path": "account_common.ps1",
+      "parse_errors": 0
+    },
+    {
+      "path": "disposable_account.ps1",
+      "parse_errors": 0
+    },
+    {
+      "path": "register_startup.ps1",
+      "parse_errors": 0
+    },
+    {
+      "path": "start_troy.ps1",
+      "parse_errors": 0
+    },
+    {
+      "path": "token_prerequisite.ps1",
+      "parse_errors": 0
+    }
+  ]
+}

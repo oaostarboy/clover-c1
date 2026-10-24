@@ -1,0 +1,18 @@
+▶ no local venv — using Nix dev venv via CLOVER_PYTHON: /home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.venv/bin/python
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~9 tests) under ['tests/gateway/test_status_update_owner.py']; running with -j 1
+[100.0% |     9/~9 | ✓23 | ✗ 0] ✓ tests/gateway/test_status_update_owner.py (23✓, 0.9s)
+
+=== Summary: 1 files, 23 tests passed, 0 failed (100% complete) in 0.9s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 0.9s  (runner wall: 0.9s, parallelism: 1x)
+  P50: 0.94s  P90: 0.94s  P95: 0.94s  P99: 0.94s  Max: 0.94s
+  <1s: 1 files (100%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      0.94s  tests/gateway/test_status_update_owner.py

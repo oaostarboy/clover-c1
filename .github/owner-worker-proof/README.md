@@ -1,5 +1,52 @@
 # Windows owner/worker proof (test-only)
 
+## Real-account prerequisite build: partial, review required
+
+The synthetic restricted-token launcher is removed. `restricted_token.py` now
+only observes actual OS identity, integrity, elevation, group membership and
+privileges. Its historical filename does **not** mean it manufactures a token.
+The contract is explicitly the newly created account SID, different from the
+runner SID, Users membership, and no Administrators SID (not deny-only admins).
+
+`token_prerequisite.ps1` invokes `disposable_account.ps1` only on a disposable
+hosted Windows runner. The parent generates and immediately masks a random
+runtime password, passes a SecureString through the standard .NET credential
+process API, provisions the account's profile with OS `CreateProfile`, and sets
+`LoadUserProfile=true`. No password enters argv, JSON, task XML, child environment
+or artifacts. The child receives an explicit minimal environment and uses its own
+OS profile, AppData and Clover home. Only this fixture's new profile/evidence
+DACLs change; source/tool/global ACLs, UAC, services and policy do not change.
+
+The real child must prove intended SID, non-admin WindowsPrincipal and
+IsUserAnAdmin results, medium integrity/non-elevation/limited privileges, an
+admin-only file read denial, private Clover-home writes, and writable OS-known
+Startup directory. This is **registration readiness**, not an installed gateway,
+installer run, update, or Task-Scheduler acceptance. Finally cleanup targets only
+the created SID's processes/tasks/profile/account, reads each removal back, and
+fails on cleanup error. Cleanup errors do not skip later cleanup steps.
+
+The small prerequisite workflow retains the historical filename
+`windows-token-prerequisite-e8663039.yml`. After independent review only, an
+explicit push to `proof/windows-real-account-prerequisite` can run that one job.
+No push or native execution occurred in this build stage.
+
+**The full update matrix is deliberately NOT integrated with the new account
+lifecycle yet.** `register_startup.ps1` accepts an explicit `ExpectedSid` and
+fails closed when the old driver omits it. The public CLI and actual `n` UAC
+answer remain unchanged; neither a private helper nor fabricated gateway replaces
+them. The existing full driver, Task fixture, matrix/pins, safety controls and
+acceptance assertions remain unchanged. Do not dispatch the full matrix from
+this partial build.
+
+Integration stopped at a source-level conflict: the real public Scheduled Task
+runs a VBS whose `sh.Run ..., 0, False` detaches its gateway. The unchanged matrix
+requires a live Schedule ancestor. Its historical `start_troy.ps1` instead creates
+a direct pythonw task. Replacing that synthetic task while retaining every
+assertion needs a separately reviewed task-origin proof contract, not silently
+weakening the ancestry check. See `.review/BUILD.md` and the explicitly
+**not-applied** integration diff. This is a technical parent-owner decision;
+account creation/deletion permission is already granted for disposable CI.
+
 ## Scope and pins
 
 This branch owns only the new proof directory and workflow. No product edits,
@@ -107,16 +154,16 @@ GitHub authentication/download availability. Candidate objects are fetched only
 after installation; the existing separate update origin still supplies the
 unchanged target. No GitHub/main or released script is edited.
 
-Startup registration uses the **public installed CLI** `gateway install
---no-start-now --start-on-login`, with a real Limited/S4U token for the current
-runner account and a supported `n` answer to UAC. The helper fails if that token
-is administrative, captures its CLI output/identity/XML/result, and removes its
-temporary registration task. It neither generates the VBS itself nor starts or
-restarts a gateway. Zyra then launches the actual registered Startup entry.
-Troy retains the separately proven legacy native pythonw Scheduled-Task shape;
-that historical shape is **not** mislabeled the installer's default supervisor.
-Existing ownership, SCM/Schedule, native security and completion assertions are
-unchanged, including the90-second stability window.
+The historical F1 proposal used the public installed CLI `gateway install
+--no-start-now --start-on-login` with a Limited/S4U request and an `n` UAC answer.
+That premise did not establish a non-admin runner token. Its synthetic-token
+successor then failed before the executing child wrote identity. Neither is native
+acceptance. The real-account prerequisite above replaces those assumptions; the
+full matrix remains blocked until account lifetime integration is reviewed.
+The historical Troy task below remains a direct pythonw fixture, **not** the
+public installed Scheduled Task path. Existing ownership, SCM/Schedule, native
+security and completion assertions remain unchanged, including the90-second
+stability window; they have not been waived to fit a detached public task.
 
 After an explicit parent steer, a fresh PR150 read-back confirmed
 `1a606496182ef48eafd78889eea8878165b829ae`; the read-only integration checkout

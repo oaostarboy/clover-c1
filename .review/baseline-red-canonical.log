@@ -1,0 +1,104 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~1 tests) under ['.venv/.proof/red-baseline/test_disposable_account.py']; running with -j 1
+[100.0% |     1/~1 | ✓0 | ✗1] ✗ .venv/.proof/red-baseline/test_disposable_account.py (1✗, 0.2s)
+
+  ╔╍ Failed: .venv/.proof/red-baseline/test_disposable_account.py ╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+  ║ 
+  ║     def test_genuine_account_requires_new_sid_and_no_administrators_sid(self):
+  ║         helper = load_token()
+  ║         expected = 'S-1-5-21-111-222-333-1001'
+  ║         good = dict(sid=expected, admin_member=False, elevated=False,
+  ║                     integrity_rid=8192, groups={'S-1-5-32-545': 7},
+  ║                     enabled_privileges=['SeChangeNotifyPrivilege'], is_user_an_admin=False)
+  ║ >       helper.require_limited(good, expected, current=True)
+  ║ 
+  ║ .venv/.proof/red-baseline/test_disposable_account.py:23: 
+  ║ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+  ║ 
+  ║ value = {'sid': 'S-1-5-21-111-222-333-1001', 'admin_member': False, 'elevated': False, 'integrity_rid': 8192, ...}
+  ║ sid = 'S-1-5-21-111-222-333-1001', current = True
+  ║ 
+  ║     def require_limited(value, sid, *, current=False):
+  ║         """Fail closed on absent evidence, elevation, enabled admins or wrong owner."""
+  ║         if (value['sid'] != sid or value['admin_member'] is not False
+  ║                 or value['elevated'] is not False or value['integrity_rid'] != MEDIUM):
+  ║             raise RuntimeError('Not a same-owner medium non-admin token: ' + json.dumps(value))
+  ║         attributes = value['groups'].get(ADMIN, 0)
+  ║         if not attributes & 0x10 or attributes & 0x4:
+  ║ >           raise RuntimeError('Administrators SID must be deny-only, never enabled')
+  ║ E           RuntimeError: Administrators SID must be deny-only, never enabled
+  ║ 
+  ║ .venv/.proof/red-baseline/restricted_token.py:30: RuntimeError
+  ║ - generated xml file: /home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/baseline-red.xml -
+  ║ =========================== short test summary info ============================
+  ║ FAILED .venv/.proof/red-baseline/test_disposable_account.py::AccountContracts::test_genuine_account_requires_new_sid_and_no_administrators_sid
+  ║ ============================== 1 failed in 0.05s ===============================
+  ║
+  ║  Repro: python -m pytest .venv/.proof/red-baseline/test_disposable_account.py --junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/baseline-red.xml
+  ╚╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍╍
+
+
+=== Summary: 1 files, 0 tests passed, 1 failed (100% complete) in 0.2s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 0.2s  (runner wall: 0.2s, parallelism: 1x)
+  P50: 0.24s  P90: 0.24s  P95: 0.24s  P99: 0.24s  Max: 0.24s
+  <1s: 1 files (100%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      0.24s  .venv/.proof/red-baseline/test_disposable_account.py
+
+=== Failure output ===
+
+--- .venv/.proof/red-baseline/test_disposable_account.py ---
+============================= test session starts ==============================
+platform linux -- Python 3.12.12, pytest-9.1.1, pluggy-1.6.0
+rootdir: /home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669
+configfile: pyproject.toml
+plugins: asyncio-1.3.0, anyio-4.12.1, timeout-2.4.0
+asyncio: mode=Mode.STRICT, debug=False, asyncio_default_fixture_loop_scope=None, asyncio_default_test_loop_scope=function
+collected 1 item
+
+.venv/.proof/red-baseline/test_disposable_account.py F                   [100%]
+
+=================================== FAILURES ===================================
+_ AccountContracts.test_genuine_account_requires_new_sid_and_no_administrators_sid _
+
+self = <test_disposable_account.AccountContracts testMethod=test_genuine_account_requires_new_sid_and_no_administrators_sid>
+
+    def test_genuine_account_requires_new_sid_and_no_administrators_sid(self):
+        helper = load_token()
+        expected = 'S-1-5-21-111-222-333-1001'
+        good = dict(sid=expected, admin_member=False, elevated=False,
+                    integrity_rid=8192, groups={'S-1-5-32-545': 7},
+                    enabled_privileges=['SeChangeNotifyPrivilege'], is_user_an_admin=False)
+>       helper.require_limited(good, expected, current=True)
+
+.venv/.proof/red-baseline/test_disposable_account.py:23: 
+_ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ _ 
+
+value = {'sid': 'S-1-5-21-111-222-333-1001', 'admin_member': False, 'elevated': False, 'integrity_rid': 8192, ...}
+sid = 'S-1-5-21-111-222-333-1001', current = True
+
+    def require_limited(value, sid, *, current=False):
+        """Fail closed on absent evidence, elevation, enabled admins or wrong owner."""
+        if (value['sid'] != sid or value['admin_member'] is not False
+                or value['elevated'] is not False or value['integrity_rid'] != MEDIUM):
+            raise RuntimeError('Not a same-owner medium non-admin token: ' + json.dumps(value))
+        attributes = value['groups'].get(ADMIN, 0)
+        if not attributes & 0x10 or attributes & 0x4:
+>           raise RuntimeError('Administrators SID must be deny-only, never enabled')
+E           RuntimeError: Administrators SID must be deny-only, never enabled
+
+.venv/.proof/red-baseline/restricted_token.py:30: RuntimeError
+- generated xml file: /home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-3f32a669/.review/baseline-red.xml -
+=========================== short test summary info ============================
+FAILED .venv/.proof/red-baseline/test_disposable_account.py::AccountContracts::test_genuine_account_requires_new_sid_and_no_administrators_sid
+============================== 1 failed in 0.05s ===============================
+
+=== 1 file with test failures (1 test failed) ===
+  .venv/.proof/red-baseline/test_disposable_account.py  (1 test failed)

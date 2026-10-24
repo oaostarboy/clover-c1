@@ -1,0 +1,17 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~6 tests) under ['.github/owner-worker-proof/test_restricted_token.py']; running with -j 1
+[100.0% |     6/~6 | ✓6 | ✗0] ✓ .github/owner-worker-proof/test_restricted_token.py (6✓, 0.2s)
+
+=== Summary: 1 files, 6 tests passed, 0 failed (100% complete) in 0.2s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 0.2s  (runner wall: 0.2s, parallelism: 1x)
+  P50: 0.21s  P90: 0.21s  P95: 0.21s  P99: 0.21s  Max: 0.21s
+  <1s: 1 files (100%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      0.21s  .github/owner-worker-proof/test_restricted_token.py

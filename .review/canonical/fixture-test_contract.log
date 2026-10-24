@@ -1,0 +1,17 @@
+▶ running per-file parallel test suite via run_tests_parallel.py
+  (TZ=UTC LANG=C.UTF-8 PYTHONHASHSEED=0; clean env)
+▶ pre-compiling bytecode cache
+▶ launching test runner
+Discovered 1 test files (~20 tests) under ['.github/owner-worker-proof/test_contract.py']; running with -j 1
+[100.0% |    20/~20 | ✓20 | ✗ 0] ✓ .github/owner-worker-proof/test_contract.py (20✓, 0.7s)
+
+=== Summary: 1 files, 20 tests passed, 0 failed (100% complete) in 0.7s (1 workers) ===
+  Durations cached to test_durations.json (1 files)
+
+=== Per-file subprocess time distribution ===
+  Files:   1
+  Total subprocess CPU-wall: 0.7s  (runner wall: 0.7s, parallelism: 1x)
+  P50: 0.71s  P90: 0.71s  P95: 0.71s  P99: 0.71s  Max: 0.71s
+  <1s: 1 files (100%)  <2s: 1 files (100%)
+  Top 10 slowest:
+      0.71s  .github/owner-worker-proof/test_contract.py

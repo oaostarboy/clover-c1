@@ -163,6 +163,7 @@ class Contracts(unittest.TestCase):
         self.assertIn('if ($admin) { throw', text)
         self.assertIn("'restricted_token.py'", text)
         self.assertNotIn('New-ScheduledTaskPrincipal', text)
+        self.assertIn('$identity.User.Value -ne $ExpectedSid', text)
         self.assertIn("'n' | & $Python @argv", text)
         self.assertNotIn('_write_task_script', text)
         self.assertNotIn('_install_startup_entry', text)

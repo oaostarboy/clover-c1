@@ -1,0 +1,23 @@
+{
+  "scope": "partial prerequsite only; full matrix integration intentionally stopped",
+  "baseline": "b7b95464f9f6020adae57bee8f3fff4c0eb5c5a8",
+  "preserved_files_sha256": {
+    ".github/owner-worker-proof/pins.json": "b3b6ff53bb0570cb06c9c11c51d3e0161fd9ce3c04863588dc1b6a33c8907bf7",
+    ".github/owner-worker-proof/plan.py": "7a919ad3aea9f5b85a1f359b2ac012662f430cb4431b86cbccf40a07303dcba1",
+    ".github/owner-worker-proof/released_installer.py": "7526eddbff5efee793efe972e1ed96c2ef10ae793375567c904e912e7f12896e",
+    ".github/owner-worker-proof/windows_update.py": "18523a6877de29b81763c1abfa5f59c2520f3fabdad2f69dea8f4fde5fc6010f",
+    ".github/owner-worker-proof/start_troy.ps1": "bd629c498b262200ccdf7d6adf2b11b8e404c528f654aa7ab3a8d6d00e17eea6",
+    ".github/workflows/windows-owner-worker-proof.yml": "266d34cb51f0cb8ce8d4c96e1cda4a6aae71f0ffc51d5889205f44591681f42e",
+    ".github/owner-worker-proof/test_owner_worker_native.py": "5f824bda525c87eaa4da8adf74eff4ec18910bf4c0ad7463f88bdc58908b759c",
+    ".github/owner-worker-proof/test_status_lock_windows_native.py": "e7531e8728f121ff71acad816a70bb735ae32d6ecb6f8a3445fcec5c17f8b0e8"
+  },
+  "synthetic_token_creation_removed": true,
+  "credential_channel": "SecureString ProcessStartInfo.Password; no argv/env/JSON password",
+  "nonfixture_product_changes": false,
+  "canonical_baseline_expected_failures": 1,
+  "canonical_baseline_skips": 0,
+  "native_runs": 0,
+  "account_creation_on_this_host": 0,
+  "pushes": 0,
+  "full_matrix_dispatches": 0
+}
