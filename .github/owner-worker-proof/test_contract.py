@@ -45,10 +45,20 @@ class Contracts(unittest.TestCase):
         with self.assertRaises(AssertionError):
             p.plan(pins)
 
+    def test_native_safety_only_can_never_claim_full_update_acceptance(self):
+        p = load('plan')
+        pins = json.loads((HERE / 'pins.json').read_text())
+        pins.update(mode='native-safety', scope='full')
+        self.assertFalse(p.plan(pins)['full_matrix'])
+        pins['mode'] = 'candidate'
+        self.assertTrue(p.plan(pins)['full_matrix'])
+
     def test_task_correction_is_explicit_partial_and_cannot_clear_future_source(self):
         p = load('plan')
         pins = json.loads((HERE / 'pins.json').read_text())
-        pins.update(scope='troy-verifier-correction')
+        pins.update(mode='candidate', scope='troy-verifier-correction',
+                    target='bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e',
+                    target_tree='04630f4788743b5b556e5e4379d998c42394efa3')
         result = p.plan(pins)
         self.assertFalse(result['full_matrix'])
         self.assertEqual(len(result['matrix']['include']), 8)

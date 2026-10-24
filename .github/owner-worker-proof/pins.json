@@ -1,8 +1,8 @@
 {
-  "mode": "candidate",
-  "scope": "troy-verifier-correction",
-  "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
-  "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
+  "mode": "native-safety",
+  "scope": "full",
+  "target": "27f507acb4f12c30d237471095f137007952c312",
+  "target_tree": "56ef6f6990bdb3d0d56fca31f582980857dca15e",
   "historical_helpers": "93cf13e9f66be56428993402c1e80422d9005d85",
   "old_callers": {
     "1.5.6-suni": "9535350bee1d57cf7e466672e6f416403886bec1",

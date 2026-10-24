@@ -1,8 +1,9 @@
-"""Native disposable launchd old-source update with a real tool/provider barrier.
+"""Native disposable Windows old-source update with a real tool/provider barrier.
 
-The deterministic loopback provider is a fixture, not an external LLM. The
-HTTP receiver records actual replies. Only product updater code may restart
-the installed service after the initial installation. No credentials required.
+Derived from the pinned, exercised legacy156_windows runner. The deterministic
+loopback provider and receiver are fixtures, not Telegram or an external LLM.
+Only product updater code may restart the installed gateway after first launch.
+No credentials required.
 """
 from __future__ import annotations
 import argparse

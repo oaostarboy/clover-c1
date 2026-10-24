@@ -13,13 +13,15 @@ safety run; set `mode=candidate` with an independently verified new SHA/tree for
 the full matrix. This new workflow intentionally is not registered on main.
 Parent review is required before adding `ci-reviewed` or merging the fixture.
 
-**Current pins select the explicit eight-row `troy-verifier-correction` cohort**
-for unchanged PR148 only. All eight earlier Troy rows had already terminated in
-an observer failure; this does not duplicate the four still-running Startup
-chat rows from run40049740582. It is NOT a full acceptance gate. The planner
-rejects carrying this partial scope to a different candidate. For the future
-combined-source gate, set `scope=full` and the exact new commit/tree; require all
-16 rows from that invocation rather than adding passes from different fixtures.
+**Current pins select `native-safety` only on reviewed correction27f507.** The
+updater matrix is intentionally SKIPPED/NOT EXERCISED in this invocation, and
+the planner cannot label it a full updater gate. Both old-source diagnostic
+runs have terminated; this narrow run exercises the new descriptor/security
+cases without duplicating an active matrix. The explicit historical eight-row
+`troy-verifier-correction` scope is restricted to old bdad7 and cannot clear a
+future source. For the final combined gate, set `mode=candidate`, `scope=full`
+and the parent's exact new commit/tree; require all16 rows from that invocation
+rather than adding passes from different fixtures.
 The revised observer copies the proven PS probe's exact installed-image ->
 direct-child -> measured-base-image relationship. It additionally records raw
 process/status evidence, requires the status owner to be that worker, rejects

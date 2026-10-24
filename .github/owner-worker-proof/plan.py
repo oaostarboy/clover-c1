@@ -16,11 +16,11 @@ HELPERS = '93cf13e9f66be56428993402c1e80422d9005d85'
 
 
 def plan(pins):
-    assert pins['mode'] in ['baseline', 'candidate']
+    assert pins['mode'] in ['baseline', 'native-safety', 'candidate']
     assert SHA.fullmatch(pins['target'])
     assert pins['historical_helpers'] == HELPERS
     assert pins['old_callers'] == CALLERS
-    if pins['mode'] == 'candidate':
+    if pins['mode'] in ['candidate', 'native-safety']:
         assert SHA.fullmatch(pins['target_tree'])
         assert pins['target'] not in CALLERS.values(), 'released baseline is not a repaired candidate'
     scope = pins.get('scope', 'full')
@@ -40,7 +40,8 @@ def plan(pins):
     expected = 4 * len(setups) * 2
     assert len(rows) == expected
     assert len({(r['caller'], r['setup'], r['entry']) for r in rows}) == expected
-    return dict(mode=pins['mode'], scope=scope, full_matrix=scope == 'full', target=pins['target'],
+    return dict(mode=pins['mode'], scope=scope,
+                full_matrix=scope == 'full' and pins['mode'] == 'candidate', target=pins['target'],
                 target_tree=pins.get('target_tree', ''),
                 historical_helpers=HELPERS, matrix={'include': rows},
                 not_certified=['live Telegram', 'busy frozen Windows first stop',
