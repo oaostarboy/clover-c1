@@ -1,8 +1,9 @@
-"""Frozen old->fixed CLI update on a DISPOSABLE hosted macOS launchd install.
+"""Real update acceptance on a DISPOSABLE hosted macOS launchd installation.
 
-Not chat/Telegram proof. This deliberately preserves a failed gate and reports
-unexercised accepted-turn/tool/reply and pending-catchup criteria separately.
-Uses the real supported gateway install/start/stop commands, no monkeypatches.
+CLI, real localhost IRC chat, or staged-source pending/no-pull chat catchup.
+The deterministic local model asks the real gateway for exactly one file-tool
+write and a complete reply while /update is accepted. No Telegram credentials,
+product patches, replayed turns, or manufactured result/receipt are used.
 """
 from __future__ import annotations
 
@@ -22,6 +23,7 @@ def main() -> int:
     parser.add_argument('--product-sha', required=True)
     parser.add_argument('--old-sha', required=True)
     parser.add_argument('--evidence', type=Path, required=True)
+    parser.add_argument('--scenario', choices=('cli', 'chat', 'pending-chat'), default='cli')
     args = parser.parse_args()
     root = Path(__file__).resolve().parents[2]
     if (sys.platform != 'darwin' or os.environ.get('GITHUB_ACTIONS') != 'true'
@@ -56,6 +58,11 @@ def main() -> int:
                   pending_no_pull_catchup='NOT EXERCISED', live_hosts_touched=False)
     owned = False
     updater = None
+    chat = None
+    chat_started = False
+    chat_finished = False
+    report['scenario'] = args.scenario
+    effect = clover_home / 'native-tool-effect.txt'
 
     def run(argv, name, timeout=180):
         with (evidence / (name + '.log')).open('w') as log:
@@ -65,6 +72,13 @@ def main() -> int:
 
     def git(*argv):
         return subprocess.check_output(['git', '-C', str(install), *argv], env=env, text=True).strip()
+
+    def wait_until(predicate, detail, seconds=180):
+        deadline = time.monotonic() + seconds
+        while not predicate():
+            if time.monotonic() >= deadline:
+                raise TimeoutError(detail)
+            time.sleep(0.1)
 
     try:
         run(['git', 'clone', '--no-hardlinks', '--no-checkout', root, install], 'clone')
@@ -87,6 +101,19 @@ def main() -> int:
             'API_SERVER_ENABLED=true\nAPI_SERVER_KEY=macos-proof-dummy-key-123456\n'
             'API_SERVER_PORT=18791\nAPI_SERVER_HOST=127.0.0.1\n')
         (clover_home / 'config.yaml').write_bytes((install / 'cli-config.yaml.example').read_bytes())
+        if args.scenario != 'cli':
+            from macos_chat_wire import ChatWire
+            chat = ChatWire(evidence, effect)
+            chat.start()
+            with (clover_home / '.env').open('a') as f:
+                f.write(f'IRC_SERVER=127.0.0.1\nIRC_PORT={chat.irc.server_address[1]}\n'
+                        'IRC_USE_TLS=false\nIRC_CHANNEL=#clover\nIRC_NICKNAME=cloverbot\n'
+                        'IRC_ALLOWED_USERS=ant\nGATEWAY_ALLOW_ALL_USERS=true\n'
+                        'OPENAI_API_KEY=private-local-fixture-dummy-key\n')
+            for key, value in [('model.provider', 'custom'), ('model.default', 'native-fixture'),
+                               ('model.base_url', f'http://127.0.0.1:{chat.model.server_address[1]}/v1'),
+                               ('model.api_mode', 'chat_completions')]:
+                run([binary, 'config', 'set', key, value], 'configure-' + key)
         run([binary, 'gateway', 'install', '--start-now', '--start-on-login'], 'gateway-install')
         owned = True
         run([py, root / '.github/native-proof/macos_wrapper_state.py', '--source', root,
@@ -106,11 +133,51 @@ def main() -> int:
                 or worker.cmdline()[0] == str(py) or wrapper.cmdline()[0] == str(py)):
             raise ValueError('normal launchd wrapper/child framework normalization not exercised')
         run([py, root / '.github/native-proof/proof.py', 'begin', '--output', evidence / 'begin.json'], 'begin')
-        with (evidence / 'update.log').open('w') as log:
-            updater = subprocess.Popen([str(binary), 'update', '--yes', '--gateway'],
-                cwd=neutral, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
-            # wait() does not force-kill an updater on timeout, unlike run().
-            exit_code = updater.wait(timeout=900)
+        if args.scenario == 'cli':
+            with (evidence / 'update.log').open('w') as log:
+                updater = subprocess.Popen([str(binary), 'update', '--yes', '--gateway'],
+                    cwd=neutral, env=env, stdin=subprocess.DEVNULL, stdout=log, stderr=subprocess.STDOUT)
+                # wait() does not force-kill an updater on timeout, unlike run().
+                exit_code = updater.wait(timeout=900)
+        else:
+            assert chat is not None
+            wait_until(chat.ready, 'private IRC adapter did not register')
+            chat.send('MAC_NATIVE_ACCEPTANCE: use write_file exactly once to create ' + str(effect)
+                      + ' containing ONE_NATIVE_TOOL_EFFECT followed by a newline, then reply only MAC_NATIVE_TURN_COMPLETE.')
+            wait_until(lambda: effect.is_file() and any(e['kind'] == 'accepted_turn_waiting_after_tool' for e in chat.events),
+                       'real gateway did not execute the file tool and continue its accepted turn')
+            if effect.read_text() != 'ONE_NATIVE_TOOL_EFFECT\n' or chat.tool_calls != 1:
+                raise ValueError('accepted tool effect missing, wrong, or requested more than once')
+            if args.scenario == 'pending-chat':
+                # Reproduce staged new files with the OLD process still serving.
+                # The marker comes from the real current producer, with a fresh
+                # actual producer PID/time; no Suni receipt or status is copied.
+                run(['git', '-C', install, 'merge', '--ff-only', args.product_sha], 'stage-source')
+                run([py, '-c', 'from clover_cli.update_cmd import _write_fleet_restart_pending_marker; '
+                     + f'_write_fleet_restart_pending_marker(expected_sha={args.product_sha!r})'], 'seed-pending')
+                marker = clover_home / 'fleet_restart_pending'
+                (evidence / 'seeded-pending-marker.txt').write_bytes(marker.read_bytes())
+                unchanged = json.loads((clover_home / 'gateway_state.json').read_text())
+                if unchanged.get('pid') != state['pid'] or unchanged.get('code_sha') != args.old_sha:
+                    raise ValueError('staged-source fixture changed or re-attested the old runtime')
+                report['pending_seed_worker'] = dict(pid=unchanged['pid'], code_sha=unchanged['code_sha'])
+            chat.send('/update')
+            chat_started = True
+            wait_until(lambda: (clover_home / '.update_pending.json').is_file(), 'real chat update handler did not accept command')
+            (evidence / 'chat-pending-origin.json').write_bytes((clover_home / '.update_pending.json').read_bytes())
+            wait_until(lambda: (clover_home / 'logs/update_receipts/latest.json').is_file(),
+                       'chat updater did not publish its real run receipt')
+            chat.record('controller_releases_accepted_turn')
+            chat.release.set()
+            wait_until(lambda: chat.bot_messages().count(chat.token) == 1, 'accepted turn did not deliver its complete reply')
+            wait_until(lambda: (clover_home / '.update_exit_code').is_file(), 'chat updater did not finish', seconds=900)
+            exit_code = int((clover_home / '.update_exit_code').read_text().strip())
+            chat_finished = True
+            wait_until(lambda: sum('Clover update finished' in m for m in chat.bot_messages()) == 1,
+                       'chat completion report missing or duplicated', seconds=180)
+            output = clover_home / '.update_output.txt'
+            if output.is_file():
+                (evidence / 'update.log').write_bytes(output.read_bytes())
         report['updater_exit_code'] = exit_code
         receipt = clover_home / 'logs/update_receipts/latest.json'
         if receipt.is_file():
@@ -122,16 +189,33 @@ def main() -> int:
              '--previous', evidence / 'before-state.json', '--output', evidence / 'after-state.json'],
             'after-state', timeout=300)
         run([py, root / '.github/native-proof/proof.py', 'receipt', '--home', clover_home,
-             '--begin', evidence / 'begin.json', '--old', args.old_sha, '--target', args.product_sha,
+             '--begin', evidence / 'begin.json', '--old', args.product_sha if args.scenario == 'pending-chat' else args.old_sha, '--target', args.product_sha,
              '--output', evidence / 'update-receipt.json'], 'receipt')
         run([py, root / '.github/native-proof/proof.py', 'identity', '--repo', install,
              '--sha', args.product_sha, '--tree', git('rev-parse', args.product_sha + '^{tree}'),
              '--output', evidence / 'after-imports.json'], 'after-imports')
+        if chat is not None:
+            messages = chat.bot_messages()
+            if (messages.count(chat.token) != 1 or chat.tool_calls != 1
+                    or effect.read_text() != 'ONE_NATIVE_TOOL_EFFECT\n'
+                    or sum('Clover update finished' in m for m in messages) != 1):
+                raise ValueError('chat turn/tool effect/completion was missing or replayed')
+            report['chat_update'] = 'PASS'
+            report['accepted_turn_tool_effect_reply'] = 'PASS'
+            report['chat_counts'] = dict(tool_calls=chat.tool_calls, complete_turn_replies=messages.count(chat.token),
+                                        update_completion_reports=sum('Clover update finished' in m for m in messages))
+            (evidence / 'chat-user-visible-messages.json').write_text(json.dumps(messages, indent=2) + '\n')
+            if args.scenario == 'pending-chat':
+                if (clover_home / 'fleet_restart_pending').exists():
+                    raise ValueError('pending restart intent was not resolved after verified restart')
+                report['pending_no_pull_catchup'] = 'PASS'
         report['passed'] = True
     except Exception as exc:
         report['error'] = f'{type(exc).__name__}: {exc}'
     finally:
-        if owned and (updater is None or updater.poll() is not None):
+        if chat is not None:
+            chat.release.set()
+        if owned and (updater is None or updater.poll() is not None) and (not chat_started or chat_finished):
             try:
                 run([install / 'venv/bin/clover', 'gateway', 'stop'], 'owned-cleanup', timeout=90)
                 report['label_absent_after_cleanup'] = subprocess.run(
@@ -144,6 +228,12 @@ def main() -> int:
                 log = clover_home / 'logs' / name
                 if log.is_file():
                     (evidence / name).write_bytes(log.read_bytes()[-200000:])
+        if chat is not None:
+            chat.close()
+        for name in ('.update_output.txt', '.update_exit_code'):
+            path = clover_home / name
+            if path.is_file():
+                (evidence / (name.lstrip('.') + '.diagnostic')).write_bytes(path.read_bytes()[-200000:])
         (evidence / 'acceptance.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report, indent=2))
     return 0 if report['passed'] else 1

@@ -73,6 +73,10 @@ jobs:
     needs: framework-owner
     runs-on: macos-14
     timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [chat, pending-chat]
     env:
       PRODUCT_SHA: ${{ inputs.product_sha || github.sha }}
       OLD_SHA: ${{ inputs.old_sha || '9535350bee1d57cf7e466672e6f416403886bec1' }}
@@ -88,14 +92,14 @@ jobs:
           if ! test -x "$(brew --prefix)/opt/python@3.12/bin/python3.12"; then brew install python@3.12; fi
           "$(brew --prefix python@3.12)/bin/python3.12" -m venv .macos-controller
           .macos-controller/bin/python -m pip install uv psutil==7.2.2
-      - name: Actual old gateway, normal launchd install, frozen CLI update
+      - name: Real IRC update and accepted turn across normal launchd restart
         run: |
           unset VIRTUAL_ENV PYTHONPATH PYTHONHOME
-          .macos-controller/bin/python -B .github/native-proof/macos_wrapper_update.py --product-sha "$PRODUCT_SHA" --old-sha "$OLD_SHA" --evidence artifacts/suni-ownership/hosted-update
+          .macos-controller/bin/python -B .github/native-proof/macos_wrapper_update.py --product-sha "$PRODUCT_SHA" --old-sha "$OLD_SHA" --scenario "${{ matrix.scenario }}" --evidence "artifacts/suni-ownership/hosted-update-${{ matrix.scenario }}"
       - name: Upload update receipts and explicit coverage boundaries
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
-          name: macos-frozen-launchd-update-${{ github.run_id }}
-          path: artifacts/suni-ownership/hosted-update
+          name: macos-frozen-launchd-update-${{ matrix.scenario }}-${{ github.run_id }}
+          path: artifacts/suni-ownership/hosted-update-${{ matrix.scenario }}
           if-no-files-found: error
