@@ -1,0 +1,12 @@
+{
+  "product_sha": "9195c15e6d40410ada6fd23b125e1e6137ad6547",
+  "old_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+  "scope": "native-framework-launchd-frozen-cli-old2new",
+  "passed": false,
+  "chat_update": "NOT EXERCISED",
+  "accepted_turn_tool_effect_reply": "NOT EXERCISED",
+  "pending_no_pull_catchup": "NOT EXERCISED",
+  "live_hosts_touched": false,
+  "error": "CalledProcessError: Command '['/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/python', '/Users/runner/work/clover-c1/clover-c1/.github/native-proof/proof.py', 'gateway', '--repo', '/Users/runner/work/clover-c1/clover-c1/.macos-native-install', '--home', '/Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover', '--sha', '9535350bee1d57cf7e466672e6f416403886bec1', '--port', '18791', '--seconds', '0', '--output', '/Users/runner/work/clover-c1/clover-c1/artifacts/suni-ownership/hosted-update/before-state.json']' returned non-zero exit status 1.",
+  "label_absent_after_cleanup": true
+}

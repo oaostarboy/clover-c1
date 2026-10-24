@@ -1,0 +1,142 @@
+[
+  {
+    "scenario": "chat",
+    "passed": true,
+    "counts": {
+      "tool_calls": 1,
+      "complete_turn_replies": 1,
+      "update_completion_reports": 1
+    },
+    "pre_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+    "post_sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+    "old_pid": 2280,
+    "new_pid": 4277,
+    "new_wrapper": 4276,
+    "checkpoint": {
+      "pid": 2602,
+      "create_time": 1792809628.963022,
+      "argv": [
+        "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+        "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/clover",
+        "update",
+        "--gateway"
+      ],
+      "repo": "/Users/runner/work/clover-c1/clover-c1/.macos-native-install",
+      "checkpoint_source": "kernel-process",
+      "beacon_required": false,
+      "beacon_exists": false
+    },
+    "receipt_started": "2026-10-24T02:40:29.539675+00:00",
+    "receipt_finished": "2026-10-24T02:41:49.306495+00:00",
+    "window_observations": 30,
+    "restart_receipt": {
+      "restarted_services": [
+        "ai.clover.gateway"
+      ],
+      "relaunched_profiles": [],
+      "externally_supervised_profiles": [],
+      "killed_pids": [],
+      "failed_units": [],
+      "incomplete": false,
+      "phase_error": ""
+    },
+    "stop_evidence": [
+      "2026-10-24 02:41:44,210 INFO gateway.run: Shutdown phase: drain done at +0.31s (drain took 0.00s, timed_out=False, active_at_start=0, active_now=0, cron_at_start=0, cron_now=0, api_at_start=0, api_now=0)",
+      "2026-10-24 02:44:39,922 INFO gateway.run: Received SIGTERM as a planned gateway stop \u2014 exiting cleanly",
+      "2026-10-24 02:44:40,273 INFO gateway.run: Shutdown phase: drain done at +0.31s (drain took 0.00s, timed_out=False, active_at_start=0, active_now=0, cron_at_start=0, cron_now=0, api_at_start=0, api_now=0)"
+    ],
+    "turn_events": [
+      {
+        "kind": "human_message_sent",
+        "at": 1792809619.505153,
+        "text": "MAC_NATIVE_ACCEPTANCE: use write_file exactly once to create /Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/native-tool-effect.txt containing ONE_NATIVE_TOOL_EFFECT followed by a newline, then reply only MAC_NATIVE_TURN_COMPLETE."
+      },
+      {
+        "kind": "model_tool_request",
+        "at": 1792809628.276014
+      },
+      {
+        "kind": "accepted_turn_waiting_after_tool",
+        "at": 1792809628.645854
+      },
+      {
+        "kind": "human_message_sent",
+        "at": 1792809628.7951858,
+        "text": "/update"
+      },
+      {
+        "kind": "controller_releases_accepted_turn",
+        "at": 1792809629.097934
+      },
+      {
+        "kind": "model_complete_reply",
+        "at": 1792809629.098043
+      }
+    ]
+  },
+  {
+    "scenario": "pending-chat",
+    "passed": true,
+    "counts": {
+      "tool_calls": 1,
+      "complete_turn_replies": 1,
+      "update_completion_reports": 1
+    },
+    "pre_sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+    "post_sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+    "old_pid": 1582,
+    "new_pid": 3140,
+    "new_wrapper": 3139,
+    "checkpoint": {
+      "pid": 1952,
+      "create_time": 1792809613.151754,
+      "argv": [
+        "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+        "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/clover",
+        "update",
+        "--gateway"
+      ],
+      "repo": "/Users/runner/work/clover-c1/clover-c1/.macos-native-install",
+      "checkpoint_source": "kernel-process",
+      "beacon_required": false,
+      "beacon_exists": false
+    },
+    "receipt_started": "2026-10-24T02:40:14.272128+00:00",
+    "receipt_finished": "2026-10-24T02:41:01.271228+00:00",
+    "window_observations": 31,
+    "restart_receipt": {},
+    "stop_evidence": [
+      "2026-10-24 02:41:00,703 INFO gateway.run: Shutdown phase: drain done at +0.31s (drain took 0.00s, timed_out=False, active_at_start=0, active_now=0, cron_at_start=0, cron_now=0, api_at_start=0, api_now=0)",
+      "2026-10-24 02:42:35,688 INFO gateway.run: Received SIGTERM as a planned gateway stop \u2014 exiting cleanly",
+      "2026-10-24 02:42:36,010 INFO gateway.run: Shutdown phase: drain done at +0.31s (drain took 0.01s, timed_out=False, active_at_start=0, active_now=0, cron_at_start=0, cron_now=0, api_at_start=0, api_now=0)"
+    ],
+    "turn_events": [
+      {
+        "kind": "human_message_sent",
+        "at": 1792809605.351895,
+        "text": "MAC_NATIVE_ACCEPTANCE: use write_file exactly once to create /Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/native-tool-effect.txt containing ONE_NATIVE_TOOL_EFFECT followed by a newline, then reply only MAC_NATIVE_TURN_COMPLETE."
+      },
+      {
+        "kind": "model_tool_request",
+        "at": 1792809612.041193
+      },
+      {
+        "kind": "accepted_turn_waiting_after_tool",
+        "at": 1792809612.2605262
+      },
+      {
+        "kind": "human_message_sent",
+        "at": 1792809612.958836,
+        "text": "/update"
+      },
+      {
+        "kind": "controller_releases_accepted_turn",
+        "at": 1792809613.2222168
+      },
+      {
+        "kind": "model_complete_reply",
+        "at": 1792809613.2223418
+      }
+    ]
+  }
+]

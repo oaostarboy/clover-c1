@@ -41,7 +41,7 @@ def _platform_writer(connection, platform):
 
 
 def _hold_lock_readonly(connection, path):
-    with open(path, "r") as handle:
+    with open(path, "r", encoding="utf-8") as handle:
         fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
         connection.send("locked using O_RDONLY")
         connection.recv()
@@ -49,7 +49,7 @@ def _hold_lock_readonly(connection, path):
 
 
 def _crash_with_lock(connection, path):
-    handle = open(path, "a+")
+    handle = open(path, "a+", encoding="utf-8")
     assert status._try_acquire_file_lock(handle)
     connection.send("locked")
     connection.close()

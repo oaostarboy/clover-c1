@@ -1,0 +1,84 @@
+{
+  "observed_at": "2026-10-24T01:09:47.645090+00:00",
+  "gateway_state.json": {
+    "pid": 40564,
+    "start_time": 179226685419,
+    "kind": "clover-gateway",
+    "clover_home": "/Users/ant/.clover",
+    "gateway_state": "running",
+    "updated_at": "2026-10-21T20:17:50.248529+00:00",
+    "code_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+    "code_version": "1.5.6",
+    "restart_requested": false
+  },
+  "gateway.pid": {
+    "pid": 40564,
+    "start_time": 179226685419,
+    "kind": "clover-gateway",
+    "clover_home": "/Users/ant/.clover"
+  },
+  "fleet_restart_pending": {
+    "format": "non-json",
+    "selected_lines": [
+      "started=1792803794.9679801",
+      "pid=79385",
+      "expected_sha=3b54f413376eb99f8b83bfd4a0a340d01825014d"
+    ]
+  },
+  "latest_receipt": {
+    "mtime": 1792803795.1284697,
+    "keys": [
+      "argv",
+      "delivery_restart_guard",
+      "finished_at",
+      "fleet",
+      "gateway_restart",
+      "outcome",
+      "pid",
+      "plan",
+      "post_update",
+      "pre_pull_sha",
+      "pre_update",
+      "pre_update_snapshot_id",
+      "schema",
+      "skips",
+      "started_at",
+      "steps",
+      "stop_reason"
+    ],
+    "selected": {
+      "started_at": "2026-10-24T01:03:05.128247+00:00",
+      "finished_at": "2026-10-24T01:03:15.127360+00:00",
+      "outcome": "failed",
+      "stop_reason": "PID 40563: no owner-bound gateway status",
+      "delivery_restart_guard": {
+        "status": "deferred",
+        "reasons": [
+          "PID 40563: no owner-bound gateway status"
+        ],
+        "owned_watcher_disarmed": true
+      },
+      "gateway_restart": {}
+    }
+  },
+  "venv_python": {
+    "lexical": "/Users/ant/agents/clover-c1/venv/bin/python",
+    "resolved": "/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
+  },
+  "pyvenv_selected": [
+    "home = /opt/homebrew/opt/python@3.12/bin",
+    "version = 3.12.13",
+    "executable = /opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/bin/python3.12"
+  ],
+  "editable_metadata": [
+    {
+      "path": "/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/clover_c1-1.5.6.dist-info/direct_url.json",
+      "selected": {
+        "url": "file:///Users/ant/agents/clover-c1",
+        "dir_info": {
+          "editable": true
+        }
+      }
+    }
+  ]
+}

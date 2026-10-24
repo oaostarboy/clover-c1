@@ -1,0 +1,16 @@
+{
+  "product_sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+  "product_tree": "22623c567b679fa8ce052dce0caaf982e1bfd9a6",
+  "freeze": "No further product or fixture edits. Subsequent commits may add evidence/documentation only.",
+  "reviewed_status_source": "27f507acb4f12c30d237471095f137007952c312",
+  "status_sha256": "fb871b794ea2c6a491dddcb1d2ae25dabcb478ded0e4fd56b3d6e7983ad027ed",
+  "mac_guard_sha256": "f16befb42735a4336a3ee4e13440d56f8574be24d9787fce5726846050baacd0",
+  "pr": "https://github.com/oaostarboy/clover-c1/pull/150",
+  "mac_native_run": "https://github.com/oaostarboy/clover-c1/actions/runs/40055028542",
+  "mac_native_status": "success: framework-owner, frozen-launchd-update(chat), frozen-launchd-update(pending-chat)",
+  "local_tests": {"passed": 218, "skipped": 4, "failed": 0, "errors": 0, "wire_fixture_tests_passed": 14},
+  "independent_mac_guard_review": "PARENT REQUIRED; builder has not self-approved or added ci-reviewed",
+  "windows": "Parent owns review of fixture8883828f78049272e7c98b590e142a8ec56d8359 and final native16-row dispatch against this product pin. No Windows CI dispatched by this worker.",
+  "live_gateways": "untouched",
+  "merge_tag_release": "not performed"
+}

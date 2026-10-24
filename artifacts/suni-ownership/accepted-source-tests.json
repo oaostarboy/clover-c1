@@ -1,0 +1,959 @@
+{
+  "source_sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+  "guard_sha256": "f16befb42735a4336a3ee4e13440d56f8574be24d9787fce5726846050baacd0",
+  "status_sha256": "fb871b794ea2c6a491dddcb1d2ae25dabcb478ded0e4fd56b3d6e7983ad027ed",
+  "summary": {
+    "passed": 218,
+    "failed": 0,
+    "error": 0,
+    "skipped": 4
+  },
+  "cases": [
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_post_pull_api_proceeds_for_legacy_gateway_and_records_receipt",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_loaded_runner_advertises_ack_drain",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_status_does_not_inherit_predecessor_capability",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_modern_entry_classifies_before_update_work_and_continues",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_catchup_entries_classify_but_never_exit_for_legacy[_apply_pending_fleet_restart_catchup]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_catchup_entries_classify_but_never_exit_for_legacy[_run_pending_fleet_restart]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_capability_requires_live_exact_owner[reply-carriers-through-ack-v1-True-expected0]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_capability_requires_live_exact_owner[reply-carriers-through-ack-v1-False-expected1]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_capability_requires_live_exact_owner[True-True-expected2]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_capability_requires_live_exact_owner[future-unknown-True-expected3]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_capability_requires_live_exact_owner[None-True-expected4]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_guard_requires_rechecked_status_creation_time[None-True]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_guard_requires_rechecked_status_creation_time[41-True]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_guard_requires_rechecked_status_creation_time[42-False]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_legacy_proceed_preserves_pending_state_and_snapshot",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_legacy_proceed_leaves_the_restart_watcher_armed",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_capable_gateway_is_recorded_as_capable_and_silent",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_discovery_failure_defers_as_unverified",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard::test_legacy_message_is_truthful_and_never_says_nothing_changed",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_proved_timestamp_wrapper_is_not_a_second_gateway",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_macos_156_script_child_has_owner_status_but_wrapper_does_not",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_proved_historical_launchd_wrapper_matches_its_prepared_child",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[gateway-parent]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[unrelated-parent]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[unknown-wrapper-time]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[changed-wrapper-time]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[unknown-worker-time]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[stale-worker-time]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[missing-capability]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[unknown-capability]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[wrong-home]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[wrong-log]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[different-child-command]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[not-direct-child]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[missing-worker]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[unreadable-wrapper]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[unreadable-legacy-environment]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[missing-legacy-environment]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[malformed-wrapper]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[relative-interpreter]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[different-interpreter]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[additional-unknown-gateway]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_wrapper_exception_never_admits_unproved_process[worker-time-changes-after-admission]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_real_stderr_wrapper_and_direct_worker_identity[False]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_update_delivery_guard_wrappers::test_real_stderr_wrapper_and_direct_worker_identity[True]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_actual_suni_framework_shape_is_owned",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_cross_uid_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_duplicate_launchctl_owner_field_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_foreign_child_environment_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_foreign_supervisor_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_foreign_symlink_to_shared_base_is_not_own_venv",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_foreign_worker_command_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_framework_executable_mismatch_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_frozen_caller_defers_without_forced_restart_and_keeps_recovery",
+      "result": "skipped"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_full_discovery_only_identifies_legacy_worker_not_wrapper",
+      "result": "skipped"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_launchctl_failure_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_lexically_equal_positive_control",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_loaded_launchd_foreign_venv_rejected_despite_claimed_environment",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_loaded_launchd_wrong_arguments_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_loaded_launchd_wrong_pid_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_non_mac_alias_stays_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_only_outer_alias_correction_is_insufficient",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_other_venv_on_same_base_interpreter_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_shared_base_alias_outside_own_venv_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_stale_worker_fingerprint_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_unadmitted_worker_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_unknown_process_start_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_unreadable_child_environment_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_unreadable_wrapper_environment_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_wrapper_not_launchd_child_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_wrapper_reused_during_attestation_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_suni_macos_wrapper_acceptance.SuniWrapperAcceptance::test_wrong_profile_log_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_macos_native_wrapper_verifier::test_framework_worker_without_checkout_path_is_selected_with_its_wrapper",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_macos_native_wrapper_verifier::test_no_ancestor_or_unproved_extra_process_exemption[candidates0-1982-1981-True]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_macos_native_wrapper_verifier::test_no_ancestor_or_unproved_extra_process_exemption[candidates1-1982-1981-True]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_macos_native_wrapper_verifier::test_no_ancestor_or_unproved_extra_process_exemption[candidates2-1982-1981-True]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_macos_native_wrapper_verifier::test_no_ancestor_or_unproved_extra_process_exemption[candidates3-1982-1981-False]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.clover_cli.test_macos_native_wrapper_verifier::test_no_ancestor_or_unproved_extra_process_exemption[candidates4-1982-1982-True]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_new_lock_is_owner_only_in_traversable_home[18]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_new_lock_is_owner_only_in_traversable_home[0]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_new_lock_is_owner_only_in_traversable_home[63]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_existing_lock_tightened_without_replacing_inode[420-384]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_existing_lock_tightened_without_replacing_inode[438-384]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_existing_lock_tightened_without_replacing_inode[448-384]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_existing_lock_tightened_without_replacing_inode[384-384]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_lock_symlink_is_rejected_without_touching_target",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_lock_hardlink_is_rejected_without_chmod_of_other_path",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_foreign_owned_lock_fails_closed_before_chmod",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_changed_inode_during_open_fails_closed_without_chmod",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_owner_permissions_are_never_broadened[256]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_owner_permissions_are_never_broadened[128]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_owner_permissions_are_never_broadened[0]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_replaced_inode_while_waiting_cannot_publish_status",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_preexisting_readonly_holder_is_not_bypassed_by_permission_migration",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_lock_security::test_crashed_lock_holder_releases_same_inode",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_subordinate_health_preserves_exact_owner_admission",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields0]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields1]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields2]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields3]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields4]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields5]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields6]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_overlapping_health_write_cannot_restore_stale_owner_state",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[pid]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[reused]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[unknown-time]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[dead]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[home]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[kind]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_missing_or_malformed_home_is_not_an_owner_binding[None]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_missing_or_malformed_home_is_not_an_owner_binding[]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_missing_or_malformed_home_is_not_an_owner_binding[   ]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_real_owner_change_drops_previous_contract_until_loaded_runner_attests",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_health_writer_never_repairs_missing_capability",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_owner_replacement_during_health_merge_is_not_overwritten",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_frozen_158_caller_preserves_pre_pull_boundary[True]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status_update_owner::test_frozen_158_caller_preserves_pre_pull_boundary[False]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayPidState::test_write_pid_file_records_gateway_metadata",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayPidState::test_write_pid_file_is_atomic_against_concurrent_writers",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayPidState::test_runtime_lock_claims_and_releases_liveness",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayPidState::test_get_running_pid_cached_invalidates_when_pid_file_changes",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayPidState::test_get_running_pid_falls_back_to_live_lock_record",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayPidState::test_gateway_identity_files_use_process_home_not_context_override",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_clear_profile_platforms_preserves_primary_entries",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_clear_profile_platforms_and_write_are_one_atomic_update",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_platform_writes_are_stamped_with_writer_identity",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_clear_profile_platforms_repairs_malformed_platforms",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_write_runtime_status_overwrites_stale_pid_on_restart",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_runtime_status_running_pid_rejects_pid_reused_by_other_profile",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_runtime_status_running_pid_accepts_matching_profile_cmdline",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_command_line_belongs_to_profile_normalizes_separators",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayRuntimeStatus::test_write_runtime_status_explicit_none_clears_stale_fields",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGetProcessStartTime::test_live_process_is_stable_int",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestTerminatePid::test_force_uses_taskkill_on_windows",
+      "result": "skipped"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_windows_file_lock_uses_high_offset",
+      "result": "skipped"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_acquire_scoped_lock_rejects_live_other_process",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_acquire_scoped_lock_replaces_pid_reused_by_unrelated_process",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_acquire_scoped_lock_self_reacquires_when_disk_start_time_null",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_release_scoped_lock_allows_null_disk_start_time",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_acquire_scoped_lock_self_reacquires_when_start_times_differ",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_acquire_scoped_lock_race_second_acquirer_loses",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_acquire_scoped_lock_replaces_stale_record",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_release_all_scoped_locks_can_target_single_owner",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_acquire_scoped_lock_stamps_profile_label",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLocks::test_acquire_scoped_lock_omits_profile_when_not_inferable",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_profile_label_for_named_profile_home",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_profile_label_for_docker_profile_home",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_profile_label_for_root_home_is_default",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_profile_label_for_unknown_layout_is_none",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_profile_label_rejects_invalid_directory_names",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_owner_label_prefers_explicit_profile_field",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_owner_label_rejects_malformed_profile_field",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_owner_label_ignores_invalid_profile_and_uses_home",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_owner_label_falls_back_to_clover_home",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockOwnerLabel::test_owner_label_none_for_legacy_and_malformed_records",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestTakeoverMarker::test_write_marker_records_target_identity",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestTakeoverMarker::test_consume_returns_true_on_windows_when_start_time_unavailable",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestTakeoverMarker::test_write_marker_records_replacer_clover_home",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestTakeoverMarker::test_consume_rejects_marker_from_different_profile",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestTakeoverMarker::test_consume_accepts_legacy_marker_without_clover_home",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockTakeover::test_verified_distinct_home_handoff_marks_target_before_sigterm",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestScopedLockTakeover::test_handoff_rejects_uncorroborated_target_home",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestPlannedStopMarker::test_write_marker_records_target_identity",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestPlannedStopMarker::test_consume_returns_true_on_windows_when_start_time_unavailable",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestPlannedStopMarker::test_consume_still_rejects_start_time_mismatch_when_both_known",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestReadProcessCmdlinePsFallback::test_ps_fallback_when_proc_unavailable",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestReadProcessCmdlinePsFallback::test_proc_cmdline_takes_priority_over_ps",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestCorruptStatusFiles::test_read_json_file_returns_none_on_binary_garbage",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestParseActiveAgents::test_valid_int_passthrough",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestParseActiveAgents::test_zero",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestActiveAgentsTurnBoundaryWrite::test_active_agents_only_write_preserves_gateway_state",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayBusyDerivation::test_busy_requires_running_state_and_positive_count",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestGatewayBusyDerivation::test_drainable_is_running_and_live_independent_of_count",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestRespawnStormBreaker::test_no_storm_under_threshold",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestLaunchdPlistRespawnGovernance::test_plist_has_throttle_interval",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestPermissionErrorOnLockFile::test_permission_error_on_lock_file_returns_false_and_removes",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestPermissionErrorOnLockFile::test_permission_error_unlink_failure_still_returns_false",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestPermissionErrorOnLockFile::test_acquire_gateway_runtime_lock_recovers_from_permission_error",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestNormalizeUpdatedAt::test_epoch_int_converts_to_utc_iso",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestNormalizeUpdatedAt::test_iso_with_z_suffix_accepted",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestNormalizeUpdatedAt::test_naive_iso_coerced_to_utc",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestNormalizeUpdatedAt::test_offset_aware_iso_round_trips_canonically",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestNormalizeUpdatedAt::test_epoch_before_2000_rejected",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestRuntimeStatusUpdatedAtContract::test_write_then_read_updated_at_parses_tz_aware",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestResolveGatewayLiveness::test_pid_rung_wins_and_skips_later_rungs",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestResolveGatewayLiveness::test_probe_exception_degrades_instead_of_raising",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status.TestResolveGatewayLiveness::test_profile_dir_scopes_every_read_to_that_profile",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status::test_strict_gateway_identity_returns_none_for_confirmed_absence",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status::test_strict_gateway_identity_raises_when_metadata_stat_is_denied",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status::test_strict_gateway_identity_raises_on_malformed_active_metadata",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_status::test_strict_gateway_identity_rejects_reused_pid",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestDeadPidCannotClaimRunning::test_dead_pid_fresh_timestamp_does_not_read_running",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestDeadPidCannotClaimRunning::test_dead_pid_old_timestamp_does_not_read_running",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestDeadPidCannotClaimRunning::test_pid_reuse_does_not_read_running",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestDeadPidCannotClaimRunning::test_every_live_asserting_state_is_downgraded[running]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestDeadPidCannotClaimRunning::test_every_live_asserting_state_is_downgraded[starting]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestDeadPidCannotClaimRunning::test_every_live_asserting_state_is_downgraded[draining]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestDeadPidCannotClaimRunning::test_every_live_asserting_state_is_downgraded[stopping]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestDeadPidCannotClaimRunning::test_every_live_asserting_state_is_downgraded[degraded]",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestHealthyGatewayIsNeverReportedDead::test_live_gateway_still_reads_running",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestHealthyGatewayIsNeverReportedDead::test_idle_gateway_with_stale_file_still_reads_running",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestHealthyGatewayIsNeverReportedDead::test_real_write_then_read_roundtrip_reads_running",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestUnprovableClaimsAreLeftStanding::test_record_without_pid_is_not_downgraded",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestUnprovableClaimsAreLeftStanding::test_probe_failure_degrades_to_raw_record",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestUnprovableClaimsAreLeftStanding::test_already_stopped_state_is_not_clobbered",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestUnprovableClaimsAreLeftStanding::test_startup_failed_diagnostic_is_preserved",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestAbsentOrUnreadableFile::test_absent_file_returns_none",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestAbsentOrUnreadableFile::test_corrupt_json_returns_none",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestAbsentOrUnreadableFile::test_empty_file_returns_none",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestForensicDataIsPreserved::test_raw_claim_and_payload_survive_the_downgrade",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestForensicDataIsPreserved::test_reconcile_false_returns_untouched_bytes",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestForensicDataIsPreserved::test_read_does_not_rewrite_the_file",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestForensicDataIsPreserved::test_read_only_directory_still_reconciles",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestForensicDataIsPreserved::test_input_record_is_not_mutated_in_place",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestExistingContractsUnbroken::test_get_runtime_status_running_pid_still_rejects_dead_pid",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestExistingContractsUnbroken::test_get_runtime_status_running_pid_accepts_live_self",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestExistingContractsUnbroken::test_runtime_status_pid_is_live_contract_preserved",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestExistingContractsUnbroken::test_resolve_gateway_liveness_reports_down_for_dead_record",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestExistingContractsUnbroken::test_resolve_gateway_liveness_still_reports_live_gateway_up",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestConsumersInheritTheCorrection::test_derived_busy_and_drainable_are_false_for_dead_record",
+      "result": "passed"
+    },
+    {
+      "nodeid": "tests.gateway.test_runtime_status_liveness_reconciliation.TestConsumersInheritTheCorrection::test_health_snapshot_does_not_report_dead_gateway_as_running",
+      "result": "passed"
+    }
+  ],
+  "wire_tests": [
+    {
+      "nodeid": "__main__.ChatWireTests.test_complete_reply_waits_for_controller_release",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_cross_uid_checkpoint_rejected",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_foreign_repo_checkpoint_rejected",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_kernel_checkpoint_needs_no_beacon_or_receipt",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_kernel_checkpoint_rebinds_pid_start",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_kernel_checkpoint_rejects_multiple_private_updaters",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_kernel_checkpoint_rejects_older_or_cross_uid_actor",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_live_updater_checkpoint_does_not_wait_for_final_receipt",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_no_pull_pre_pause_beacon_without_repo_still_requires_exact_console_script",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_real_irc_socket_registration_human_delivery_and_reply_capture",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_reused_updater_pid_checkpoint_rejected",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_sdk_nonstream_requests_one_file_tool_without_faking_its_effect",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_sdk_stream_preserves_tool_call",
+      "result": "ok"
+    },
+    {
+      "nodeid": "__main__.ChatWireTests.test_unknown_updater_start_checkpoint_rejected",
+      "result": "ok"
+    }
+  ]
+}

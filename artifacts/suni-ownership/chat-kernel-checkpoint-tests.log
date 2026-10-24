@@ -1,0 +1,19 @@
+test_complete_reply_waits_for_controller_release (__main__.ChatWireTests.test_complete_reply_waits_for_controller_release) ... ok
+test_cross_uid_checkpoint_rejected (__main__.ChatWireTests.test_cross_uid_checkpoint_rejected) ... ok
+test_foreign_repo_checkpoint_rejected (__main__.ChatWireTests.test_foreign_repo_checkpoint_rejected) ... ok
+test_kernel_checkpoint_needs_no_beacon_or_receipt (__main__.ChatWireTests.test_kernel_checkpoint_needs_no_beacon_or_receipt) ... ok
+test_kernel_checkpoint_rebinds_pid_start (__main__.ChatWireTests.test_kernel_checkpoint_rebinds_pid_start) ... ok
+test_kernel_checkpoint_rejects_multiple_private_updaters (__main__.ChatWireTests.test_kernel_checkpoint_rejects_multiple_private_updaters) ... ok
+test_kernel_checkpoint_rejects_older_or_cross_uid_actor (__main__.ChatWireTests.test_kernel_checkpoint_rejects_older_or_cross_uid_actor) ... ok
+test_live_updater_checkpoint_does_not_wait_for_final_receipt (__main__.ChatWireTests.test_live_updater_checkpoint_does_not_wait_for_final_receipt) ... ok
+test_no_pull_pre_pause_beacon_without_repo_still_requires_exact_console_script (__main__.ChatWireTests.test_no_pull_pre_pause_beacon_without_repo_still_requires_exact_console_script) ... ok
+test_real_irc_socket_registration_human_delivery_and_reply_capture (__main__.ChatWireTests.test_real_irc_socket_registration_human_delivery_and_reply_capture) ... ok
+test_reused_updater_pid_checkpoint_rejected (__main__.ChatWireTests.test_reused_updater_pid_checkpoint_rejected) ... ok
+test_sdk_nonstream_requests_one_file_tool_without_faking_its_effect (__main__.ChatWireTests.test_sdk_nonstream_requests_one_file_tool_without_faking_its_effect) ... ok
+test_sdk_stream_preserves_tool_call (__main__.ChatWireTests.test_sdk_stream_preserves_tool_call) ... ok
+test_unknown_updater_start_checkpoint_rejected (__main__.ChatWireTests.test_unknown_updater_start_checkpoint_rejected) ... ok
+
+----------------------------------------------------------------------
+Ran 14 tests in 13.034s
+
+OK

@@ -1,0 +1,49 @@
+{
+  "product_sha": "f9fbec832ed9263fa09d348265e16c94594bd3a9",
+  "old_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+  "scope": "native-framework-launchd-frozen-cli-old2new",
+  "passed": false,
+  "chat_update": "NOT EXERCISED",
+  "accepted_turn_tool_effect_reply": "NOT EXERCISED",
+  "pending_no_pull_catchup": "NOT EXERCISED",
+  "live_hosts_touched": false,
+  "scenario": "pending-chat",
+  "before_process": {
+    "worker_pid": 7899,
+    "wrapper_pid": 7699,
+    "worker_start": 1792807864.239192,
+    "wrapper_start": 1792807863.267277,
+    "worker_argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "wrapper_argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.stderr_timestamp",
+      "--error-log",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/logs/gateway.error.log",
+      "--",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "launchd_selected": [
+      "\tprogram = /Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/python",
+      "\tpid = 7699"
+    ]
+  },
+  "pending_seed_worker": {
+    "pid": 7899,
+    "code_sha": "9535350bee1d57cf7e466672e6f416403886bec1"
+  },
+  "error": "TimeoutError: chat completion report missing or duplicated",
+  "label_absent_after_cleanup": true
+}

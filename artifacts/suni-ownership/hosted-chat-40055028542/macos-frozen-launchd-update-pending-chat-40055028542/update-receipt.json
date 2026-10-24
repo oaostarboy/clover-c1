@@ -1,0 +1,65 @@
+{
+  "schema": 1,
+  "started_at": "2026-10-24T02:40:14.272128+00:00",
+  "finished_at": "2026-10-24T02:41:01.271228+00:00",
+  "argv": [
+    "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/clover",
+    "update",
+    "--gateway"
+  ],
+  "pid": 1952,
+  "outcome": "success",
+  "pre_update": {
+    "sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+    "short_sha": "5bfc4013",
+    "version": "1.5.9",
+    "source": "git"
+  },
+  "post_update": {
+    "sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+    "short_sha": "5bfc4013",
+    "version": "1.5.9",
+    "source": "git"
+  },
+  "steps": [],
+  "skips": [
+    {
+      "name": "pre_update_backup",
+      "reason": "disabled (updates.pre_update_backup / --no-backup)",
+      "at": "2026-10-24T02:40:14.307758+00:00"
+    }
+  ],
+  "gateway_restart": {},
+  "fleet": [],
+  "plan": {
+    "install_method": "git",
+    "updatable_in_place": true,
+    "update_mechanism": "clover update",
+    "expected_sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+    "expected_version": "1.5.9",
+    "profiles": [
+      "default"
+    ],
+    "runtimes": [
+      {
+        "kind": "gateway",
+        "profile": "default",
+        "pid": 1582,
+        "supervisor": "external",
+        "code_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+        "code_version": "1.5.6",
+        "restart_via": "manual",
+        "detail": {}
+      }
+    ]
+  },
+  "delivery_restart_guard": {
+    "status": "legacy-proceed",
+    "required_capability": "reply-carriers-through-ack-v1",
+    "reasons": [
+      "legacy: default (PID 1582): identified legacy runtime"
+    ]
+  },
+  "exit_code": 0,
+  "stop_reason": "completed at command boundary"
+}

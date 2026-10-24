@@ -1,0 +1,309 @@
+{"kind": "irc_in", "at": 1792809619.0567338, "line": "NICK cloverbot"}
+{"kind": "irc_in", "at": 1792809619.057386, "line": "USER cloverbot 0 * :Clover Cognition"}
+{"kind": "irc_in", "at": 1792809619.060742, "line": "JOIN #clover"}
+{"kind": "human_message_sent", "at": 1792809619.505153, "text": "MAC_NATIVE_ACCEPTANCE: use write_file exactly once to create /Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/native-tool-effect.txt containing ONE_NATIVE_TOOL_EFFECT followed by a newline, then reply only MAC_NATIVE_TURN_COMPLETE."}
+{"kind": "unsupported_model_path", "at": 1792809627.036144, "path": "/api/show"}
+{"kind": "unsupported_model_path", "at": 1792809627.067177, "path": "/api/show"}
+{"kind": "missing_real_file_tool", "at": 1792809628.1242182, "tools": []}
+{"kind": "auxiliary_model_call", "at": 1792809628.124769}
+{"kind": "missing_real_file_tool", "at": 1792809628.1931689, "tools": []}
+{"kind": "model_tool_request", "at": 1792809628.276014, "call_id": "call_native_effect"}
+{"kind": "accepted_turn_waiting_after_tool", "at": 1792809628.645854}
+{"kind": "human_message_sent", "at": 1792809628.7951858, "text": "/update"}
+{"kind": "irc_in", "at": 1792809628.9979, "line": "PRIVMSG ant :\u2618 Starting Clover update\u2026 I'll stream progress here."}
+{"kind": "controller_releases_accepted_turn", "at": 1792809629.097934}
+{"kind": "model_complete_reply", "at": 1792809629.098043}
+{"kind": "irc_in", "at": 1792809629.187646, "line": "PRIVMSG ant :\ud83c\udf40(\uff89\u25d5\u30ee\u25d5)\uff89 hello! I'm Clo, your clover. what shall we grow today?"}
+{"kind": "irc_in", "at": 1792809629.489255, "line": "PRIVMSG ant :MAC_NATIVE_TURN_COMPLETE"}
+{"kind": "irc_in", "at": 1792809633.0102909, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809633.311519, "line": "PRIVMSG ant :\u2618 Updating Clover Cognition..."}
+{"kind": "irc_in", "at": 1792809633.6127381, "line": "PRIVMSG ant :\u2192 Fleet: 1 running service(s) across profiles: default"}
+{"kind": "irc_in", "at": 1792809633.915117, "line": "PRIVMSG ant :\u26a0 Updating from fork:"}
+{"kind": "irc_in", "at": 1792809634.2164, "line": "PRIVMSG ant :  /Users/runner/work/clover-c1/clover-c1/.macos-native-origin.git"}
+{"kind": "irc_in", "at": 1792809634.517542, "line": "PRIVMSG ant :\u2192 Fetching updates..."}
+{"kind": "irc_in", "at": 1792809634.818607, "line": "PRIVMSG ant :\u2192 Found 80 new commit(s)"}
+{"kind": "irc_in", "at": 1792809635.120041, "line": "PRIVMSG ant :\u2192 Pulling updates..."}
+{"kind": "irc_in", "at": 1792809635.421298, "line": "PRIVMSG ant :  \u2713 Cleared 108 stale pycache directories"}
+{"kind": "irc_in", "at": 1792809635.7226088, "line": "PRIVMSG ant :\u2192 Fetching upstream..."}
+{"kind": "irc_in", "at": 1792809636.023873, "line": "PRIVMSG ant :  \u2713 Fork is up to date with upstream"}
+{"kind": "irc_in", "at": 1792809636.324223, "line": "PRIVMSG ant :\u2192 Updating Python dependencies..."}
+{"kind": "irc_in", "at": 1792809636.6262772, "line": "PRIVMSG ant :\u2139 The running gateway predates restart-safe reply delivery. The update continues: the gateway is restarted when it is idle (waiting up to a couple of minutes; if it stays busy the restart remains pending). An ordinary reply may be delivered once more during the first transition."}
+{"kind": "irc_in", "at": 1792809636.927381, "line": "PRIVMSG ant :  legacy: default (PID 2280): identified legacy runtime"}
+{"kind": "irc_in", "at": 1792809637.22894, "line": "PRIVMSG ant :  \u2192 Installing managed uv into /Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/bin ..."}
+{"kind": "irc_in", "at": 1792809637.530241, "line": "PRIVMSG ant :  \u2713 Managed uv installed (uv 0.13.5 (46776a95d 2026-10-21 aarch64-apple-darwin))"}
+{"kind": "irc_in", "at": 1792809637.8323321, "line": "PRIVMSG ant :Using Python 3.12.14 environment at: venv"}
+{"kind": "irc_in", "at": 1792809638.134497, "line": "PRIVMSG ant :Resolved 100 packages in 490ms"}
+{"kind": "irc_in", "at": 1792809638.436539, "line": "PRIVMSG ant :   Building clover-c1 @ file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install"}
+{"kind": "irc_in", "at": 1792809638.736651, "line": "PRIVMSG ant :Downloading google-api-python-client (14.3MiB)"}
+{"kind": "irc_in", "at": 1792809639.0374138, "line": "PRIVMSG ant : Downloaded google-api-python-client"}
+{"kind": "irc_in", "at": 1792809639.338722, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809641.6431801, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809641.948292, "line": "PRIVMSG ant :Built clover-c1 @ file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install"}
+{"kind": "irc_in", "at": 1792809642.2496269, "line": "PRIVMSG ant :Prepared 32 packages in 1.94s"}
+{"kind": "irc_in", "at": 1792809642.551032, "line": "PRIVMSG ant :Uninstalled 4 packages in 16ms"}
+{"kind": "irc_in", "at": 1792809642.8515542, "line": "PRIVMSG ant :Installed 32 packages in 45ms"}
+{"kind": "irc_in", "at": 1792809643.155452, "line": "PRIVMSG ant : + agent-client-protocol==0.9.0"}
+{"kind": "irc_in", "at": 1792809643.457324, "line": "PRIVMSG ant : - clover-c1==1.5.6 (from file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install)"}
+{"kind": "irc_in", "at": 1792809643.759312, "line": "PRIVMSG ant : + clover-c1==1.5.9 (from file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install)"}
+{"kind": "irc_in", "at": 1792809644.060537, "line": "PRIVMSG ant : + defusedxml==0.7.1"}
+{"kind": "irc_in", "at": 1792809644.361881, "line": "PRIVMSG ant : - fastapi==0.162.0"}
+{"kind": "irc_in", "at": 1792809644.665511, "line": "PRIVMSG ant : + fastapi==0.133.1"}
+{"kind": "irc_in", "at": 1792809644.9669771, "line": "PRIVMSG ant : + google-api-core==2.43.0"}
+{"kind": "irc_in", "at": 1792809645.268276, "line": "PRIVMSG ant : + google-api-python-client==2.194.0"}
+{"kind": "irc_in", "at": 1792809645.569834, "line": "PRIVMSG ant : + google-auth==2.55.1"}
+{"kind": "irc_in", "at": 1792809645.87011, "line": "PRIVMSG ant : + google-auth-httplib2==0.3.1"}
+{"kind": "irc_in", "at": 1792809646.171443, "line": "PRIVMSG ant : + google-auth-oauthlib==1.3.1"}
+{"kind": "irc_in", "at": 1792809646.472658, "line": "PRIVMSG ant : + googleapis-common-protos==1.76.0"}
+{"kind": "irc_in", "at": 1792809646.775188, "line": "PRIVMSG ant : + httpcore2==2.7.0"}
+{"kind": "irc_in", "at": 1792809647.076593, "line": "PRIVMSG ant : + httplib2==0.32.0"}
+{"kind": "irc_in", "at": 1792809647.377882, "line": "PRIVMSG ant : + httpx2==2.7.0"}
+{"kind": "irc_in", "at": 1792809647.678878, "line": "PRIVMSG ant : + jsonschema==4.26.0"}
+{"kind": "irc_in", "at": 1792809647.9793742, "line": "PRIVMSG ant : + jsonschema-specifications==2025.9.1"}
+{"kind": "irc_in", "at": 1792809648.280662, "line": "PRIVMSG ant : + mcp==2.0.0"}
+{"kind": "irc_in", "at": 1792809648.583665, "line": "PRIVMSG ant : + mcp-types==2.0.0"}
+{"kind": "irc_in", "at": 1792809648.884777, "line": "PRIVMSG ant : + oauthlib==4.0.0"}
+{"kind": "irc_in", "at": 1792809649.18629, "line": "PRIVMSG ant : + proto-plus==1.29.0"}
+{"kind": "irc_in", "at": 1792809649.48783, "line": "PRIVMSG ant : + protobuf==7.36.2"}
+{"kind": "irc_in", "at": 1792809649.7893, "line": "PRIVMSG ant : + pyasn1==0.6.4"}
+{"kind": "irc_in", "at": 1792809650.0900621, "line": "PRIVMSG ant : + pyasn1-modules==0.4.2"}
+{"kind": "irc_in", "at": 1792809650.391895, "line": "PRIVMSG ant : + pyparsing==3.3.3"}
+{"kind": "irc_in", "at": 1792809650.694606, "line": "PRIVMSG ant : + referencing==0.37.0"}
+{"kind": "irc_in", "at": 1792809650.995859, "line": "PRIVMSG ant : + requests-oauthlib==2.0.0"}
+{"kind": "irc_in", "at": 1792809651.2971892, "line": "PRIVMSG ant : + rpds-py==2026.9.1"}
+{"kind": "irc_in", "at": 1792809651.598735, "line": "PRIVMSG ant : + sse-starlette==3.5.0"}
+{"kind": "irc_in", "at": 1792809651.8999412, "line": "PRIVMSG ant : - starlette==1.9.0"}
+{"kind": "irc_in", "at": 1792809652.201524, "line": "PRIVMSG ant : + starlette==1.3.1"}
+{"kind": "irc_in", "at": 1792809652.502259, "line": "PRIVMSG ant : + truststore==0.10.5"}
+{"kind": "irc_in", "at": 1792809652.8031092, "line": "PRIVMSG ant : + uritemplate==4.2.0"}
+{"kind": "irc_in", "at": 1792809653.103727, "line": "PRIVMSG ant : - uvicorn==0.54.0"}
+{"kind": "irc_in", "at": 1792809653.404181, "line": "PRIVMSG ant : + uvicorn==0.41.0"}
+{"kind": "irc_in", "at": 1792809653.704601, "line": "PRIVMSG ant : + youtube-transcript-api==1.2.4"}
+{"kind": "irc_in", "at": 1792809654.006356, "line": "PRIVMSG ant :  \u2713 Cleared 1 stale pycache directory"}
+{"kind": "irc_in", "at": 1792809654.308416, "line": "PRIVMSG ant :Using Python 3.12.14 environment at: venv"}
+{"kind": "irc_in", "at": 1792809654.6097238, "line": "PRIVMSG ant :Resolved 1 package in 136ms"}
+{"kind": "irc_in", "at": 1792809654.911637, "line": "PRIVMSG ant :Downloading pip (1.7MiB)"}
+{"kind": "irc_in", "at": 1792809655.225604, "line": "PRIVMSG ant : Downloaded pip"}
+{"kind": "irc_in", "at": 1792809655.538209, "line": "PRIVMSG ant :Prepared 1 package in 137ms"}
+{"kind": "irc_in", "at": 1792809655.8435369, "line": "PRIVMSG ant :Uninstalled 1 package in 87ms"}
+{"kind": "irc_in", "at": 1792809656.1445298, "line": "PRIVMSG ant :Installed 1 package in 13ms"}
+{"kind": "irc_in", "at": 1792809656.445933, "line": "PRIVMSG ant : - pip==26.2.1"}
+{"kind": "irc_in", "at": 1792809656.7478, "line": "PRIVMSG ant : + pip==26.2.2"}
+{"kind": "irc_in", "at": 1792809657.051275, "line": "PRIVMSG ant :\u2192 Refreshing 8 active lazy backend(s)..."}
+{"kind": "irc_in", "at": 1792809657.355616, "line": "PRIVMSG ant :  \u2713 8 already current"}
+{"kind": "irc_in", "at": 1792809657.6567318, "line": "PRIVMSG ant :\u2192 Warming npx cache for agent-browser..."}
+{"kind": "irc_in", "at": 1792809657.9575338, "line": "PRIVMSG ant :\u2192 Updating Node.js dependencies..."}
+{"kind": "irc_in", "at": 1792809658.25931, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809660.5660312, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809660.8761642, "line": "PRIVMSG ant :> clover-c1@1.0.0 postinstall"}
+{"kind": "irc_in", "at": 1792809661.177663, "line": "PRIVMSG ant :> echo '\u2705 Node dependencies installed. Run: python run_agent.py --help'"}
+{"kind": "irc_in", "at": 1792809661.479009, "line": "PRIVMSG ant :\u2705 Node dependencies installed. Run: python run_agent.py --help"}
+{"kind": "irc_in", "at": 1792809661.7800908, "line": "PRIVMSG ant :added 922 packages in 15s"}
+{"kind": "irc_in", "at": 1792809662.081471, "line": "PRIVMSG ant :  \u2713 ui-tui, web workspaces installed (desktop skipped)"}
+{"kind": "irc_in", "at": 1792809662.382708, "line": "PRIVMSG ant :\u2192 Building web UI..."}
+{"kind": "irc_in", "at": 1792809662.695553, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809683.027186, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809683.328344, "line": "PRIVMSG ant :> web@0.0.0 build"}
+{"kind": "irc_in", "at": 1792809683.62895, "line": "PRIVMSG ant :    > tsc -b && vite build"}
+{"kind": "irc_in", "at": 1792809683.932982, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809694.256023, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809694.556532, "line": "PRIVMSG ant :(!) Your Vite config uses features that are unsupported by configLoader: 'native', which is planned to become the default in a future major version of Vite:"}
+{"kind": "irc_in", "at": 1792809694.85792, "line": "PRIVMSG ant :      - __dirname (vite.config.ts:86:25). Use import.meta.dirname instead"}
+{"kind": "irc_in", "at": 1792809695.159311, "line": "PRIVMSG ant :    Set VITE_CONFIG_NATIVE_IGNORE_WARNING=true to suppress this warning."}
+{"kind": "irc_in", "at": 1792809695.462573, "line": "PRIVMSG ant :    vite v8.2.0 building client environment for production..."}
+{"kind": "irc_in", "at": 1792809695.7656581, "line": "PRIVMSG ant :    transforming..."}
+{"kind": "irc_in", "at": 1792809696.066887, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809703.9053571, "line": "PRIVMSG #clover :\u2618\ufe0f(\u25d5\u1d17\u25d5\u273f) stepping out for a moment. Your task got paused. Message me after and I'll pick up where we left off."}
+{"kind": "irc_in", "at": 1792809704.236193, "line": "QUIT :Clover Cognition shutting down"}
+{"kind": "irc_in", "at": 1792809708.15116, "line": "NICK cloverbot"}
+{"kind": "irc_in", "at": 1792809708.151371, "line": "USER cloverbot 0 * :Clover Cognition"}
+{"kind": "irc_in", "at": 1792809708.152439, "line": "JOIN #clover"}
+{"kind": "irc_in", "at": 1792809709.226094, "line": "PRIVMSG #clover :\ud83c\udf40\u30fe(\uff3e\u2207\uff3e) I'm back!"}
+{"kind": "irc_in", "at": 1792809734.251849, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809734.552952, "line": "PRIVMSG ant :\u2618 Updating Clover Cognition..."}
+{"kind": "irc_in", "at": 1792809734.853377, "line": "PRIVMSG ant :\u2192 Fleet: 1 running service(s) across profiles: default"}
+{"kind": "irc_in", "at": 1792809735.1541362, "line": "PRIVMSG ant :\u26a0 Updating from fork:"}
+{"kind": "irc_in", "at": 1792809735.4577532, "line": "PRIVMSG ant :  /Users/runner/work/clover-c1/clover-c1/.macos-native-origin.git"}
+{"kind": "irc_in", "at": 1792809735.759028, "line": "PRIVMSG ant :\u2192 Fetching updates..."}
+{"kind": "irc_in", "at": 1792809736.0655801, "line": "PRIVMSG ant :\u2192 Found 80 new commit(s)"}
+{"kind": "irc_in", "at": 1792809736.367251, "line": "PRIVMSG ant :\u2192 Pulling updates..."}
+{"kind": "irc_in", "at": 1792809736.6677482, "line": "PRIVMSG ant :  \u2713 Cleared 108 stale pycache directories"}
+{"kind": "irc_in", "at": 1792809736.970948, "line": "PRIVMSG ant :\u2192 Fetching upstream..."}
+{"kind": "irc_in", "at": 1792809737.276352, "line": "PRIVMSG ant :  \u2713 Fork is up to date with upstream"}
+{"kind": "irc_in", "at": 1792809737.578022, "line": "PRIVMSG ant :\u2192 Updating Python dependencies..."}
+{"kind": "irc_in", "at": 1792809737.882026, "line": "PRIVMSG ant :\u2139 The running gateway predates restart-safe reply delivery. The update continues: the gateway is restarted when it is idle (waiting up to a couple of minutes; if it stays busy the restart remains pending). An ordinary reply may be delivered once more during the first transition."}
+{"kind": "irc_in", "at": 1792809738.1824262, "line": "PRIVMSG ant :  legacy: default (PID 2280): identified legacy runtime"}
+{"kind": "irc_in", "at": 1792809738.4837089, "line": "PRIVMSG ant :  \u2192 Installing managed uv into /Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/bin ..."}
+{"kind": "irc_in", "at": 1792809738.784998, "line": "PRIVMSG ant :  \u2713 Managed uv installed (uv 0.13.5 (46776a95d 2026-10-21 aarch64-apple-darwin))"}
+{"kind": "irc_in", "at": 1792809739.087106, "line": "PRIVMSG ant :Using Python 3.12.14 environment at: venv"}
+{"kind": "irc_in", "at": 1792809739.3883882, "line": "PRIVMSG ant :Resolved 100 packages in 490ms"}
+{"kind": "irc_in", "at": 1792809739.689457, "line": "PRIVMSG ant :   Building clover-c1 @ file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install"}
+{"kind": "irc_in", "at": 1792809739.990686, "line": "PRIVMSG ant :Downloading google-api-python-client (14.3MiB)"}
+{"kind": "irc_in", "at": 1792809740.297876, "line": "PRIVMSG ant : Downloaded google-api-python-client"}
+{"kind": "irc_in", "at": 1792809740.599349, "line": "PRIVMSG ant :      Built clover-c1 @ file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install"}
+{"kind": "irc_in", "at": 1792809740.905948, "line": "PRIVMSG ant :Prepared 32 packages in 1.94s"}
+{"kind": "irc_in", "at": 1792809741.207071, "line": "PRIVMSG ant :Uninstalled 4 packages in 16ms"}
+{"kind": "irc_in", "at": 1792809741.50824, "line": "PRIVMSG ant :Installed 32 packages in 45ms"}
+{"kind": "irc_in", "at": 1792809741.809453, "line": "PRIVMSG ant : + agent-client-protocol==0.9.0"}
+{"kind": "irc_in", "at": 1792809742.1114318, "line": "PRIVMSG ant : - clover-c1==1.5.6 (from file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install)"}
+{"kind": "irc_in", "at": 1792809742.412761, "line": "PRIVMSG ant : + clover-c1==1.5.9 (from file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install)"}
+{"kind": "irc_in", "at": 1792809742.724203, "line": "PRIVMSG ant : + defusedxml==0.7.1"}
+{"kind": "irc_in", "at": 1792809743.0284648, "line": "PRIVMSG ant : - fastapi==0.162.0"}
+{"kind": "irc_in", "at": 1792809743.335767, "line": "PRIVMSG ant : + fastapi==0.133.1"}
+{"kind": "irc_in", "at": 1792809743.6373188, "line": "PRIVMSG ant : + google-api-core==2.43.0"}
+{"kind": "irc_in", "at": 1792809743.9423912, "line": "PRIVMSG ant : + google-api-python-client==2.194.0"}
+{"kind": "irc_in", "at": 1792809744.243576, "line": "PRIVMSG ant : + google-auth==2.55.1"}
+{"kind": "irc_in", "at": 1792809744.554881, "line": "PRIVMSG ant : + google-auth-httplib2==0.3.1"}
+{"kind": "irc_in", "at": 1792809744.8626208, "line": "PRIVMSG ant : + google-auth-oauthlib==1.3.1"}
+{"kind": "irc_in", "at": 1792809745.16368, "line": "PRIVMSG ant : + googleapis-common-protos==1.76.0"}
+{"kind": "irc_in", "at": 1792809745.464867, "line": "PRIVMSG ant : + httpcore2==2.7.0"}
+{"kind": "irc_in", "at": 1792809745.765662, "line": "PRIVMSG ant : + httplib2==0.32.0"}
+{"kind": "irc_in", "at": 1792809746.076842, "line": "PRIVMSG ant : + httpx2==2.7.0"}
+{"kind": "irc_in", "at": 1792809746.380351, "line": "PRIVMSG ant : + jsonschema==4.26.0"}
+{"kind": "irc_in", "at": 1792809746.6820369, "line": "PRIVMSG ant : + jsonschema-specifications==2025.9.1"}
+{"kind": "irc_in", "at": 1792809746.9844549, "line": "PRIVMSG ant : + mcp==2.0.0"}
+{"kind": "irc_in", "at": 1792809747.2891011, "line": "PRIVMSG ant : + mcp-types==2.0.0"}
+{"kind": "irc_in", "at": 1792809747.592811, "line": "PRIVMSG ant : + oauthlib==4.0.0"}
+{"kind": "irc_in", "at": 1792809747.898606, "line": "PRIVMSG ant : + proto-plus==1.29.0"}
+{"kind": "irc_in", "at": 1792809748.199141, "line": "PRIVMSG ant : + protobuf==7.36.2"}
+{"kind": "irc_in", "at": 1792809748.501857, "line": "PRIVMSG ant : + pyasn1==0.6.4"}
+{"kind": "irc_in", "at": 1792809748.8031921, "line": "PRIVMSG ant : + pyasn1-modules==0.4.2"}
+{"kind": "irc_in", "at": 1792809749.105213, "line": "PRIVMSG ant : + pyparsing==3.3.3"}
+{"kind": "irc_in", "at": 1792809749.406401, "line": "PRIVMSG ant : + referencing==0.37.0"}
+{"kind": "irc_in", "at": 1792809749.7076821, "line": "PRIVMSG ant : + requests-oauthlib==2.0.0"}
+{"kind": "irc_in", "at": 1792809750.008924, "line": "PRIVMSG ant : + rpds-py==2026.9.1"}
+{"kind": "irc_in", "at": 1792809750.3103948, "line": "PRIVMSG ant : + sse-starlette==3.5.0"}
+{"kind": "irc_in", "at": 1792809750.611418, "line": "PRIVMSG ant : - starlette==1.9.0"}
+{"kind": "irc_in", "at": 1792809750.912834, "line": "PRIVMSG ant : + starlette==1.3.1"}
+{"kind": "irc_in", "at": 1792809751.214099, "line": "PRIVMSG ant : + truststore==0.10.5"}
+{"kind": "irc_in", "at": 1792809751.517344, "line": "PRIVMSG ant : + uritemplate==4.2.0"}
+{"kind": "irc_in", "at": 1792809751.8185978, "line": "PRIVMSG ant : - uvicorn==0.54.0"}
+{"kind": "irc_in", "at": 1792809752.1206899, "line": "PRIVMSG ant : + uvicorn==0.41.0"}
+{"kind": "irc_in", "at": 1792809752.4226902, "line": "PRIVMSG ant : + youtube-transcript-api==1.2.4"}
+{"kind": "irc_in", "at": 1792809752.723819, "line": "PRIVMSG ant :  \u2713 Cleared 1 stale pycache directory"}
+{"kind": "irc_in", "at": 1792809753.027393, "line": "PRIVMSG ant :Using Python 3.12.14 environment at: venv"}
+{"kind": "irc_in", "at": 1792809753.3332329, "line": "PRIVMSG ant :Resolved 1 package in 136ms"}
+{"kind": "irc_in", "at": 1792809753.636684, "line": "PRIVMSG ant :Downloading pip (1.7MiB)"}
+{"kind": "irc_in", "at": 1792809753.9427772, "line": "PRIVMSG ant : Downloaded pip"}
+{"kind": "irc_in", "at": 1792809754.247126, "line": "PRIVMSG ant :Prepared 1 package in 137ms"}
+{"kind": "irc_in", "at": 1792809754.547644, "line": "PRIVMSG ant :Uninstalled 1 package in 87ms"}
+{"kind": "irc_in", "at": 1792809754.8497322, "line": "PRIVMSG ant :Installed 1 package in 13ms"}
+{"kind": "irc_in", "at": 1792809755.159251, "line": "PRIVMSG ant : - pip==26.2.1"}
+{"kind": "irc_in", "at": 1792809755.460469, "line": "PRIVMSG ant : + pip==26.2.2"}
+{"kind": "irc_in", "at": 1792809755.761643, "line": "PRIVMSG ant :\u2192 Refreshing 8 active lazy backend(s)..."}
+{"kind": "irc_in", "at": 1792809756.068162, "line": "PRIVMSG ant :  \u2713 8 already current"}
+{"kind": "irc_in", "at": 1792809756.3683531, "line": "PRIVMSG ant :\u2192 Warming npx cache for agent-browser..."}
+{"kind": "irc_in", "at": 1792809756.669617, "line": "PRIVMSG ant :\u2192 Updating Node.js dependencies..."}
+{"kind": "irc_in", "at": 1792809756.975971, "line": "PRIVMSG ant :> clover-c1@1.0.0 postinstall"}
+{"kind": "irc_in", "at": 1792809757.278937, "line": "PRIVMSG ant :> echo '\u2705 Node dependencies installed. Run: python run_agent.py --help'"}
+{"kind": "irc_in", "at": 1792809757.5813918, "line": "PRIVMSG ant :\u2705 Node dependencies installed. Run: python run_agent.py --help"}
+{"kind": "irc_in", "at": 1792809757.88202, "line": "PRIVMSG ant :added 922 packages in 15s"}
+{"kind": "irc_in", "at": 1792809758.188732, "line": "PRIVMSG ant :  \u2713 ui-tui, web workspaces installed (desktop skipped)"}
+{"kind": "irc_in", "at": 1792809758.490138, "line": "PRIVMSG ant :\u2192 Building web UI..."}
+{"kind": "irc_in", "at": 1792809758.794441, "line": "PRIVMSG ant :    > web@0.0.0 build"}
+{"kind": "irc_in", "at": 1792809759.0960572, "line": "PRIVMSG ant :    > tsc -b && vite build"}
+{"kind": "irc_in", "at": 1792809759.3973172, "line": "PRIVMSG ant :    (!) Your Vite config uses features that are unsupported by configLoader: 'native', which is planned to become the default in a future major version of Vite:"}
+{"kind": "irc_in", "at": 1792809759.6986618, "line": "PRIVMSG ant :      - __dirname (vite.config.ts:86:25). Use import.meta.dirname instead"}
+{"kind": "irc_in", "at": 1792809759.999827, "line": "PRIVMSG ant :    Set VITE_CONFIG_NATIVE_IGNORE_WARNING=true to suppress this warning."}
+{"kind": "irc_in", "at": 1792809760.3010502, "line": "PRIVMSG ant :    vite v8.2.0 building client environment for production..."}
+{"kind": "irc_in", "at": 1792809760.602515, "line": "PRIVMSG ant :    transforming..."}
+{"kind": "irc_in", "at": 1792809760.903645, "line": "PRIVMSG ant :    \u2713 2214 modules transformed"}
+{"kind": "irc_in", "at": 1792809761.213013, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809761.515112, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809761.8170612, "line": "PRIVMSG ant :."}
+{"kind": "irc_in", "at": 1792809762.15292, "line": "PRIVMSG ant :    rendering chunks..."}
+{"kind": "irc_in", "at": 1792809762.4539661, "line": "PRIVMSG ant :    computing gzip size..."}
+{"kind": "irc_in", "at": 1792809762.760181, "line": "PRIVMSG ant :    ../clover_cli/web_dist/index.html                                       1.27 kB \u2502 gzip:   0.50 kB"}
+{"kind": "irc_in", "at": 1792809763.061988, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/Mondwest-Regular-CWscgue7.woff2          23.82 kB"}
+{"kind": "irc_in", "at": 1792809763.364518, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/RulesExpanded-Regular-l8uVympt.woff2     33.82 kB"}
+{"kind": "irc_in", "at": 1792809763.667946, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/RulesExpanded-Bold-DZA7s8Pa.woff2        35.01 kB"}
+{"kind": "irc_in", "at": 1792809763.9690619, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/RulesCompressed-Regular-BSXFyF4x.woff2   37.76 kB"}
+{"kind": "irc_in", "at": 1792809764.275684, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/RulesCompressed-Medium-CA76_CrB.woff2    38.84 kB"}
+{"kind": "irc_in", "at": 1792809764.577618, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/Collapse-Bold-mgICk9-_.woff2             59.14 kB"}
+{"kind": "irc_in", "at": 1792809764.878825, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/Collapse-Regular-DysayoTY.woff2          62.81 kB"}
+{"kind": "irc_in", "at": 1792809765.1802082, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/xterm-BrP-ENHg.css                        3.93 kB \u2502 gzip:   1.01 kB"}
+{"kind": "irc_in", "at": 1792809765.488001, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/index-hKW89Kqe.css                      111.20 kB \u2502 gzip:  17.41 kB"}
+{"kind": "irc_in", "at": 1792809765.793391, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/usePageHeader-CsyJrgro.js                 0.29 kB \u2502 gzip:   0.22 kB"}
+{"kind": "irc_in", "at": 1792809766.09458, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/h2-BJIlkanI.js                            0.30 kB \u2502 gzip:   0.23 kB"}
+{"kind": "irc_in", "at": 1792809766.396965, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/rolldown-runtime-CbXtAM7H.js              0.58 kB \u2502 gzip:   0.36 kB"}
+{"kind": "irc_in", "at": 1792809766.6986449, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/DeleteConfirmDialog-DZuM399Z.js           0.60 kB \u2502 gzip:   0.37 kB"}
+{"kind": "irc_in", "at": 1792809766.999867, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/spinner-BgTk8dAO.js                       0.61 kB \u2502 gzip:   0.40 kB"}
+{"kind": "irc_in", "at": 1792809767.301165, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/useModalBehavior-CoRjIqFU.js              0.62 kB \u2502 gzip:   0.39 kB"}
+{"kind": "irc_in", "at": 1792809767.604534, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/clipboard-owkvc3zk.js                     0.73 kB \u2502 gzip:   0.44 kB"}
+{"kind": "irc_in", "at": 1792809767.9052212, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/stats-DPvPgHj4.js                         0.86 kB \u2502 gzip:   0.47 kB"}
+{"kind": "irc_in", "at": 1792809768.206353, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/switch-DgUFeFiE.js                        0.88 kB \u2502 gzip:   0.50 kB"}
+{"kind": "irc_in", "at": 1792809768.5075462, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/mcp-server-create-B0VgoYzF.js             0.92 kB \u2502 gzip:   0.46 kB"}
+{"kind": "irc_in", "at": 1792809768.808844, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/segmented-Bc2mRfTC.js                     1.09 kB \u2502 gzip:   0.57 kB"}
+{"kind": "irc_in", "at": 1792809769.110069, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/label-hH1pl4aT.js                         1.23 kB \u2502 gzip:   0.60 kB"}
+{"kind": "irc_in", "at": 1792809769.411244, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/checkbox-jcjXTNOd.js                      1.29 kB \u2502 gzip:   0.63 kB"}
+{"kind": "irc_in", "at": 1792809769.715442, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/command-block--yfjElvn.js                 1.31 kB \u2502 gzip:   0.72 kB"}
+{"kind": "irc_in", "at": 1792809770.0161731, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/DocsPage-BAnZXa6n.js                      1.94 kB \u2502 gzip:   1.06 kB"}
+{"kind": "irc_in", "at": 1792809770.3175921, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/select-LpNbO9un.js                        3.45 kB \u2502 gzip:   1.53 kB"}
+{"kind": "irc_in", "at": 1792809770.621141, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/PairingPage-Ctq15G11.js                   4.87 kB \u2502 gzip:   1.67 kB"}
+{"kind": "irc_in", "at": 1792809770.923404, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/LogsPage-sHC_evLt.js                      7.43 kB \u2502 gzip:   3.23 kB"}
+{"kind": "irc_in", "at": 1792809771.2256808, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/FilesPage-DRhiy0IN.js                     9.83 kB \u2502 gzip:   3.26 kB"}
+{"kind": "irc_in", "at": 1792809771.527912, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/WebhooksPage-BIe_Xx0T.js                 12.68 kB \u2502 gzip:   3.88 kB"}
+{"kind": "irc_in", "at": 1792809771.829098, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/ModelReloadConfirm-CxmyHuhD.js           13.52 kB \u2502 gzip:   5.03 kB"}
+{"kind": "irc_in", "at": 1792809772.13221, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/ProfileBuilderPage-BV5Rm-qT.js           14.90 kB \u2502 gzip:   4.50 kB"}
+{"kind": "irc_in", "at": 1792809772.434044, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/McpPage-xnM9KMsQ.js                      17.27 kB \u2502 gzip:   5.03 kB"}
+{"kind": "irc_in", "at": 1792809772.736126, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/ConfigPage-C2Q7csKG.js                   18.11 kB \u2502 gzip:   6.06 kB"}
+{"kind": "irc_in", "at": 1792809773.038259, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/AnalyticsPage-B2tRYVZ9.js                20.23 kB \u2502 gzip:   6.04 kB"}
+{"kind": "irc_in", "at": 1792809773.338609, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809773.6408372, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809773.941608, "line": "PRIVMSG ant : ../clover_cli/web_dist/assets/ChannelsPage-DoURismg.js                 20.66 kB \u2502 gzip:   6.56 kB"}
+{"kind": "irc_in", "at": 1792809774.24393, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/PluginsPage-BSn6t8jv.js                  25.04 kB \u2502 gzip:   7.56 kB"}
+{"kind": "irc_in", "at": 1792809774.546367, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/ProfilesPage-Da0cmZof.js                 25.24 kB \u2502 gzip:   7.07 kB"}
+{"kind": "irc_in", "at": 1792809774.847438, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/card-DDqU6MUb.js                         29.27 kB \u2502 gzip:   7.95 kB"}
+{"kind": "irc_in", "at": 1792809775.149469, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/EnvPage-au5xnCm-.js                      29.39 kB \u2502 gzip:   7.84 kB"}
+{"kind": "irc_in", "at": 1792809775.451482, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/ModelsPage-CXXdXduZ.js                   34.08 kB \u2502 gzip:  10.48 kB"}
+{"kind": "irc_in", "at": 1792809775.752705, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/SystemPage-DOyg-nLU.js                   39.25 kB \u2502 gzip:  10.70 kB"}
+{"kind": "irc_in", "at": 1792809776.05449, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/CronPage-kTNm82-Y.js                     43.65 kB \u2502 gzip:  14.04 kB"}
+{"kind": "irc_in", "at": 1792809776.356673, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/SkillsPage-Csr6CZIx.js                   44.02 kB \u2502 gzip:  12.49 kB"}
+{"kind": "irc_in", "at": 1792809776.6590998, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/SessionsPage-Di036qjV.js                 46.23 kB \u2502 gzip:  14.14 kB"}
+{"kind": "irc_in", "at": 1792809776.961536, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/ChatPage-CNfHONUw.js                     49.26 kB \u2502 gzip:  16.71 kB"}
+{"kind": "irc_in", "at": 1792809777.263881, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/index-XcuGdFe3.js                        90.11 kB \u2502 gzip:  30.09 kB"}
+{"kind": "irc_in", "at": 1792809777.566284, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/react-vendor-IJmHagee.js                227.03 kB \u2502 gzip:  72.77 kB"}
+{"kind": "irc_in", "at": 1792809777.868777, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/vendor-Ds86pCF_.js                      313.21 kB \u2502 gzip: 104.33 kB"}
+{"kind": "irc_in", "at": 1792809778.1708539, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/xterm-kZWlMf7l.js                       473.85 kB \u2502 gzip: 122.34 kB"}
+{"kind": "irc_in", "at": 1792809778.473141, "line": "PRIVMSG ant :    ../clover_cli/web_dist/assets/use-confirm-delete-1zZXJvKS.js          480.66 kB \u2502 gzip: 142.02 kB"}
+{"kind": "irc_in", "at": 1792809778.7753952, "line": "PRIVMSG ant :    \u2713 built in 5.76s"}
+{"kind": "irc_in", "at": 1792809779.077596, "line": "PRIVMSG ant :    [PLUGIN_TIMINGS] Your build spent 95% of 5.8s inside plugin hooks (5.5s)."}
+{"kind": "irc_in", "at": 1792809779.37984, "line": "PRIVMSG ant :    Measured inside the callback, so queue time is excluded and time the callback itself awaited is not:"}
+{"kind": "irc_in", "at": 1792809779.680985, "line": "PRIVMSG ant :      - @rolldown/plugin-babel transform (89%, 5.1s, 93 calls)"}
+{"kind": "irc_in", "at": 1792809779.984342, "line": "PRIVMSG ant :    Those rows are 89% of the build; the rest of the 95% is below."}
+{"kind": "irc_in", "at": 1792809780.286952, "line": "PRIVMSG ant :    Not measurable \u2014 1 hook whose calls overlap, so elapsed time covers work other calls were doing. Profile with node --cpu-prof:"}
+{"kind": "irc_in", "at": 1792809780.58989, "line": "PRIVMSG ant :      - @tailwindcss/vite:generate:build transform (2 calls)"}
+{"kind": "irc_in", "at": 1792809780.8915782, "line": "PRIVMSG ant :    See https://rolldown.rs/reference/InputOptions.checks#plugintimings for more details."}
+{"kind": "irc_in", "at": 1792809781.193748, "line": "PRIVMSG ant :  \u2713 Web UI built"}
+{"kind": "irc_in", "at": 1792809781.4959848, "line": "PRIVMSG ant :\u2713 Code updated! [main @ 5bfc4013]"}
+{"kind": "irc_in", "at": 1792809781.798351, "line": "PRIVMSG ant :\u2192 Syncing bundled skills..."}
+{"kind": "irc_in", "at": 1792809782.1006699, "line": "PRIVMSG ant :  \u2191 1 updated: google-workspace"}
+{"kind": "irc_in", "at": 1792809782.402834, "line": "PRIVMSG ant :\u2192 Syncing bundled skills to all profiles..."}
+{"kind": "irc_in", "at": 1792809782.705205, "line": "PRIVMSG ant :  default: up to date"}
+{"kind": "irc_in", "at": 1792809783.00767, "line": "PRIVMSG ant :\u2192 Checking configuration for new options..."}
+{"kind": "irc_in", "at": 1792809783.308011, "line": "PRIVMSG ant :  \u2713 Configuration is up to date"}
+{"kind": "irc_in", "at": 1792809783.6102972, "line": "PRIVMSG ant :\u2713 Update complete! (v1.5.6 \u2192 v1.5.9) [main @ 5bfc4013]"}
+{"kind": "irc_in", "at": 1792809783.911968, "line": "PRIVMSG ant :\u2139 Skill curator"}
+{"kind": "irc_in", "at": 1792809784.2146811, "line": "PRIVMSG ant :  Background skill maintenance is enabled. First pass is deferred ~7d after installation; only agent-created skills are in scope and nothing is ever auto-deleted (archive is recoverable)."}
+{"kind": "irc_in", "at": 1792809784.5150259, "line": "PRIVMSG ant :  Preview now:  clover curator run --dry-run"}
+{"kind": "irc_in", "at": 1792809784.815815, "line": "PRIVMSG ant :  Pause it:     clover curator pause"}
+{"kind": "irc_in", "at": 1792809785.1179688, "line": "PRIVMSG ant :  Docs:         docs/user-guide/features/curator"}
+{"kind": "irc_in", "at": 1792809785.42355, "line": "PRIVMSG ant :\u2713 Service restart requested"}
+{"kind": "irc_in", "at": 1792809785.7257972, "line": "PRIVMSG ant :  \u2713 Restarted ai.clover.gateway"}
+{"kind": "irc_in", "at": 1792809786.028231, "line": "PRIVMSG ant :Tip: You can now select a provider and model:"}
+{"kind": "irc_in", "at": 1792809786.331903, "line": "PRIVMSG ant :  clover model              # Select provider and model"}
+{"kind": "irc_in", "at": 1792809786.63402, "line": "PRIVMSG ant :Fleet version check:"}
+{"kind": "irc_in", "at": 1792809786.9363258, "line": "PRIVMSG ant :  \u2713 default (pid 4277) @ 5bfc4013 \u2014 up to date"}
+{"kind": "irc_in", "at": 1792809787.236883, "line": "PRIVMSG ant :`"}
+{"kind": "irc_in", "at": 1792809787.561362, "line": "PRIVMSG ant :\u2705 Clover update finished."}
+{"kind": "irc_in", "at": 1792809787.8637362, "line": "PRIVMSG ant :Now on Clover C1.5.9 (v1.5.9), updated from v1.5.6."}
+{"kind": "irc_in", "at": 1792809788.1659179, "line": "PRIVMSG ant :What's new:"}
+{"kind": "irc_in", "at": 1792809788.4712179, "line": "PRIVMSG ant :Clover C1.5.9 (v1.5.9):"}
+{"kind": "irc_in", "at": 1792809788.773348, "line": "PRIVMSG ant :\u2022 Helpers now start when your chat is not inside a code project, instead of being refused after a restart."}
+{"kind": "irc_in", "at": 1792809789.07901, "line": "PRIVMSG ant :\u2022 Helpers working in a real code project still get their own safe copy, and still stop if that copy cannot be m\u2026"}
+{"kind": "irc_in", "at": 1792809789.379366, "line": "PRIVMSG ant :\u2022 When a helper is refused, the message now names the exact setting to change."}
+{"kind": "irc_in", "at": 1792809789.6820412, "line": "PRIVMSG ant :\u2022 The two helper isolation settings are now known, so changing them no longer shows a warning."}
+{"kind": "irc_in", "at": 1792809789.98432, "line": "PRIVMSG ant :\u2022 Identified 1.5.6 gateways no longer stop an update just because their reply-delivery code is older."}
+{"kind": "irc_in", "at": 1792809790.286649, "line": "PRIVMSG ant :\u2022 Updates keep restart work pending if ownership or a quiet restart cannot be verified; one reply may repeat."}
+{"kind": "irc_in", "at": 1792809790.588912, "line": "PRIVMSG ant :\u2026and 10 more"}
+{"kind": "irc_in", "at": 1792809879.966741, "line": "PRIVMSG #clover :\u2618\ufe0f(\u00b4\u2022 \u03c9 \u2022`)\uff89 heading out. Your task got stopped."}
+{"kind": "irc_in", "at": 1792809880.2985442, "line": "QUIT :Clover Cognition shutting down"}
