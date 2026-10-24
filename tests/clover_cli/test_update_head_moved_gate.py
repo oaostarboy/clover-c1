@@ -88,6 +88,10 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
         clover_main, "_stash_local_changes_if_needed", lambda *a, **k: None
     )
     monkeypatch.setattr(clover_main, "_clear_bytecode_cache", lambda *a, **k: 0)
+    # Git is simulated: no source changed and no module should be refreshed.
+    # A real purge evicts the gateway discovery stubs below, exposing the
+    # restart/fleet phases to the host. The real purge has its own tests.
+    monkeypatch.setattr(clover_main, "_purge_stale_clover_modules", lambda: None)
     monkeypatch.setattr(
         clover_main, "_record_bytecode_fingerprint", lambda *a, **k: None
     )
@@ -111,7 +115,8 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
     import clover_cli.gateway as clover_gateway
 
     monkeypatch.setattr(
-        clover_gateway, "find_gateway_pids", lambda all_profiles=False: []
+        clover_gateway, "find_gateway_pids",
+        lambda exclude_pids=None, all_profiles=False: []
     )
     monkeypatch.setattr(
         clover_gateway, "supports_systemd_services", lambda: False
@@ -119,6 +124,21 @@ def _patch_update_deps(monkeypatch, tmp_path, run_side_effect):
     monkeypatch.setattr(
         clover_gateway, "find_profile_gateway_processes", lambda *a, **k: []
     )
+
+
+def test_mocked_update_retains_gateway_discovery(monkeypatch, tmp_path):
+    """A simulated pull must retain the fixture's no-live-gateway boundary."""
+    import sys
+    import clover_cli.gateway as gateway
+
+    _patch_update_deps(monkeypatch, tmp_path, _make_head_moved_side_effect())
+    discovery = gateway.find_gateway_pids
+    clover_main._purge_stale_clover_modules()
+    assert sys.modules.get("clover_cli.gateway") is gateway, (
+        "a mocked HEAD change must not discard the patched gateway module"
+    )
+    assert gateway.find_gateway_pids is discovery
+    assert discovery(exclude_pids=set(), all_profiles=True) == []
 
 
 def test_update_success_when_head_moves(monkeypatch, tmp_path, capsys):
