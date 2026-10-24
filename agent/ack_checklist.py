@@ -557,6 +557,9 @@ class Checklist:
             head = _status_icon(self.state) + _after_icon(head)
             if self.state in _INCOMPLETE:
                 head += " · " + self.state
+        states = [kid.state for kid in self.kids]
+        if len(set(states)) > 1:
+            head += _count_tail(self.state == RUNNING, states)
         lines = [head]
         lines += [f"{_step_icon(status)} {text}" for text, status in self.steps]
         body = "\n".join(lines)

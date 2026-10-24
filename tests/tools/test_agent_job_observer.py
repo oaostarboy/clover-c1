@@ -159,7 +159,8 @@ async def test_two_concurrent_external_workers_attributed_and_redacted(hermetic_
     assert len(adapter.sends) == 1
     final = adapter.summary()
     assert "Found the lock race" in final and "Fixed DST catchup" in final
-    assert final.startswith("✅ 2 subagents ·") and "🛠 3 tool calls ·" in final
+    # These legacy reports contain findings, not authoritative task verdicts.
+    assert final.startswith("☘️ 2 subagents · 2 unverified") and "🛠 3 tool calls ·" in final
     # One live card for the job group, removed once the summary lands.
     assert {c["key"] for c in adapter.status_calls} == {f"delegation:{group_id}"}
     assert adapter.deleted
@@ -395,6 +396,89 @@ def test_activity_events_flag_is_parsed():
     assert parsed.activity_events is True
     assert parser.parse_args(["-z", "do it"]).activity_events is False
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.unified_card
+@pytest.mark.parametrize('parser', ['clover-activity', 'claude-stream-json'])
+@pytest.mark.parametrize('report_kind,label,mark', [
+    ('done', 'done', '🍀'), ('partial', 'partial', '☘️'),
+    ('blocked', 'blocked', '☘️'), ('legacy', 'unverified', '☘️'),
+    ('example', 'unverified', '☘️'), ('malformed', 'unverified', '☘️'),
+])
+async def test_external_report_reaches_classification_and_finalized_card(parser, report_kind, label, mark):
+    from unittest.mock import AsyncMock, MagicMock
+    from agent import ack_checklist as ac
+    from agent.delegation_activity import DelegationActivityTracker, completion_display_state
+    from agent.foreground_time_limit import DispatchReceipt
+    from clover_cli import skin_engine
+    from gateway.config import PlatformConfig
+    from gateway.delegation_activity import AckCardEditor
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    skin_engine.init_skin_from_config({'display': {'skin': 'default'}})
+    ac.reset_for_tests()
+    ac.set_style_for_tests('unified')
+    card = ac.card_for([DispatchReceipt(delegation_id='external-report', seq=1,
+        goals=('check external report',), summary='checking work → verified result')])
+    assert card is not None
+    sink = _Sink()
+    observer = AgentJobObserver(session_id='external', sink=sink, group_id='external-report',
+        card_id='external-report', index=0, title='checking work', model='observed-model', parser=parser)
+    tracker = DelegationActivityTracker()
+    adapter = TelegramAdapter(PlatformConfig(enabled=True, token='test-token'))
+    adapter._rich_send_disabled = True
+    bot = MagicMock()
+    bot.edit_message_text = AsyncMock(return_value=MagicMock(message_id=42))
+    adapter._bot = bot
+    adapter.edit_message = AsyncMock(wraps=adapter.edit_message)
+    editor = AckCardEditor(card, adapter, '42', '42', asyncio.get_running_loop(), min_interval=0)
+    card.on_change = None
+    try:
+        observer.start()
+        assert await editor._edit(editor._render())
+        report = {'status': report_kind if report_kind in ('done', 'partial', 'blocked') else 'done',
+            'remaining': ['review'] if report_kind in ('partial', 'blocked') else [],
+            'owner': 'parent', 'next_step': 'review'}
+        protocol = 'Task outcome: ' + json.dumps(report) + '\nResult: ' + (
+            'not done' if report_kind in ('partial', 'blocked') else 'done')
+        if report_kind == 'example':
+            protocol = 'Example only:\n```python\n' + protocol + '\n```'
+        elif report_kind == 'legacy':
+            protocol = 'All checks passed. The work is ready.'
+        elif report_kind == 'malformed':
+            protocol = 'Task outcome: {broken json}'
+        text = protocol + '\nPlain summary: Reviewed scheduler. api_key=' + SECRET
+        wire = ({'clover_activity': 1, 'event': 'result', 'status': 'completed', 'text': text}
+            if parser == 'clover-activity' else
+            {'type': 'result', 'subtype': 'success', 'is_error': False, 'result': text})
+        observer.feed(json.dumps(wire) + '\n')
+        observer.finish(0)
+        observer.finish(0)  # a repeated exit must not report twice
+        completed = [e for e in sink.events if e[0] == 'subagent.complete']
+        assert len(completed) == 1
+        payload = completed[0][4]
+        assert payload['status'] == 'completed'  # display evidence does not change process policy
+        assert payload['model'] == 'observed-model'
+        assert completion_display_state(payload) == label
+        for event, tool, preview, args, kw in sink.events:
+            tracker.observe(event, tool, preview, args, **kw)
+        classic = tracker.render('external-report')
+        assert classic.startswith(mark)
+        assert 'Reviewed scheduler.' in classic and SECRET not in classic
+        final = editor._render()
+        assert final.startswith('> ' + mark) and (' · ' + label) in final
+        assert await editor._edit(final)
+        assert all(c.kwargs['finalize'] is True for c in adapter.edit_message.await_args_list)
+        for call in bot.edit_message_text.await_args_list:
+            assert call.kwargs['parse_mode'] == 'MarkdownV2'
+            assert '**' not in call.kwargs['text'].removeprefix('**>')
+            assert not any(line.strip() == '>' for line in call.kwargs['text'].splitlines())
+            assert SECRET not in call.kwargs['text']
+    finally:
+        editor.gone = True
+        editor._unregister_live()
+        ac.reset_for_tests()
 
 
 def test_turn_cap_is_unfinished_not_failed():

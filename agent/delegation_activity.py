@@ -96,6 +96,7 @@ _COMPLETE_STATUS = {
     "success": "completed",
     "interrupted": "cancelled",
     "cancelled": "cancelled",
+    "stopped": "cancelled",
     "canceled": "cancelled",
     "failed": "failed",
     "error": "failed",
@@ -779,6 +780,7 @@ class DelegationActivityTracker:
             from agent.task_outcome import outcome_reason
             reason = outcome_reason(report) if task_incomplete and isinstance(report, dict) else kw.get("reason") or ""
             child.reason = sanitize_text(reason, _REASON_MAX) or "ran out of steps"
+            child.summary = plain_summary(summary_raw) or None
         elif status == "timeout":
             child.reason = f"timed out after {format_duration(dur)}"
         else:
@@ -1250,19 +1252,22 @@ def _quote(lines: List[str]) -> List[str]:
 
 
 def _display_state(child: ChildActivity) -> str:
-    return child.display_state or {
+    return getattr(child, "display_state", "") or {
         "completed": "done", "failed": "failed", "cancelled": "stopped",
-        "incomplete": "unverified" if child.exited_unverified else "unfinished",
+        "incomplete": "unverified" if getattr(child, "exited_unverified", False) else "unfinished",
     }.get(child.state, child.state)
 
 
 def _final_body(child: ChildActivity, limit: int) -> str:
     display = _display_state(child)
     if display in {"partial", "blocked", "unverified", "unfinished"}:
-        return {"partial": "partial: some work remains", "blocked": "blocked: waiting on a dependency",
-                "unverified": _UNVERIFIED_BODY,
-                "unfinished": "ran out of steps before finishing" if child.state == "incomplete"
-                else "unfinished: work did not finish"}[display]
+        label = {"partial": "partial: some work remains", "blocked": "blocked: waiting on a dependency",
+                 "unverified": _UNVERIFIED_BODY,
+                 "unfinished": "ran out of steps before finishing" if child.state == "incomplete"
+                 else "unfinished: work did not finish"}[display]
+        # Unverified describes the verdict, not whether the finding is useful.
+        body = f"{label} · {child.summary}" if child.summary else label
+        return _truncate_words(body, limit)
     if child.state == "completed":
         body = _truncate_words(child.summary or "", limit)
         return f"{_LATE_BODY} {body}".strip() if child.late_result else body

@@ -57,6 +57,41 @@ def test_six_completed_workers_keep_partial_and_blocked_counts():
     assert 'failed' not in text
 
 
+@pytest.mark.parametrize('status', ['stopped', 'cancelled', 'interrupted'])
+def test_classic_tracker_stopped_wording_is_not_failed(status):
+    tracker = DelegationActivityTracker()
+    tracker.observe('subagent.complete', delegation_id='stopped-wording', status=status,
+                    task_outcome={'status': 'done'})
+    text = tracker.render('stopped-wording')
+    assert text.startswith('⏹')
+    assert 'stopped' in text
+    assert 'failed' not in text
+    assert tracker.snapshot('stopped-wording')[0]['state'] == 'cancelled'
+
+
+@pytest.mark.parametrize('skin', ['default', 'boring'])
+@pytest.mark.parametrize('workers,counts', [
+    ([('completed', 'done'), ('completed', 'done'), ('completed', 'partial'),
+      ('completed', 'partial'), ('completed', 'partial'), ('completed', 'blocked')],
+     ['2 of 6 done', '3 partial', '1 blocked']),
+    ([('completed', 'done'), ('failed', 'unknown'), ('completed', 'partial'),
+      ('completed', 'blocked'), ('completed', 'unknown'), ('cancelled', 'done')],
+     ['1 of 6 done', '1 failed', '1 partial', '1 blocked', '1 unverified', '1 stopped']),
+])
+def test_classic_ack_preserves_mixed_counts_without_a_second_card(skin, workers, counts):
+    from clover_cli import skin_engine
+    skin_engine.init_skin_from_config({'display': {'skin': skin}})
+    ac.set_style_for_tests('classic')
+    card = card_for(len(workers))
+    for i, (status, outcome) in enumerate(workers):
+        complete(i, status=status, outcome=outcome)
+    text = card.render()
+    for count in counts:
+        assert count in text
+    assert text.count('checking work') == 1
+    assert '> ' not in text and 'tap to watch' not in text
+
+
 def test_real_failure_beats_positive_task_report():
     card = card_for()
     complete(status='failed', outcome='done', summary='Plain summary: Everything looks good.')
