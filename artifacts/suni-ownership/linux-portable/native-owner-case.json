@@ -1,0 +1,47 @@
+{
+  "scope": "LINUX-PORTABLE-FIXTURE-NOT-MACOS-PROOF",
+  "source_ref": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+  "python": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/venv/bin/python",
+  "native_update_acceptance": "NOT EXERCISED",
+  "source_tree": "668de0bdbdbe03072c43a9ff5e7b033dd557bc2d",
+  "observed": {
+    "worker_pid": 348243,
+    "wrapper_pid": 348242,
+    "worker_ppid": 348242,
+    "worker_argv": [
+      "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-1-77f7fccd/artifacts/suni-ownership/linux-portable/private-fixture-jhgk2_ux/venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "wrapper_argv": [
+      "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-1-77f7fccd/artifacts/suni-ownership/linux-portable/private-fixture-jhgk2_ux/venv/bin/python",
+      "-m",
+      "clover_cli.stderr_timestamp",
+      "--error-log",
+      "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-1-77f7fccd/artifacts/suni-ownership/linux-portable/private-fixture-jhgk2_ux/home/logs/gateway.error.log",
+      "--",
+      "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-1-77f7fccd/artifacts/suni-ownership/linux-portable/private-fixture-jhgk2_ux/venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "worker_exe": "/usr/bin/python3.12",
+    "wrapper_exe": "/usr/bin/python3.12",
+    "venv_python": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-1-77f7fccd/artifacts/suni-ownership/linux-portable/private-fixture-jhgk2_ux/venv/bin/python",
+    "venv_python_resolved": "/usr/bin/python3.12",
+    "port": 48195,
+    "launchd_label": null
+  },
+  "owner_admission": true,
+  "stale_worker_rejected": true,
+  "wrong_home_rejected": true,
+  "unadmitted_rejected": true,
+  "identity_stable": true,
+  "framework_alias_exercised": false,
+  "passed": true
+}

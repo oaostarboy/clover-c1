@@ -1,0 +1,22 @@
+{
+  "published-replay.log": {
+    "total": 12,
+    "pass": 10,
+    "fail": 2,
+    "skip": 0,
+    "failed_ids": [
+      "test_actual_suni_framework_shape_is_owned",
+      "test_only_outer_alias_correction_is_insufficient"
+    ]
+  },
+  "candidate-bdad7-replay.log": {
+    "total": 12,
+    "pass": 8,
+    "fail": 2,
+    "skip": 2,
+    "failed_ids": [
+      "test_actual_suni_framework_shape_is_owned",
+      "test_only_outer_alias_correction_is_insufficient"
+    ]
+  }
+}
