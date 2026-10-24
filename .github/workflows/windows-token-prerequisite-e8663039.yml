@@ -19,7 +19,8 @@ jobs:
       - name: Compile and parse fixture only
         shell: pwsh
         run: |
-          $python = (Get-Command python -CommandType Application).Source
+          $python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          if (-not [IO.Path]::IsPathFullyQualified($python) -or -not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'One absolute Python executable is required' }
           & $python -I -m py_compile .github/owner-worker-proof/restricted_token.py
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
           foreach ($path in @('.github/owner-worker-proof/register_startup.ps1', '.github/owner-worker-proof/token_prerequisite.ps1')) {
@@ -32,7 +33,8 @@ jobs:
       - name: Observe original task and prove OS-restricted same-owner child once
         shell: pwsh
         run: |
-          $python = (Get-Command python -CommandType Application).Source
+          $python = (Get-Command python.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
+          if (-not [IO.Path]::IsPathFullyQualified($python) -or -not (Test-Path -LiteralPath $python -PathType Leaf)) { throw 'One absolute Python executable is required' }
           & .github/owner-worker-proof/token_prerequisite.ps1 -Python $python -Evidence "$env:RUNNER_TEMP/token-prerequisite-e8663039"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
