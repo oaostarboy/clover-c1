@@ -106,8 +106,14 @@ def test_real_reporter_preserves_live_owner_identity_and_restart_contract(tmp_pa
         owner.communicate(timeout=15)
 
 
+@pytest.mark.parametrize('caller_ref', [
+    '9535350bee1d57cf7e466672e6f416403886bec1',
+    '0c8f3cd0e0ba6caca6948e13f9de92ba519c2029',
+    '3b54f413376eb99f8b83bfd4a0a340d01825014d',
+    None,
+], ids=['released-1.5.6-suni', 'released-1.5.8', 'released-1.5.9', 'candidate'])
 @pytest.mark.parametrize('condition', ['missing', 'invalid-json', 'reused-pid', 'foreign-home'])
-def test_untrusted_status_cannot_admit_a_real_live_process(real_child, tmp_path, monkeypatch, condition):
+def test_untrusted_status_cannot_admit_a_real_live_process(real_child, tmp_path, monkeypatch, condition, caller_ref, record_property):
     from clover_cli import gateway, update_delivery_guard as guard
     from gateway.status import _get_process_start_time
     launcher, worker = real_child
@@ -141,5 +147,33 @@ def test_untrusted_status_cannot_admit_a_real_live_process(real_child, tmp_path,
     with pytest.raises(SystemExit) as refused:
         guard.require_delivery_safe_update()
     assert refused.value.code == 1
+    from clover_cli import managed_uv, update_cmd
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('native_frozen_postpull', Path(__file__).with_name('frozen_postpull.py'))
+    assert spec is not None and spec.loader is not None
+    frozen_postpull = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(frozen_postpull)
+    repo = Path(update_cmd.__file__).resolve().parent.parent
+    ref = caller_ref or subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD'], text=True).strip()
+    code, provenance = frozen_postpull.load(repo, ref)
+    for key, value in provenance.items():
+        record_property(key, value)
+    monkeypatch.setattr(sys, 'argv', ['clover', 'update', '--yes'])
+    def forbidden_mutation(*args, **kwargs):
+        pytest.fail('unsafe frozen call reached dependency mutation')
+    monkeypatch.setattr(managed_uv, 'resolve_uv', forbidden_mutation)
+    monkeypatch.setattr(managed_uv, 'ensure_uv', forbidden_mutation)
+    pending = home / 'fleet_restart_pending'
+    retained = home / 'private-saved-fixture'
+    pending.write_bytes(b'prior native restart intent\n')
+    retained.write_bytes(b'latest saved native fixture\n')
+    # Execute the unmodified released import/call and its actual outer
+    # handlers with the NEW post-pull library. This is a native negative
+    # hook-seam proof, not a full unsafe updater or a pre-pull bypass.
+    with pytest.raises(SystemExit) as frozen_refused:
+        exec(code, dict(vars(update_cmd)))
+    assert frozen_refused.value.code == 1
+    assert pending.read_bytes() == b'prior native restart intent\n'
+    assert retained.read_bytes() == b'latest saved native fixture\n'
     assert (path.read_bytes() if path.exists() else None) == before
     assert launcher.is_running() and worker.is_running()

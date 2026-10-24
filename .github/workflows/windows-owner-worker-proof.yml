@@ -122,7 +122,8 @@ jobs:
           ref: ${{ needs.plan.outputs.target }}
           fetch-depth: 0
           persist-credentials: false
-      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+      - id: bootstrap-uv
+        uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
           # Exact uv used by the successful historical native run40029884972.
           # Its catalog supplies safe CPython3.12.15/SQLite3.53.1; 0.9.28
@@ -145,12 +146,13 @@ jobs:
           SETUP: ${{ matrix.setup }}
           TURN_MODE: ${{ matrix.turn_mode }}
           CLOVER_PROOF_HELPERS: ${{ github.workspace }}/historical/.github/native-proof
+          BOOTSTRAP_UV: ${{ steps.bootstrap-uv.outputs.uv-path }}
         run: |
           set -euo pipefail
           uv run --no-project --with psutil python helpers/.github/owner-worker-proof/windows_update.py \
             --source "$GITHUB_WORKSPACE/source" --old "$OLD_SHA" --entry "$ENTRY" \
             --setup "$SETUP" --turn-mode "$TURN_MODE" --target "$UPDATE_TARGET" --tree "$UPDATE_TREE" \
-            --evidence "$RUNNER_TEMP/evidence"
+            --evidence "$RUNNER_TEMP/evidence" --uv "$BOOTSTRAP_UV"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
         if: always()
         with:

@@ -47,7 +47,7 @@ def binary(live):
 
 
 def read_json(path):
-    return json.loads(Path(path).read_text())
+    return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
 def wait_for(fn, seconds=180):
@@ -319,6 +319,12 @@ def child(a):
 
 def main(a):
     native_guard()
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('proof_bootstrap', Path(__file__).with_name('bootstrap.py'))
+    assert spec is not None and spec.loader is not None
+    bootstrap = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(bootstrap)
+    uv = bootstrap.resolve(a.uv)
     for value in [a.target, a.tree, a.old]:
         assert re.fullmatch('[0-9a-f]{40}', value)
     evidence = Path(a.evidence).resolve()
@@ -335,8 +341,9 @@ def main(a):
         'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'USERDOMAIN', 'USERNAME', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PSModuleAnalysisCachePath'}}
     env.update(CLOVER_HOME=str(home), CLOVER_PROOF_HELPERS=str(HELPERS), UV_PYTHON_INSTALL_DIR=str(scratch / 'python'),
         UV_CACHE_DIR=str(scratch / 'cache'), PYTHONUNBUFFERED='1')
-    uv = shutil.which('uv')
-    assert uv
+    uv_version = subprocess.check_output([uv, '--version'], cwd=scratch, env=env, text=True).strip()
+    assert uv_version.split()[:2] == ['uv', '0.13.5'], 'unexpected bootstrap uv version'
+    dump(evidence / 'bootstrap-uv.json', dict(path=uv, version=uv_version, sha256=sha(uv)))
     commands = []
     script = str(Path(__file__).resolve())
     def run(argv, name, *, cwd=scratch, allow=False, timeout=1800):
@@ -724,7 +731,7 @@ if __name__ == '__main__':
     p.add_argument('--fixed-base', default='candidate')
     p.add_argument('--setup', choices=['zyra','troy'], default='zyra')
     p.add_argument('--turn-mode', choices=['completed','inflight'], default='completed')
-    for name in ['source', 'target', 'tree', 'old', 'entry', 'evidence', 'output', 'expected', 'label', 'records']:
+    for name in ['source', 'target', 'tree', 'old', 'entry', 'evidence', 'output', 'expected', 'label', 'records', 'uv']:
         p.add_argument('--' + name)
     args = p.parse_args()
     try:

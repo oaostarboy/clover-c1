@@ -1,0 +1,156 @@
+{
+  "run": "40052775499",
+  "url": "https://github.com/oaostarboy/clover-c1/actions/runs/40052775499",
+  "workflow_sha": "6ac34feebea34aa35ad1a9182788d25d48ad46c6",
+  "product_sha": "27f507acb4f12c30d237471095f137007952c312",
+  "product_tree": "56ef6f6990bdb3d0d56fca31f582980857dca15e",
+  "passed": 63,
+  "failed": [],
+  "skipped": [
+    {
+      "classname": "tests.clover_cli.test_update_delivery_guard_wrappers",
+      "name": "test_real_stderr_wrapper_and_direct_worker_identity[False]",
+      "time": "0.000"
+    },
+    {
+      "classname": "tests.clover_cli.test_update_delivery_guard_wrappers",
+      "name": "test_real_stderr_wrapper_and_direct_worker_identity[True]",
+      "time": "0.000"
+    }
+  ],
+  "native_security_cases": [
+    {
+      "classname": "",
+      "name": "test_native_fdopen_rplus_locks_one_stable_file[False]",
+      "time": "0.017",
+      "properties": [
+        {
+          "name": "acl_isolation",
+          "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+        },
+        {
+          "name": "native_lock",
+          "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+        }
+      ]
+    },
+    {
+      "classname": "",
+      "name": "test_native_fdopen_rplus_locks_one_stable_file[True]",
+      "time": "0.018",
+      "properties": [
+        {
+          "name": "acl_isolation",
+          "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+        },
+        {
+          "name": "native_lock",
+          "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+        }
+      ]
+    },
+    {
+      "classname": "",
+      "name": "test_real_other_process_cannot_enter_held_native_byte_range",
+      "time": "1.707",
+      "properties": [
+        {
+          "name": "acl_isolation",
+          "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+        },
+        {
+          "name": "native_lock",
+          "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+        },
+        {
+          "name": "contender_wait_seconds",
+          "value": "1.0"
+        }
+      ]
+    },
+    {
+      "classname": "",
+      "name": "test_native_process_exit_releases_same_lock_inode",
+      "time": "0.321",
+      "properties": [
+        {
+          "name": "acl_isolation",
+          "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+        },
+        {
+          "name": "native_lock",
+          "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+        }
+      ]
+    },
+    {
+      "classname": "",
+      "name": "test_native_hardlink_lock_is_rejected_without_touching_target",
+      "time": "0.005",
+      "properties": [
+        {
+          "name": "acl_isolation",
+          "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+        },
+        {
+          "name": "native_lock",
+          "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+        }
+      ]
+    },
+    {
+      "classname": "",
+      "name": "test_native_file_reparse_lock_is_rejected_without_touching_target",
+      "time": "0.005",
+      "properties": [
+        {
+          "name": "acl_isolation",
+          "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+        },
+        {
+          "name": "native_lock",
+          "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+        },
+        {
+          "name": "native_object",
+          "value": "real file symlink/reparse point"
+        }
+      ]
+    },
+    {
+      "classname": "",
+      "name": "test_native_directory_lock_is_rejected_without_status_publish",
+      "time": "0.004",
+      "properties": [
+        {
+          "name": "acl_isolation",
+          "value": "NOT EXERCISED; inherited-home ACL is a prerequisite"
+        },
+        {
+          "name": "native_lock",
+          "value": "Windows msvcrt byte-range lock; no platform monkeypatch"
+        }
+      ]
+    }
+  ],
+  "raw_logs_sha256": "bbf07d856de029d7005f32138d8bdb47be8568c59709b7d2eef067db6b1f2433",
+  "raw_zip_crc_verified": true,
+  "declared_artifacts": 2,
+  "updater_matrix": "SKIPPED/NOT EXERCISED by design",
+  "full_combined_acceptance": false,
+  "windows_acl_isolation": "NOT EXERCISED; inherited-home ACL prerequisite",
+  "jobs": [
+    {
+      "name": "plan",
+      "conclusion": "success"
+    },
+    {
+      "name": "Native Windows child identity and refusal controls",
+      "conclusion": "success"
+    },
+    {
+      "name": "Windows / ${{ matrix.caller }} / ${{ matrix.setup }} / ${{ matrix.entry }}",
+      "conclusion": "skipped"
+    }
+  ]
+}

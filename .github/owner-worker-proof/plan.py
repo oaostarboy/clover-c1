@@ -49,12 +49,12 @@ def plan(pins):
 
 
 if __name__ == '__main__':
-    result = plan(json.loads(Path(sys.argv[1]).read_text()))
+    result = plan(json.loads(Path(sys.argv[1]).read_text(encoding='utf-8')))
     target = Path(sys.argv[2])
     target.parent.mkdir(parents=True, exist_ok=True)
-    target.write_text(json.dumps(result, indent=2) + '\n')
+    target.write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     if 'GITHUB_OUTPUT' in os.environ:
-        with open(os.environ['GITHUB_OUTPUT'], 'a') as out:
+        with open(os.environ['GITHUB_OUTPUT'], 'a', encoding='utf-8') as out:
             for key in ['mode', 'target', 'target_tree', 'historical_helpers']:
                 print(f'{key}={result[key]}', file=out)
             print('matrix=' + json.dumps(result['matrix'], separators=(',', ':')), file=out)

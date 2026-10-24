@@ -45,6 +45,52 @@ class Contracts(unittest.TestCase):
         with self.assertRaises(AssertionError):
             p.plan(pins)
 
+    def test_bootstrap_tool_requires_explicit_absolute_existing_file(self):
+        helper = load('bootstrap')
+        for value in [None, '', 'uv']:
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                helper.resolve(value)
+        with tempfile.TemporaryDirectory() as directory:
+            tool = Path(directory) / 'uv.exe'
+            tool.write_bytes(b'path-only fixture; not executed')
+            self.assertEqual(helper.resolve(str(tool)), str(tool.resolve()))
+            with self.assertRaises(ValueError):
+                helper.resolve(directory)
+            with self.assertRaises(FileNotFoundError):
+                helper.resolve(str(Path(directory) / 'missing-uv.exe'))
+
+    def test_exact_frozen_postpull_excerpt_preserves_systemexit_escape(self):
+        import builtins
+        from types import SimpleNamespace
+        p = load('plan')
+        helper = load('frozen_postpull')
+        repo = HERE.parents[1]
+        refs = [*p.CALLERS.values(), '27f507acb4f12c30d237471095f137007952c312']
+        for ref in refs:
+            with self.subTest(caller=ref):
+                code, receipt = helper.load(repo, ref)
+                self.assertEqual(receipt['caller_sha'], ref)
+                calls = []
+                def stop():
+                    calls.append(ref)
+                    raise SystemExit(1)
+                def forbidden(*args, **kwargs):
+                    raise AssertionError('portable control must not execute dependency work')
+                api = SimpleNamespace(ensure_uv=forbidden, update_managed_uv=stop)
+                def controlled_import(name, *args, **kwargs):
+                    self.assertEqual(name, 'clover_cli.managed_uv')
+                    return api
+                namespace = dict(__builtins__=dict(vars(builtins), __import__=controlled_import),
+                    _shim_quarantine_error_type=lambda: RuntimeError, subprocess=subprocess)
+                with self.assertRaises(SystemExit) as escaped:
+                    exec(code, namespace)
+                self.assertEqual(escaped.exception.code, 1)
+                self.assertEqual(calls, [ref])
+
+    def test_frozen_excerpt_ref_is_not_repaired_or_normalized(self):
+        with self.assertRaises(AssertionError):
+            load('frozen_postpull').load(HERE.parents[1], 'v1.5.6')
+
     def test_native_safety_only_can_never_claim_full_update_acceptance(self):
         p = load('plan')
         pins = json.loads((HERE / 'pins.json').read_text())

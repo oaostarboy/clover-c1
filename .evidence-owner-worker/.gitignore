@@ -1,0 +1,9 @@
+*
+!.gitignore
+!collect.py
+!build_ledger.py
+!DIAGNOSTIC-LEDGER.json
+!STATUS.md
+!40052775499/
+40052775499/*
+!40052775499/NATIVE-SECURITY-RESULT.json

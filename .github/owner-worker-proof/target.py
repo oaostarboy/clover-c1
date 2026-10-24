@@ -42,7 +42,7 @@ def prepare(repo, candidate, tree, caller, evidence, required_ancestor=None):
     result = dict(candidate=candidate, candidate_tree=tree, caller=caller,
                   target=target, target_tree=target_tree, marker_only=caller == 'candidate',
                   replacement_refs=False)
-    (evidence / 'target.json').write_text(json.dumps(result, indent=2) + '\n')
+    (evidence / 'target.json').write_text(json.dumps(result, indent=2) + '\n', encoding='utf-8')
     return result
 
 
@@ -52,7 +52,7 @@ if __name__ == '__main__':
     result = prepare(Path(sys.argv[1]).resolve(), os.environ['CANDIDATE_SHA'],
                      os.environ['CANDIDATE_TREE'], os.environ['CALLER'], evidence,
                      required_ancestor=os.environ.get('STATUS_LOCK_REPAIR_SHA'))
-    with open(os.environ['GITHUB_ENV'], 'a') as out:
+    with open(os.environ['GITHUB_ENV'], 'a', encoding='utf-8') as out:
         print('UPDATE_TARGET=' + result['target'], file=out)
         print('UPDATE_TREE=' + result['target_tree'], file=out)
     print(json.dumps(result))

@@ -52,15 +52,17 @@ No extra broad CI is started while the old diagnostics are still running.
 read/write/lock behavior on new and existing files, another process blocked by
 the held native byte range, successful same-inode use after release/process exit,
 and native hardlink/file-reparse/directory rejection with unchanged targets.
-These staged tests are **NOT NATIVE-EXECUTED YET**. They do not prove Windows ACL
-isolation or the Linux cross-UID result. They do not change ACLs, Developer Mode,
+Run40052775499 executed these seven cases on exact27f507: **all seven passed**;
+the complete native job had **63 passed,2 POSIX-only skips**. The update matrix
+was deliberately skipped. These results do not prove Windows ACL isolation or
+the Linux cross-UID result. They do not change ACLs, Developer Mode,
 privileges or security policy; inability to create a required native object is
 an unexercised/failed gate, not an automatic pass. The staged negative controls
 also exercise the real `require_delivery_safe_update` SystemExit boundary while
 their actual native children remain alive. The update driver refuses to proceed
 if its native SCM inventory maps either installation shape to any service, and
 requires the foreign Schedule host PID to remain unchanged through the final
-90-second window. These additions are likewise awaiting the final native run.
+90-second window. The SCM/unchanged-Schedule additions await the final combined update run.
 
 ## Bounded matrix
 
@@ -110,6 +112,15 @@ witness), and foreign-home status without authorizing any kill. Discovery is
 fixture-scoped, but process identity/status/admission are not fabricated. These
 synthetic roles are not themselves an installed-gateway update proof.
 
+The staged successor parametrizes all four unsafe-status conditions across the
+three exact released callers and the candidate. `frozen_postpull.py` compiles
+the original managed-uv import/call plus original outer handlers directly from
+each immutable Git blob; native tests call the NEW library and require SystemExit
+before dependency work, retaining both live children and private pending state.
+This is a **post-pull excerpt seam**, not a full negative updater run or a way
+around an immutable pre-pull refusal. These 16 expanded native seams are awaiting
+the final combined-source gate; portable escape controls are not native passes.
+
 ## Baseline evidence (retained, not green)
 
 - Initial run40048857495, workflow `bc530c70d00616bd6391bcc6510fde7a4dddd3ce`:
@@ -142,8 +153,17 @@ synthetic roles are not themselves an installed-gateway update proof.
   Raw logs/ZIP/artifacts are retained. No launcher/update row passed or ran.
   Historical run40029884972's actual setup log proves uv0.13.5 installed
   CPython3.12.15/SQLite3.53.1. The corrected update fixture pins that exact uv;
-  the vulnerable-SQLite rejection is unchanged. A corrected native run is
-  required; this is a tool-catalog correction, not a product/update pass.
+  the vulnerable-SQLite rejection is unchanged. That correction does not turn
+  the failed run green; it is not a product/update pass.
+- Corrected old-bdad7 diagnostics are retained in runs40049740582 and40050690083:
+  eight Startup and eight Task cases passed across two fixture revisions. The
+  first full invocation failed its Troy observer; the correction is explicitly
+  partial. This aggregate is NOT one green full gate and cannot certify27f507.
+- Standard CI40052777927 found five fixture encoding issues and one bare-uv
+  lookup. The staged successor uses explicit UTF-8 and the pinned setup-uv
+  action's verified `uv-path` output; it records binary hash/version and keeps
+  the safe-SQLite gate. Local runtime-policy tests pass; hosted recheck is pending.
+  No product exemption list or linter policy changed.
 
 Local portable checks: `python .github/owner-worker-proof/test_contract.py`.
 They validate immutable caller pins, 16-case uniqueness, refusal to substitute a
