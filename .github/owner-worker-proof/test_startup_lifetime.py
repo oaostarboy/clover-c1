@@ -45,7 +45,14 @@ def test_account_parent_and_child_enclose_full_driver_not_registration_only():
     assert '[string]$RequestFile' in parent
     assert "'prepare'" in parent and "'update-result.json'" in parent
     assert parent.index('Assert-AccountUpdateResult') < parent.index('$passed = $true')
-    assert child.index("'access.json'") < child.index("'run'") < child.index('} catch {')
+    access = child.index("'access.json'")
+    access_passed = child.index("Set-AccountChildStage -Phase 'access_receipt' -State 'passed'")
+    run = child.index("& $c.python -I (Join-Path $PSScriptRoot 'account_update.py') 'run' --config $Config")
+    # Earlier helper-local catches are not the enclosing account/update catch.
+    outer_catch = child.index('\n} catch {\n    $originalFailure = $_.Exception')
+    assert access < access_passed < run < child.index('$exitCode = 0', run) < outer_catch
+    assert child.count("'account_update.py') 'run'") == 1
+    assert child.index('exit $exitCode') > outer_catch
     assert 'CLOVER_FIXTURE_ACCOUNT_SID' in (HERE / 'windows_update.py').read_text()
 
 
