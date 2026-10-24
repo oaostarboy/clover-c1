@@ -1,6 +1,21 @@
 # macOS framework wrapper repair — native evidence checkpoint
 
-## Ownership and scope
+## Current combined candidate (supersedes initial checkpoint below)
+
+- **Windows retarget / final code source: `bd8b623942d75e6f786ca9f4ef5267c454f9624f`**. Native-executed combined source is `6ac82c5cb5e56702f6616245140fd5efb227805c`, tree `202b32c8abfddb187ed45e9e662e186b558c5c0d`. The sole subsequent code delta is a standard unittest Windows skip for this POSIX-path Mac replay (Windows lacks os.getuid and uses different path semantics). Product files and native fixture/workflow bytes are identical; the decorator is a no-op on the hosted Mac. No native run of bd8b623 is claimed. Final local interactions re-passed218/4 at bd8b623; later commits contain evidence only.
+- Includes reviewed PR148 status-lock correction `27f507acb4f12c30d237471095f137007952c312` as an ancestor, merged without conflict or independently authored status edits. `gateway/status.py` is byte-identical to that reviewed commit (SHA256 `fb871b794ea2c6a491dddcb1d2ae25dabcb478ded0e4fd56b3d6e7983ad027ed`). PR148 itself was not rewritten or pushed by this worker.
+- Mac guard is byte-identical to the first hosted PASS (SHA256 `f16befb42735a4336a3ee4e13440d56f8574be24d9787fce5726846050baacd0`).
+- Own new Mac fixture correction: `macos_wrapper_state.py` selects possible gateways by actual profile home/command, then requires **exactly one worker plus its positively proved wrapper**. It retains current PID/start/home binding, loaded launchd/own-venv attestation, strict duplicate/unknown process refusal, owned listener/health/source checks and the90-second stable window. It does not patch the frozen updater or change the existing shared verifier/Windows files.
+- Captured first native failure is the RED for this fixture correction. Six focused local tests cover normalized child selection and reject missing/extra/identical/unproved roles.
+- Combined local interactions: **218 passed, 0 failed, 0 errors, 4 skips**,222 unique JUnit cases. Skips: two pinned historical-policy replays and two native Windows-only cases. `combined-source-tests.json` enumerates every node; `combined-interactions-junit.xml` is canonical.
+- Exact combined native run: https://github.com/oaostarboy/clover-c1/actions/runs/40050938504 . Framework ownership job **PASS** at https://github.com/oaostarboy/clover-c1/actions/runs/40050938504/job/120743238487 : native published RED and repaired GREEN both reproduce both argv aliases, preserve all countercase refusals, and verify natural completion and absent labels.
+- Combined frozen-update job **PASS**: https://github.com/oaostarboy/clover-c1/actions/runs/40050938504/job/120744035310 . The actual immutable old1.5.6 CLI updater exited0, pulled the exact combined target, used normal launchd restart, and produced a fresh success receipt (01:46:35.921615Z–01:48:06.074265Z). Before: wrapper6295 -> worker6302; after: wrapper9150 -> worker9164. Both native argv normalization seams were present. Thirty observations covered the90-second stable window with the exact new source, same new PID/start and wrapper identity, owned listener, running status, and `restart_requested=false`. Restart receipt: `restarted_services=[ai.clover.gateway]`, `killed_pids=[]`, `failed_units=[]`, `incomplete=false`. Before/after outside-checkout installed-source checks passed. Supported cleanup removed the private label, with absence verified. **This passes frozen CLI old2new, not chat/no-pull acceptance.** Raw receipt/process/window/import evidence is in `hosted-update-40050938504/`; original job-log ZIP integrity passed.
+- Branch-defined `workflow_dispatch` was actually accepted after initial dedicated-branch push registration; no default-branch workflow or existing workflow pins were changed.
+
+
+## Initial 9195 checkpoint (historical; superseded above)
+
+### Ownership and scope
 
 - Sole product file: `clover_cli/update_delivery_guard.py`.
 - No `gateway/status.py`, Windows workflow, existing workflow pin, live source, home, database, venv or service was edited.

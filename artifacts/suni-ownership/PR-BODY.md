@@ -1,23 +1,22 @@
-## Scope
-Stacked on PR #148, immutable base `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`. No edits to `gateway/status.py`, Windows workflows, or live gateways. Do not merge/tag/release from this PR without the parent's combined review and remaining native acceptance.
+## Scope and source pins
+Stacked on PR #148. Initial immutable base was `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`; this branch now includes reviewed status-lock correction `27f507acb4f12c30d237471095f137007952c312` unchanged. No independently authored status edits, Windows workflow edits, existing workflow pin changes or live gateway operations.
+
+**Final code / Windows retarget:** `bd8b623942d75e6f786ca9f4ef5267c454f9624f`. **Native-executed combined source:** `6ac82c5cb5e56702f6616245140fd5efb227805c` (tree `202b32c8abfddb187ed45e9e662e186b558c5c0d`). The sole later code change is a Windows skip for the POSIX-path Mac replay; product and native fixture/workflow files are byte-identical. That decorator is a no-op on macOS; no native run of bd8b623 is claimed. Final local218/4 interactions passed at bd8b623. Later evidence-only commits do not change code.
 
 ## Product correction
 - Recognize both framework-Python argv[0] normalization seams only on macOS.
-- Require this updater's **venv bin directory**, live launchd **loaded** program and exact wrapper arguments bound to the wrapper PID, real/effective/saved UID, wrapper->worker edge, expected command tail, error log, and repeated process start fingerprints.
-- Shared base Python inodes and claimed VIRTUAL_ENV alone never establish ownership. An unreadable or conflicting observation fails closed. Windows/Linux mismatch policy remains rejection.
+- Require this updater's **venv bin directory**, live launchd **loaded** program and exact wrapper arguments bound to the wrapper PID, real/effective/saved UID, direct wrapper->worker edge, expected command tail/profile error log, and repeated start fingerprints.
+- Shared base Python inodes and claimed VIRTUAL_ENV alone never establish ownership. Unreadable or conflicting evidence fails closed. Windows/Linux mismatch policy remains rejection.
 
-## Tests and evidence
-- Original immutable PR148 replay: two positive-contract failures (12 cases: 8 pass, 2 fail, 2 historical-policy skips).
-- Expanded RED also catches a shared-base-interpreter false admission (3 failures).
-- Fixed focused suite: **70 passed, 2 historical-policy skips**. No negative assertion removed.
-- A new separate macOS workflow bootstraps on this dedicated branch's workflow-file push; no existing workflow pins changed. It records native published RED and exact-source GREEN using a Homebrew framework interpreter, actual launchd PID/argv/start evidence, strict countercases, and natural completion/owned-label cleanup.
-- Separate job attempts an actual frozen 1.5.6 CLI updater against a normally installed launchd gateway and verifies source/import identity, receipt and 90-second health. It does **not** pretend terminal gateway-mode CLI is chat proof.
+## Verified results
+- PR148 original replay: two exact positive-contract failures. Expanded RED additionally catches a shared-base false admission in the old lexical-only path. No negative assertion was removed.
+- Combined local status/guard/verifier interactions: **218 passed, 4 skips** (two pinned historical-policy cases; two native Windows-only cases). Canonical JUnit and every unique node ID are committed.
+- Exact combined hosted macOS run **PASS, both jobs**: https://github.com/oaostarboy/clover-c1/actions/runs/40050938504 . Homebrew framework Python, actual Darwin/launchd, private credential-free installation, no production credentials.
+- Native ownership: published RED and repaired GREEN, both argv aliases reproduced; stable PID/start identities; stale/wrong-home/unadmitted negatives rejected; synthetic processes finished naturally and exact labels were verified absent.
+- Actual frozen 1.5.6 CLI updater: normal supported launchd installation, running old gateway -> exact combined target, updater exit0, fresh success receipt, new worker9164/wrapper9150, owned listener and90-second stable window, no stale restart_requested, no failed units or killed_pids. Installed source/import identity passed before/after. Private service cleanup verified label absence.
+- First full-native attempt failed before the updater because the old foreground verifier counted the wrapper and missed normalized worker argv. Its complete failure evidence remains committed. A new **Mac-only** verifier now requires exactly the worker plus its positively proved wrapper; no ancestor blanket exemption or shared-verifier relaxation.
 
-- Hosted run https://github.com/oaostarboy/clover-c1/actions/runs/40050040331 executed exact source `9195c15e6d40410ada6fd23b125e1e6137ad6547`.
-- Framework ownership job **PASS**: published native RED and repaired GREEN, both real argv aliases reproduced, expected loaded launchd PID/program, stable starts, stale/wrong-home/unadmitted negatives rejected, natural process completion and exact-label absence verified.
-- Frozen updater job **FAIL BEFORE UPDATER**: old source/import identity and normal launchd startup succeeded, but reused foreground verifier counted parent1981 and missed the framework-normalized worker because its argv has no checkout path. No updater, fresh receipt or post-update stability window ran. Original logs/archive are preserved; no retry.
+## Still not proved / integration hold
+Chat `/update`, one accepted turn with one tool effect and one complete user reply, and staged pending no-pull catchup remain **NOT EXERCISED**. This is real frozen CLI proof, not full chat/update certification or Suni recovery. Parent owns combined-delta/workflow review, `ci-reviewed`, remaining acceptance and Windows retargeting. No merge, tag, release, live restart or approval label was performed by the builder.
 
-## Explicit outstanding acceptance
-The new update fixture explicitly marks **chat update**, **accepted turn + one tool effect + one complete reply**, and **pending no-pull catchup** NOT EXERCISED. A native ownership-seam pass is not complete update certification. A wrapper-aware strict native verifier and another reviewed full acceptance run remain required. Parent owns workflow/combined delta review and the `ci-reviewed` label; no label added by builder.
-
-Handoff and exact per-case/native evidence: `artifacts/suni-ownership/REPAIR-HANDOFF.md`. The source repair is built and native-exercised; this is **not merge-ready update certification**.
+Handoff, exact receipts/source hashes/PID starts, raw archived logs and original RED evidence: `artifacts/suni-ownership/REPAIR-HANDOFF.md`.
