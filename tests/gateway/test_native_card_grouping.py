@@ -271,6 +271,210 @@ async def test_native_cards_do_not_join_or_follow_another_thread(monkeypatch, na
             await pub.aclose()
 
 
+def _accepted_reply(did, say, model):
+    """Start at the accepted-receipt seam, with no expiring worker fixture."""
+    receipt = fl.DispatchReceipt(
+        delegation_id=did, seq=1, turn_id=did, goals=(did,),
+        summary=did, steps=("inspect links", "verify result"), say=say,
+    )
+    reply = rb._ack_text([receipt], SimpleNamespace(platform="telegram"), [])
+    card = ac.card_for([receipt])
+    ac.on_child_event("subagent.start", delegation_id=did, task_index=0,
+                      subagent_id=did + "-child", model=model)
+    assert card is not None and not card.finished
+    return card, reply
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_entry,second_entry,finish_first", [
+    (first, second, ended) for ended in (False, True)
+    for first, second in (("opener", "opener"), ("opener", "empty"),
+                          ("job", "opener"), ("opener", "job"), ("job", "job"))
+] + [("empty", "empty", False), ("empty", "opener", False)])
+async def test_native_opener_placement_joins_during_inflight_card_send(
+    monkeypatch, record_property, first_entry, second_entry, finish_first,
+):
+    wire = Wire()
+    pubs = [publisher(wire), publisher(wire)]
+    first_say = "" if first_entry == "empty" else "first opener"
+    first, first_reply = _accepted_reply("deleg_gate1", first_say, "claude-sonnet-5-5")
+    second_say = "second opener" if second_entry == "opener" else ""
+    second, second_reply = _accepted_reply("deleg_gate2", second_say, "gpt-5.5")
+    first_sending, second_placing, release = asyncio.Event(), asyncio.Event(), asyncio.Event()
+    send, place, bind = wire.send, da._send_card_under_opener, da._bind_sent_unified
+    job_place = da.DelegationActivityPublisher._place_job_card
+
+    async def dispatch(index, entry, card, reply):
+        if entry == "job":
+            card.split_opener = True
+            card.target = (id(wire.adapter), "123", "pending")
+            return await pubs[index]._place_job_card(card, card.parts[0].delegation_id)
+        return await wire.adapter.send("123", reply)
+
+    async def gated_send(**kw):
+        if "inspect links" in kw["text"] and not first_sending.is_set():
+            first_sending.set()
+            await release.wait()
+        return await send(**kw)
+
+    async def observed_place(card, *args):
+        if card is second:
+            second_placing.set()
+        return await place(card, *args)
+
+    async def observed_bind(card, *args):
+        if card is second:
+            second_placing.set()
+        return await bind(card, *args)
+
+    async def observed_job_place(pub, card, *args):
+        if card is second:
+            second_placing.set()
+        return await job_place(pub, card, *args)
+
+    wire.adapter._bot.send_message.side_effect = gated_send
+    monkeypatch.setattr(da.DelegationActivityPublisher, "_place_job_card", observed_job_place)
+    monkeypatch.setattr(da, "_send_card_under_opener", observed_place)
+    monkeypatch.setattr(da, "_bind_sent_unified", observed_bind)
+    monkeypatch.setattr(da.AckCardEditor, "_delay", lambda self: 0)
+    tasks = []
+    try:
+        tasks.append(asyncio.create_task(dispatch(0, first_entry, first, first_reply)))
+        await asyncio.wait_for(first_sending.wait(), 1)
+        if first_entry == "empty":
+            assert first.target is None
+        else:
+            assert first.target[-1] == "pending"
+        assert not da._running_editor_for(wire.adapter, "123")
+        tasks.append(asyncio.create_task(dispatch(1, second_entry, second, second_reply)))
+        await asyncio.wait_for(second_placing.wait(), 1)
+        assert not first.finished and not second.finished, "no fixture expiry or terminal event"
+        if finish_first:
+            # Contrast the lifecycle hypothesis: an explicit terminal event,
+            # not an expired wall-clock wait, makes the first card ineligible.
+            ac.on_child_event("subagent.complete", delegation_id="deleg_gate1", task_index=0,
+                              subagent_id="deleg_gate1-child", status="completed")
+            assert first.finished and not second.finished
+        blocked = {"states": [first.parts[0].checklist.state, second.parts[0].checklist.state],
+                   "editors": len(da._ACK_EDITORS),
+                   "first_target": first.target[-1] if first.target else "unbound"}
+        release.set()
+        await asyncio.gather(*tasks)
+        await da.follow_latest_message(wire.adapter, "123")
+        await settle()
+        record_property("placement_trace", json.dumps({
+            "entries": [first_entry, second_entry], "finish_first": finish_first,
+            "blocked": blocked,
+            "final_live": list(wire.live()),
+            "editors": [{"parts": [p.delegation_id for p in e.card.parts],
+                         "closed": e._closed} for e in da._ACK_EDITORS.values()],
+            "wire_events": wire.events,
+        }, default=str))
+        assert len(wire.live()) == 1, "in-flight sends must share ONE live card"
+        editors = [e for e in da._ACK_EDITORS.values() if not e._closed]
+        assert len(editors) == 1
+        expected = {"deleg_gate2"} if finish_first else {"deleg_gate1", "deleg_gate2"}
+        assert {p.delegation_id for p in editors[0].card.parts} == expected
+        text = next(iter(wire.live().values()))["text"]
+        assert ("Sonnet 5" in text) is not finish_first and "GPT" in text
+        assert all(kw.get("parse_mode") == "MarkdownV2" for kind, _, kw in wire.events if kind == "edit")
+        for did in expected:
+            ac.on_child_event("subagent.complete", delegation_id=did, task_index=0,
+                              subagent_id=did + "-child", status="completed")
+        await settle()
+        assert editors[0]._closed and not wire.live()
+        ac.on_child_event("subagent.tool", delegation_id="deleg_gate2", task_index=0,
+                          subagent_id="deleg_gate2-child", tool_name="read_file")
+        before = sum(kind == "send" for kind, _, _ in wire.events)
+        await da.follow_latest_message(wire.adapter, "123")
+        await settle()
+        assert not wire.live() and sum(kind == "send" for kind, _, _ in wire.events) == before
+    finally:
+        release.set()
+        await asyncio.gather(*tasks, return_exceptions=True)
+        for pub in pubs:
+            await pub.aclose()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("scope", ["chat", "topic", "adapter"])
+async def test_native_inflight_placement_does_not_lock_another_scope(monkeypatch, scope):
+    wire = Wire()
+    other = Wire() if scope == "adapter" else wire
+    chat = "456" if scope == "chat" else "123"
+    first_meta = {"thread_id": "7"} if scope == "topic" else None
+    second_meta = {"thread_id": "8"} if scope == "topic" else None
+    first, reply = _accepted_reply("deleg_scope1", "first scope", "claude-sonnet-5-5")
+    second, other_reply = _accepted_reply("deleg_scope2", "other scope", "gpt-5.5")
+    sending, release = asyncio.Event(), asyncio.Event()
+    send = wire.send
+
+    async def gated_send(**kw):
+        if "tap to watch" in kw["text"] and not sending.is_set():
+            sending.set()
+            await release.wait()
+        return await send(**kw)
+
+    wire.adapter._bot.send_message.side_effect = gated_send
+    monkeypatch.setattr(da.AckCardEditor, "_delay", lambda self: 0)
+    task = asyncio.create_task(wire.adapter.send("123", reply, metadata=first_meta))
+    try:
+        await asyncio.wait_for(sending.wait(), 1)
+        # Must finish while the first scope's real send is still held.
+        await asyncio.wait_for(other.adapter.send(chat, other_reply, metadata=second_meta), 1)
+        assert not release.is_set() and not first.finished and not second.finished
+        assert da._running_editor_for(wire.adapter, "123", metadata=first_meta) is None
+        release.set()
+        await task
+        await settle()
+        assert len(wire.live(thread=7 if scope == "topic" else None)) == 1
+        assert len(other.live(chat=chat, thread=8 if scope == "topic" else None)) == 1
+        assert second.parts[0].card is second and first.parts[0].card is first
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_native_empty_ack_duplicate_survives_failed_formatted_merge(monkeypatch, record_property):
+    wire = Wire()
+    first, reply = _accepted_reply("deleg_edit1", "first opener", "claude-sonnet-5-5")
+    second, other_reply = _accepted_reply("deleg_edit2", "", "gpt-5.5")
+    # Own the edit attempts explicitly, without sleeping through backoff.
+    monkeypatch.setattr(da.AckCardEditor, "_ensure_task", lambda self: None)
+    await wire.adapter.send("123", reply)
+    editor = da._ACK_EDITORS[id(first)]
+    result = await wire.adapter.send("123", other_reply)
+    assert result.success and result.message_id is not None
+    duplicate = int(result.message_id)
+    assert editor._stale == [str(duplicate)] and duplicate in wire.messages
+    attempts = []
+
+    async def fail_edit(**kw):
+        attempts.append(kw)
+        raise RuntimeError("offline edit unavailable")
+
+    wire.adapter._bot.edit_message_text.side_effect = fail_edit
+    before = len(wire.events)
+    assert not await editor._edit(editor._render())
+    assert duplicate in wire.messages and editor._stale == [str(duplicate)]
+    assert all(kind != "delete" for kind, _, _ in wire.events[before:])
+    assert attempts[0].get("parse_mode") == "MarkdownV2"
+    wire.adapter._bot.edit_message_text.side_effect = wire.edit
+    assert await editor._edit(editor._render())
+    assert duplicate not in wire.messages and not editor._stale
+    assert len(wire.live()) == 1
+    text = next(iter(wire.live().values()))["text"]
+    assert "Sonnet 5" in text and "GPT" in text
+    edits = [i for i, (kind, _, kw) in enumerate(wire.events)
+             if kind == "edit" and "GPT" in kw["text"]]
+    deleted = [i for i, (kind, mid, _) in enumerate(wire.events)
+               if kind == "delete" and mid == duplicate]
+    assert edits and len(deleted) == 1 and edits[-1] < deleted[0]
+    record_property("merge_trace", json.dumps({"failed_attempts": attempts,
+                    "wire_events": wire.events}, default=str))
+
+
 @pytest.mark.asyncio
 async def test_native_simultaneous_turn_placement_shares_one_card(native):
     wire = Wire()

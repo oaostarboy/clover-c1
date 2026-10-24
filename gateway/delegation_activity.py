@@ -38,6 +38,7 @@ import logging
 import threading
 import time
 import uuid
+import weakref
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple
 
@@ -594,7 +595,6 @@ class DelegationActivityPublisher:
         self._closed = False
         self._jobs_group: Optional[str] = None
         self._jobs_count = 0
-        self._place_lock: Optional[asyncio.Lock] = None
         # Fallback group for relays that carry no delegation_id (e.g. live
         # transcript creation failed). Per publisher, so two turns in one chat
         # never share a status key like "delegation:delegation".
@@ -701,10 +701,8 @@ class DelegationActivityPublisher:
     async def _place_job_card(self, card: Any, card_id: str, reuse_message_id: str = "") -> None:
         from agent.ack_checklist import abandon, join
 
-        if self._place_lock is None:
-            self._place_lock = asyncio.Lock()
         try:
-            async with self._place_lock:  # one job at a time: the next one finds this card
+            async with _card_placement_lock(self._adapter, self._chat_id, self._metadata):
                 if reuse_message_id and await self._reuse_card_message(card, reuse_message_id):
                     return
                 host = _running_editor_for(self._adapter, self._chat_id, card, self._metadata)
@@ -712,7 +710,7 @@ class DelegationActivityPublisher:
                     _note_card_location(host.card, self._adapter, self._chat_id, host._message_id, self._metadata)
                     host.notify()
                     return
-                await _send_card_under_opener(card, self._adapter, self._chat_id, self._metadata)
+                await _send_card_under_opener_locked(card, self._adapter, self._chat_id, self._metadata)
         except Exception:
             logger.debug("agent job card placement failed", exc_info=True)
             card.target = None
@@ -2290,16 +2288,6 @@ def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadat
             opener_card = match_unbound_opener(content)
             if opener_card is None:
                 return None
-            # A card is already running in this chat: the new dispatch joins it
-            # (one live card per chat); only its opener line is a message.
-            host = _running_editor_for(adapter, chat_id, opener_card, metadata)
-            if host is not None:
-                from agent.ack_checklist import join
-
-                if join(host.card, opener_card):
-                    _note_card_location(host.card, adapter, chat_id, host._message_id, metadata)
-                    host.notify()
-                    return None
             # Claim it now so nothing else binds it while the card is sent.
             opener_card.target = (id(adapter), str(chat_id), "pending")
             return _send_card_under_opener(opener_card, adapter, chat_id, metadata)
@@ -2324,18 +2312,19 @@ async def _bind_sent_unified(card: Any, adapter: Any, chat_id: Any, message_id: 
     """
     from agent.ack_checklist import join
 
-    card.split_opener = True
-    host = _running_editor_for(adapter, chat_id, card, metadata)
-    if host is not None and _adapter_can_delete(adapter):
-        if host._edit_lock is None:
-            host._edit_lock = asyncio.Lock()
-        async with host._edit_lock:
-            if join(host.card, card):
-                _note_card_location(host.card, adapter, chat_id, host._message_id, metadata)
-                host._stale.append(message_id)
-                host.notify()  # Keep the normal edit throttle and server backoff.
-                return
-    _attach_editor(card, adapter, chat_id, message_id, loop, metadata)
+    async with _card_placement_lock(adapter, chat_id, metadata):
+        card.split_opener = True
+        host = _running_editor_for(adapter, chat_id, card, metadata)
+        if host is not None and _adapter_can_delete(adapter):
+            if host._edit_lock is None:
+                host._edit_lock = asyncio.Lock()
+            async with host._edit_lock:
+                if join(host.card, card):
+                    _note_card_location(host.card, adapter, chat_id, host._message_id, metadata)
+                    host._stale.append(message_id)
+                    host.notify()  # Keep the normal edit throttle and server backoff.
+                    return
+        _attach_editor(card, adapter, chat_id, message_id, loop, metadata)
 
 
 def _running_editor_for(adapter: Any, chat_id: Any, new_card: Any = None, metadata: Any = None) -> Optional["AckCardEditor"]:
@@ -2386,8 +2375,35 @@ def _attach_editor(
     return editor
 
 
+# Locks span the first send AND editor registration, across turn publishers.
+# Weak values retire idle scopes; a pending placement holds its lock strongly.
+_CARD_PLACEMENT_LOCKS: weakref.WeakValueDictionary[Tuple[Any, ...], asyncio.Lock] = weakref.WeakValueDictionary()
+
+
+def _card_placement_lock(adapter: Any, chat_id: Any, metadata: Any) -> asyncio.Lock:
+    key = (asyncio.get_running_loop(), *_follow_key(adapter, chat_id, metadata))
+    lock = _CARD_PLACEMENT_LOCKS.get(key)
+    if lock is None:
+        lock = asyncio.Lock()
+        _CARD_PLACEMENT_LOCKS[key] = lock
+    return lock
+
+
 async def _send_card_under_opener(card: Any, adapter: Any, chat_id: Any, metadata: Any) -> None:
-    """Send the card as its own message (the opener was just delivered above it)."""
+    """Join or place under the opener, including another turn's in-flight send."""
+    from agent.ack_checklist import join
+
+    async with _card_placement_lock(adapter, chat_id, metadata):
+        host = _running_editor_for(adapter, chat_id, card, metadata)
+        if host is not None and join(host.card, card):
+            _note_card_location(host.card, adapter, chat_id, host._message_id, metadata)
+            host.notify()
+            return
+        await _send_card_under_opener_locked(card, adapter, chat_id, metadata)
+
+
+async def _send_card_under_opener_locked(card: Any, adapter: Any, chat_id: Any, metadata: Any) -> None:
+    """Send and register while the conversation's placement lock is held."""
     loop = asyncio.get_running_loop()
     # Build the editor first so the text we send is exactly what it renders.
     probe = AckCardEditor.__new__(AckCardEditor)
