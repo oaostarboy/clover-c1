@@ -86,7 +86,7 @@ $init = $ast.Find({param($n) $n -is [Management.Automation.Language.AssignmentSt
 Assert ($null -ne $init) 'Missing owned cleanup inventory initialization'
 $script:cleanupMode = 'removed'; $script:accountPresent = $true; $script:accountRemoved = $false
 function Get-CimInstance {
-    param($ClassName, $Filter)
+    param($ClassName, $Filter, $ErrorAction)
     if ($ClassName -eq 'Win32_Process') {
         $script:processScans++
         if ($script:cleanupMode -eq 'unknown-process' -or ($script:cleanupMode -eq 'process-remains' -and $script:processScans -eq 2)) { return [pscustomobject]@{ ProcessId=123 } }
@@ -101,7 +101,7 @@ function Invoke-CimMethod { param($InputObject, $MethodName, $ErrorAction) if ($
 function Remove-CimInstance { param([Parameter(ValueFromPipeline=$true)]$InputObject) process { $script:profilePresent=$false } }
 function Get-ScheduledTask {
     [CmdletBinding()] param($TaskName, $TaskPath)
-    if ($TaskName -and $script:cleanupMode -eq 'suppressed-task-query') { Write-Error 'portable suppressed task lookup'; return }
+    if (-not $script:taskPresent -and $script:cleanupMode -eq 'suppressed-task-query') { Write-Error 'portable task enumeration failure'; return }
     if ($script:taskPresent) {
         [pscustomobject]@{ TaskName='portable-owned'; TaskPath='/portable/'; Principal=[pscustomobject]@{ UserId=$(if ($script:cleanupMode -eq 'unknown-task') {'portable-unresolved'} else {$sid}) } }
     }
@@ -109,10 +109,14 @@ function Get-ScheduledTask {
 function Stop-ScheduledTask { param($InputObject, $ErrorAction) }
 function Unregister-ScheduledTask { param($InputObject, [switch]$Confirm) $script:taskPresent=$false }
 function Get-LocalUser {
-    [CmdletBinding()] param($SID)
-    Assert ($SID.Value -eq $account.SID.Value) 'Cleanup account SID fence changed'
-    if ($script:cleanupMode -eq 'suppressed-account-query') { Write-Error 'portable suppressed lookup failure'; return }
-    if ($script:accountPresent) { [pscustomobject]@{ Name=$name; Description=$description } }
+    [CmdletBinding()] param()
+    if ($script:cleanupMode -eq 'suppressed-account-query') { Write-Error 'portable enumeration failure'; return }
+    if ($script:accountPresent) { [pscustomobject]@{ SID=[pscustomobject]@{Value=$sid}; Name=$name; Description=$description } }
+}
+function Get-AccountRegistryAbsence {
+    param($OwnedSid)
+    Assert ($OwnedSid -eq $sid) 'Registry SID fence changed'
+    @{query_status='success';hive_sid_absent=$true;hive_classes_absent=$true;profile_list_absent=$true}
 }
 function Remove-LocalUser { param([Parameter(ValueFromPipeline=$true)]$InputObject) process { $script:accountPresent=$false; $script:accountRemoved=$true } }
 foreach ($mode in @('removed','profile-refusal','unknown-process','process-remains','suppressed-account-query','owned-profile','owned-task','unknown-task','suppressed-task-query','account-query-failure')) {
@@ -122,7 +126,7 @@ foreach ($mode in @('removed','profile-refusal','unknown-process','process-remai
     $script:taskPresent=$mode -in @('owned-task','unknown-task','suppressed-task-query')
     $Evidence = Join-Path $EvidenceRoot $mode; $null = New-Item -ItemType Directory -Path $Evidence -Force
     $account = [pscustomobject]@{ SID=[pscustomobject]@{ Value=$sid } }
-    $description = 'Clover CI portable-owned-tag'; $profile=$null; $process=$null; $secret=$null
+    $description = 'Clover CI portable-owned-tag'; $profile=Join-Path $Evidence 'absent-owned-profile'; $process=$null; $secret=$null
     if ($mode -eq 'owned-profile') { $profile = Join-Path $Evidence 'absent-owned-profile' }
     $passed=$false; $cleanupPassed=$false; $childExit=-1
     . ([scriptblock]::Create($init.Extent.Text))
@@ -147,13 +151,15 @@ foreach ($mode in @('removed','profile-refusal','unknown-process','process-remai
     } elseif ($mode -eq 'process-remains') {
         Assert ($caught -and $d.processes.found -and $null -eq $d.processes.verified_absent -and -not $result.cleanup_passed -and $script:accountRemoved) 'Final owned-process detection lost or cleanup skipped'
     } elseif ($mode -eq 'suppressed-account-query') {
-        Assert ($null -eq $d.account.found -and $null -eq $d.account.verified_absent -and $d.account.state -eq 'unknown' -and $d.state -eq 'incomplete') 'Suppressed lookup failure falsely passed'
+        Assert ($caught -and -not $result.cleanup_passed -and $null -eq $d.account.found -and $null -eq $d.account.verified_absent -and $d.account.state -eq 'failed_or_unknown' -and $d.state -eq 'incomplete') 'Enumeration failure falsely passed'
     } elseif ($mode -eq 'owned-profile') {
         Assert ($d.profile.found -and $d.profile.removed -and $d.profile.verified_absent) 'Missing profile removal readback'
     } elseif ($mode -eq 'owned-task') {
         Assert ($d.tasks.found -and $d.tasks.removed -and $d.tasks.verified_absent) 'Missing task removal readback'
-    } elseif ($mode -in @('unknown-task','suppressed-task-query')) {
-        Assert ($null -eq $d.tasks.verified_absent -and $d.tasks.state -eq 'unknown' -and $d.state -eq 'incomplete') 'Unknown task snapshot falsely passed'
+    } elseif ($mode -eq 'unknown-task') {
+        Assert ($null -eq $d.tasks.verified_absent -and $d.tasks.state -eq 'unknown' -and $d.state -eq 'incomplete' -and -not $result.cleanup_passed) 'Unknown task snapshot falsely passed'
+    } elseif ($mode -eq 'suppressed-task-query') {
+        Assert ($caught -and -not $result.cleanup_passed -and $null -eq $d.tasks.verified_absent -and $d.tasks.state -eq 'failed_or_unknown' -and $d.state -eq 'incomplete') 'Task enumeration failure falsely passed'
     } else {
         Assert ($caught -and -not $result.cleanup_passed -and $null -eq $d.account.found -and $null -eq $d.account.verified_absent) 'Failed account query falsely passed'
     }

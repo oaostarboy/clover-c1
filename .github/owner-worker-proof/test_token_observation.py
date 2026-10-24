@@ -173,7 +173,7 @@ $script:ownedTask=$true; $script:ownedProfile=$true; $script:ownedUser=$true
 $script:events=[Collections.Generic.List[string]]::new()
 $script:failProfile=FAILPROFILE
 function Get-CimInstance {
-  param($ClassName,$Filter)
+  param($ClassName,$Filter,$ErrorAction)
   if ($ClassName -eq 'Win32_Process') { return }
   if ($ClassName -ne 'Win32_UserProfile' -or $Filter -ne "SID='created-sid'") { throw 'foreign CIM target' }
   if ($script:ownedProfile) { [pscustomobject]@{ SID='created-sid'; LocalPath='/never-created-profile'; Special=$false; Loaded=$false } }
@@ -195,8 +195,20 @@ function Get-ScheduledTask {
 }
 function Stop-ScheduledTask { param($InputObject,$ErrorAction); if ($InputObject.TaskName -ne 'owned') { throw 'foreign stop' }; $script:events.Add('stop-owned-task') }
 function Unregister-ScheduledTask { param($InputObject,[switch]$Confirm); if ($InputObject.TaskName -ne 'owned') { throw 'foreign task delete' }; $script:ownedTask=$false; $script:events.Add('delete-owned-task') }
-function Get-LocalUser { param($SID,$ErrorAction); if ($SID -ne 'created-sid') { throw 'foreign user query' }; if ($script:ownedUser) { [pscustomobject]@{ SID=$SID; Name='clv-created'; Description='exact-description' } } }
-function Remove-LocalUser { param([Parameter(ValueFromPipeline=$true)]$InputObject); process { if ($InputObject.SID -ne 'created-sid') { throw 'foreign user delete' }; $script:ownedUser=$false; $script:events.Add('user') } }
+# Keep the actual cleanup context, with only unsupported OS identity/registry reads doubled.
+$realPrincipal=${function:Get-AccountTaskPrincipalObservation}
+function Get-AccountTaskPrincipalObservation {
+  param($Principal,$OwnedSid)
+  if ($Principal.UserId -eq 'foreign-sid') { return @{state='resolved';sid='foreign-sid'} }
+  & $realPrincipal -Principal $Principal -OwnedSid $OwnedSid
+}
+function Get-AccountRegistryAbsence {
+  param($OwnedSid)
+  if ($OwnedSid -ne 'created-sid') { throw 'foreign registry query' }
+  @{query_status='success';hive_sid_absent=$true;hive_classes_absent=$true;profile_list_absent=$true}
+}
+function Get-LocalUser { param($ErrorAction); if ($script:ownedUser) { [pscustomobject]@{ SID=[pscustomobject]@{Value='created-sid'}; Name='clv-created'; Description='exact-description' } } }
+function Remove-LocalUser { param([Parameter(ValueFromPipeline=$true)]$InputObject); process { if ($InputObject.SID.Value -ne 'created-sid') { throw 'foreign user delete' }; $script:ownedUser=$false; $script:events.Add('user') } }
 $failed=$false
 try {
 BLOCK

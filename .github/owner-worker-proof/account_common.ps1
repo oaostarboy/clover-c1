@@ -51,11 +51,188 @@ function Assert-AccountResult {
     }
 }
 
+# Deliberately finite and non-secret. Never inspect Message/StackTrace or serialize arbitrary Data.
+function Get-AccountExceptionObservation {
+    param([Exception]$Exception)
+    $actual = $Exception
+    $wrappers = @('System.Management.Automation.MethodInvocationException',
+                  'System.Management.Automation.RuntimeException',
+                  'System.Reflection.TargetInvocationException')
+    for ($depth = 0; $depth -lt 4; $depth++) {
+        if ($actual.GetType().FullName -notin $wrappers -or $null -eq $actual.InnerException) { break }
+        $actual = $actual.InnerException
+    }
+    $category = switch ($actual.GetType().FullName) {
+        'System.ComponentModel.Win32Exception' { 'win32' }
+        'System.UnauthorizedAccessException' { 'access_denied' }
+        'System.IO.IOException' { 'io' }
+        'System.IO.FileNotFoundException' { 'file_not_found' }
+        'System.IO.DirectoryNotFoundException' { 'directory_not_found' }
+        'System.Security.SecurityException' { 'security' }
+        'System.Security.Principal.IdentityNotMappedException' { 'identity_not_mapped' }
+        'System.InvalidOperationException' { 'invalid_operation' }
+        'System.ArgumentException' { 'argument' }
+        'System.ArgumentNullException' { 'argument' }
+        'System.ArgumentOutOfRangeException' { 'argument' }
+        'System.Management.Automation.ItemNotFoundException' { 'item_not_found' }
+        'Microsoft.Management.Infrastructure.CimException' { 'cim' }
+        default { 'unknown' }
+    }
+    $observation = @{ exception_category=$category; hresult_signed=$null; native_code=$null; reason='exception' }
+    if ($actual.GetType() -eq [InvalidOperationException] -and
+        $actual.Data.Contains('CloverAccountPredicateMismatch') -and
+        $actual.Data['CloverAccountPredicateMismatch'] -eq $true) {
+        $observation.exception_category = 'predicate_mismatch'
+        $observation.reason = 'predicate_mismatch'
+    } elseif ($category -ne 'unknown') {
+        $observation.hresult_signed = [int]$actual.HResult
+        $unsigned = [BitConverter]::ToUInt32([BitConverter]::GetBytes([int]$actual.HResult), 0)
+        if ($actual -is [ComponentModel.Win32Exception]) {
+            $observation.native_code = $actual.NativeErrorCode
+        } elseif ((($unsigned -shr 16) -band 0x1fff) -eq 7) {
+            $observation.native_code = $unsigned -band 0xffff
+        }
+    }
+    return $observation
+}
+
+function Assert-AccountChildPredicate {
+    param([bool]$Condition)
+    if (-not $Condition) {
+        $failure = [InvalidOperationException]::new('Account child predicate mismatch')
+        $failure.Data['CloverAccountPredicateMismatch'] = $true
+        throw $failure
+    }
+}
+
+function Set-AccountChildStage {
+    param([ValidateSet('credential_isolation','identity','token','acl_denial',
+        'profile_userprofile','profile_home','profile_known_userprofile','profile_appdata',
+        'profile_localappdata','home_absence','home_create','home_write','home_read',
+        'startup_location','startup_create','startup_write','startup_read','startup_remove',
+        'access_receipt')][string]$Phase,
+        [ValidateSet('entered','passed','failed','unknown')][string]$State,
+        [Exception]$Exception)
+    # Keep in-memory state even when the diagnostic file is unwritable. Persistence
+    # is best-effort: it must not replace an original failure or gate access success.
+    $script:childStage.phase = $Phase
+    $script:childStage.state = $State
+    $script:childStage.predicate_id = $Phase
+    $script:childStage.states[$Phase] = $State
+    $script:childStage.predicate_passed = if ($State -eq 'passed') { $true } else { $null }
+    $script:childStage.reason = 'none'
+    $script:childStage.exception_category = 'none'
+    $script:childStage.hresult_signed = $null
+    $script:childStage.native_code = $null
+    if ($Exception) {
+        $observed = Get-AccountExceptionObservation $Exception
+        foreach ($key in $observed.Keys) { $script:childStage[$key] = $observed[$key] }
+        if ($observed.reason -eq 'predicate_mismatch') { $script:childStage.predicate_passed = $false }
+    }
+    try {
+        $script:childStage | ConvertTo-Json -Depth 4 |
+            Set-Content -LiteralPath (Join-Path $c.evidence 'child-stage.json') -Encoding utf8 -ErrorAction Stop
+    } catch { # Never serialize a diagnostic-write exception or propagate it.
+    }
+}
+
+# Observation helpers do not grant deletion authority. A failed query is unknown,
+# never evidence that a live process or task belongs to somebody else.
+function Get-AccountProcessOwnerObservation {
+    param($Candidate)
+    $result = @{ category='unknown'; return_code=$null; sid=$null; exception_category='none'; hresult_signed=$null; native_code=$null }
+    try {
+        $owner = Invoke-CimMethod -InputObject $Candidate -MethodName GetOwnerSid -ErrorAction Stop
+        if ($null -eq $owner) { $result.category = 'no_result' }
+        else {
+            $result.return_code = [uint32]$owner.ReturnValue
+            $result.category = switch ($result.return_code) {
+                0 { if ([string]::IsNullOrWhiteSpace($owner.Sid)) { 'missing_sid' } else { 'resolved' } }
+                2 { 'access_denied' }
+                3 { 'insufficient_privilege' }
+                8 { 'unknown_failure' }
+                9 { 'path_not_found' }
+                21 { 'invalid_parameter' }
+                default { 'other_return' }
+            }
+            if ($result.category -eq 'resolved') { $result.sid = $owner.Sid }
+        }
+    } catch {
+        $result.category = 'query_failed'
+        $errorObservation = Get-AccountExceptionObservation $_.Exception
+        foreach ($key in @('exception_category','hresult_signed','native_code')) { $result[$key] = $errorObservation[$key] }
+    }
+    return $result
+}
+
+function Get-AccountTaskPrincipalObservation {
+    param($Principal, [string]$OwnedSid)
+    $result = @{ state='unknown'; sid=$null; kind='unknown'; category='missing_principal'; hresult_signed=$null; native_code=$null }
+    $value = $null
+    if ($Principal.PSObject.Properties['UserId'] -and -not [string]::IsNullOrWhiteSpace($Principal.UserId)) {
+        $result.kind = 'user'; $value = $Principal.UserId
+    } elseif ($Principal.PSObject.Properties['GroupId'] -and -not [string]::IsNullOrWhiteSpace($Principal.GroupId)) {
+        $result.kind = 'group'; $value = $Principal.GroupId
+    }
+    if ($null -eq $value) { return $result }
+    try {
+        if ($value -eq $OwnedSid) { $result.sid = $OwnedSid; $result.category = 'owned_sid' }
+        elseif ($value -match '^S-1-') {
+            $result.sid = ([Security.Principal.SecurityIdentifier]::new($value)).Value
+            $result.category = 'resolved_sid'
+        } else {
+            $result.sid = ([Security.Principal.NTAccount]::new($value)).Translate([Security.Principal.SecurityIdentifier]).Value
+            $result.category = 'resolved_account'
+        }
+        $result.state = 'resolved'
+    } catch {
+        $observed = Get-AccountExceptionObservation $_.Exception
+        $result.category = if ($observed.exception_category -eq 'identity_not_mapped') { 'identity_not_mapped' } else { 'resolution_failed' }
+        $result.hresult_signed = $observed.hresult_signed
+        $result.native_code = $observed.native_code
+    }
+    return $result
+}
+
+function Get-AccountRegistryAbsence {
+    param([string]$OwnedSid)
+    $result = @{ query_status='failed'; hive_sid_absent=$null; hive_classes_absent=$null;
+        profile_list_absent=$null; exception_category='none'; hresult_signed=$null; native_code=$null }
+    $opened = [Collections.Generic.List[IDisposable]]::new()
+    try {
+        # Read-only exact SID queries. No unload, deletion, privilege or ACL change.
+        $hive = [Microsoft.Win32.Registry]::Users.OpenSubKey($OwnedSid, $false)
+        if ($hive) { $opened.Add($hive) }
+        $classes = [Microsoft.Win32.Registry]::Users.OpenSubKey($OwnedSid + '_Classes', $false)
+        if ($classes) { $opened.Add($classes) }
+        $profileKey = [Microsoft.Win32.Registry]::LocalMachine.OpenSubKey(
+            'SOFTWARE\Microsoft\Windows NT\CurrentVersion\ProfileList\' + $OwnedSid, $false)
+        if ($profileKey) { $opened.Add($profileKey) }
+        $result.hive_sid_absent = $null -eq $hive
+        $result.hive_classes_absent = $null -eq $classes
+        $result.profile_list_absent = $null -eq $profileKey
+        $result.query_status = 'success'
+    } catch {
+        $observed = Get-AccountExceptionObservation $_.Exception
+        foreach ($key in @('exception_category','hresult_signed','native_code')) { $result[$key] = $observed[$key] }
+    } finally { foreach ($key in $opened) { $key.Dispose() } }
+    return $result
+}
+
 function Invoke-AccountCleanup {
-    param([scriptblock[]]$Steps)
+    param([scriptblock[]]$Steps, [Collections.IDictionary]$Inventory)
     $failed = @()
+    $resourceNames = @('processes','tasks','profile','account')
+    $index = 0
     foreach ($step in $Steps) {
-        try { & $step | Out-Null } catch { $failed += $_.Exception.GetType().Name }
+        try { & $step | Out-Null } catch {
+            $observed = Get-AccountExceptionObservation $_.Exception
+            $failed += $observed.exception_category
+            if ($Inventory -and $index -lt $resourceNames.Count) {
+                $Inventory[$resourceNames[$index]].error = $observed
+            }
+        }
+        $index++
     }
     if ($failed.Count) { throw ('Owned cleanup failed: ' + ($failed -join ',')) }
 }

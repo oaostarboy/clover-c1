@@ -5,56 +5,104 @@ if (-not $IsWindows -or $env:GITHUB_ACTIONS -ne 'true' -or $env:RUNNER_ENVIRONME
     throw 'Disposable hosted Windows runner required'
 }
 $c = Get-Content -LiteralPath $Config -Raw | ConvertFrom-Json
+. (Join-Path $PSScriptRoot 'account_common.ps1')
 $exitCode = 1
+$script:childStage = [ordered]@{
+    phase='credential_isolation'; state='unknown'; predicate_id='credential_isolation'; predicate_passed=$null
+    reason='none'; exception_category='none'; hresult_signed=$null; native_code=$null
+    states=[ordered]@{
+        credential_isolation='unknown'; identity='unknown'; token='unknown'; acl_denial='unknown'
+        profile_userprofile='unknown'; profile_home='unknown'; profile_known_userprofile='unknown'
+        profile_appdata='unknown'; profile_localappdata='unknown'; home_absence='unknown'
+        home_create='unknown'; home_write='unknown'; home_read='unknown'; startup_location='unknown'
+        startup_create='unknown'; startup_write='unknown'; startup_read='unknown'; startup_remove='unknown'
+        access_receipt='unknown'
+    }
+}
 try {
+    Set-AccountChildStage -Phase 'credential_isolation' -State 'entered'
     foreach ($name in @('GITHUB_TOKEN','ACTIONS_RUNTIME_TOKEN','ACTIONS_ID_TOKEN_REQUEST_TOKEN',
                          'OPENAI_API_KEY','ANTHROPIC_API_KEY','AWS_SECRET_ACCESS_KEY')) {
-        if ($null -ne [Environment]::GetEnvironmentVariable($name)) { throw 'Credential isolation failed' }
+        Assert-AccountChildPredicate ($null -eq [Environment]::GetEnvironmentVariable($name))
     }
+    Set-AccountChildStage -Phase 'credential_isolation' -State 'passed'
+    Set-AccountChildStage -Phase 'identity' -State 'entered'
     $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
     $admin = ([Security.Principal.WindowsPrincipal]::new($identity)).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-    if ($identity.User.Value -ne $c.expected_sid -or $identity.User.Value -eq $c.runner_sid -or $admin) {
-        throw 'Credential logon did not run as the intended non-admin SID'
-    }
+    Assert-AccountChildPredicate ($identity.User.Value -eq $c.expected_sid -and $identity.User.Value -ne $c.runner_sid -and -not $admin)
+    Set-AccountChildStage -Phase 'identity' -State 'passed'
+    Set-AccountChildStage -Phase 'token' -State 'entered'
     & $c.python -I (Join-Path $PSScriptRoot 'restricted_token.py') --evidence (Join-Path $c.evidence 'token.json') --expected-sid $c.expected_sid
-    if ($LASTEXITCODE -ne 0) { throw 'Real child token observation failed' }
+    Assert-AccountChildPredicate ($LASTEXITCODE -eq 0)
     $token = Get-Content (Join-Path $c.evidence 'token.json') -Raw | ConvertFrom-Json
+    Set-AccountChildStage -Phase 'token' -State 'passed'
+    Set-AccountChildStage -Phase 'acl_denial' -State 'entered'
     $denied = $false
     try { [IO.File]::ReadAllText($c.protected) | Out-Null }
     catch [UnauthorizedAccessException] { $denied = $true }
-    if (-not $denied) { throw 'Actual non-admin could read admin-only data' }
-    if ($env:USERPROFILE -ne $c.profile -or $env:HOME -ne $c.profile -or
-        [Environment]::GetFolderPath('UserProfile') -ne $c.profile -or
-        [Environment]::GetFolderPath('ApplicationData') -ne $env:APPDATA -or
-        [Environment]::GetFolderPath('LocalApplicationData') -ne $env:LOCALAPPDATA) {
-        throw 'OS loaded profile or private environment locations disagree'
-    }
-    if (Test-Path -LiteralPath $env:CLOVER_HOME) { throw 'Refuse existing Clover home' }
+    Assert-AccountChildPredicate $denied
+    Set-AccountChildStage -Phase 'acl_denial' -State 'passed'
+    Set-AccountChildStage -Phase 'profile_userprofile' -State 'entered'
+    Assert-AccountChildPredicate ($env:USERPROFILE -eq $c.profile)
+    Set-AccountChildStage -Phase 'profile_userprofile' -State 'passed'
+    Set-AccountChildStage -Phase 'profile_home' -State 'entered'
+    Assert-AccountChildPredicate ($env:HOME -eq $c.profile)
+    Set-AccountChildStage -Phase 'profile_home' -State 'passed'
+    Set-AccountChildStage -Phase 'profile_known_userprofile' -State 'entered'
+    Assert-AccountChildPredicate ([Environment]::GetFolderPath('UserProfile') -eq $c.profile)
+    Set-AccountChildStage -Phase 'profile_known_userprofile' -State 'passed'
+    Set-AccountChildStage -Phase 'profile_appdata' -State 'entered'
+    Assert-AccountChildPredicate ([Environment]::GetFolderPath('ApplicationData') -eq $env:APPDATA)
+    Set-AccountChildStage -Phase 'profile_appdata' -State 'passed'
+    Set-AccountChildStage -Phase 'profile_localappdata' -State 'entered'
+    Assert-AccountChildPredicate ([Environment]::GetFolderPath('LocalApplicationData') -eq $env:LOCALAPPDATA)
+    Set-AccountChildStage -Phase 'profile_localappdata' -State 'passed'
+    Set-AccountChildStage -Phase 'home_absence' -State 'entered'
+    Assert-AccountChildPredicate (-not (Test-Path -LiteralPath $env:CLOVER_HOME))
+    Set-AccountChildStage -Phase 'home_absence' -State 'passed'
+    Set-AccountChildStage -Phase 'home_create' -State 'entered'
     $null = New-Item -ItemType Directory -Path $env:CLOVER_HOME
     $owned = Join-Path $env:CLOVER_HOME 'owned-write.txt'
+    Set-AccountChildStage -Phase 'home_create' -State 'passed'
+    Set-AccountChildStage -Phase 'home_write' -State 'entered'
     [IO.File]::WriteAllText($owned, 'Private non-admin home write control')
-    if ([IO.File]::ReadAllText($owned) -ne 'Private non-admin home write control') { throw 'Own home write failed' }
-    # Registration readiness only: the OS-known Startup directory must be writable
-    # by this genuine account. No fake gateway, installer, update or task is run.
+    Set-AccountChildStage -Phase 'home_write' -State 'passed'
+    Set-AccountChildStage -Phase 'home_read' -State 'entered'
+    Assert-AccountChildPredicate ([IO.File]::ReadAllText($owned) -eq 'Private non-admin home write control')
+    Set-AccountChildStage -Phase 'home_read' -State 'passed'
+    # Registration readiness only: no gateway, installer, update or task is run.
+    Set-AccountChildStage -Phase 'startup_location' -State 'entered'
     $startup = [Environment]::GetFolderPath('Startup')
-    if (-not $startup.StartsWith($env:APPDATA + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
-        throw 'OS Startup location is outside private AppData'
-    }
+    Assert-AccountChildPredicate ($startup.StartsWith($env:APPDATA + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase))
+    Set-AccountChildStage -Phase 'startup_location' -State 'passed'
+    Set-AccountChildStage -Phase 'startup_create' -State 'entered'
     $null = New-Item -ItemType Directory -Path $startup -Force
     $readiness = Join-Path $startup 'clover-fixture-readiness.txt'
+    Set-AccountChildStage -Phase 'startup_create' -State 'passed'
+    Set-AccountChildStage -Phase 'startup_write' -State 'entered'
     [IO.File]::WriteAllText($readiness, 'Disposable registration directory readiness, not a gateway')
-    if ([IO.File]::ReadAllText($readiness) -ne 'Disposable registration directory readiness, not a gateway') { throw 'Startup readiness write failed' }
+    Set-AccountChildStage -Phase 'startup_write' -State 'passed'
+    Set-AccountChildStage -Phase 'startup_read' -State 'entered'
+    Assert-AccountChildPredicate ([IO.File]::ReadAllText($readiness) -eq 'Disposable registration directory readiness, not a gateway')
+    Set-AccountChildStage -Phase 'startup_read' -State 'passed'
+    Set-AccountChildStage -Phase 'startup_remove' -State 'entered'
     Remove-Item -LiteralPath $readiness
-    $exitCode = 0
+    Set-AccountChildStage -Phase 'startup_remove' -State 'passed'
+    Set-AccountChildStage -Phase 'access_receipt' -State 'entered'
     @{ exit=0; sid=$identity.User.Value; admin=$admin; is_user_an_admin=$token.is_user_an_admin;
        admin_only_read_denied=$denied; private_home_write=$true; registration_directory_ready=$true;
        home=$env:HOME; userprofile=$env:USERPROFILE; appdata=$env:APPDATA; localappdata=$env:LOCALAPPDATA;
        clover_home=$env:CLOVER_HOME; startup=$startup; pid=$PID } |
         ConvertTo-Json | Set-Content (Join-Path $c.evidence 'access.json') -Encoding utf8
-
+    Set-AccountChildStage -Phase 'access_receipt' -State 'passed'
+    $exitCode = 0
 } catch {
-    # Fixed safe diagnostic only; never serialize arbitrary exceptions/locals/env.
-    [IO.File]::WriteAllText((Join-Path $c.evidence 'child-failure.txt'), 'Actual account child failed; inspect phase-specific nonsecret receipts')
+    $originalFailure = $_.Exception
     $exitCode = 1
+    try { Set-AccountChildStage -Phase $script:childStage.phase -State 'failed' -Exception $originalFailure } catch { }
+    # Fixed generic fallback survives even diagnostic persistence/classifier failure.
+    try {
+        [IO.File]::WriteAllText((Join-Path $c.evidence 'child-failure.txt'), 'Actual account child failed; inspect phase-specific nonsecret receipts')
+    } catch { }
 }
 exit $exitCode
