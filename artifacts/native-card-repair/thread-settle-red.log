@@ -1,0 +1,13 @@
+F                                                                        [100%]
+=================================== FAILURES ===================================
+____________ test_native_cards_do_not_join_or_follow_another_thread ____________
+tests/gateway/test_native_card_grouping.py:256: in test_native_cards_do_not_join_or_follow_another_thread
+    assert foreign.issubset(wire.messages), "completion in a topic must not move the main-chat card"
+E   AssertionError: completion in a topic must not move the main-chat card
+E   assert False
+E    +  where False = <built-in method issubset of set object at 0x7f727a6159a0>({101: {'chat_id': 123, 'text': 'checking thread seven', 'parse_mode': <ParseMode.MARKDOWN_V2: 'MarkdownV2'>, 'reply_to...hecking a different chat', 'parse_mode': <ParseMode.MARKDOWN_V2: 'MarkdownV2'>, 'reply_to_message_id': None, ...}, ...})
+E    +    where <built-in method issubset of set object at 0x7f727a6159a0> = {104, 106, 108}.issubset
+E    +    and   {101: {'chat_id': 123, 'text': 'checking thread seven', 'parse_mode': <ParseMode.MARKDOWN_V2: 'MarkdownV2'>, 'reply_to...hecking a different chat', 'parse_mode': <ParseMode.MARKDOWN_V2: 'MarkdownV2'>, 'reply_to_message_id': None, ...}, ...} = <tests.gateway.test_native_card_grouping.Wire object at 0x7f727ba22b10>.messages
+=========================== short test summary info ============================
+FAILED tests/gateway/test_native_card_grouping.py::test_native_cards_do_not_join_or_follow_another_thread
+1 failed in 20.81s

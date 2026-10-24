@@ -89,7 +89,7 @@ async def test_ticks_edit_the_same_message_and_never_send_again():
     ac.on_child_event("subagent.todo", delegation_id="d1", todos=_todos("completed", "in_progress", "pending"))
     await _settle(editor)
     clock.now += 10
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed")
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done")
     await _settle(editor)
 
     assert len(adapter.sends) == 1, "ticks never post a new message"
@@ -147,7 +147,7 @@ async def test_a_deleted_message_stops_editing_and_never_reposts():
     await _settle(editor)
     assert editor.gone and len(adapter.sends) == 1
     clock.now += 10
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed")
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done")
     await _settle(editor)
     assert len(adapter.edits) == 1 and len(adapter.sends) == 1
 
@@ -157,7 +157,7 @@ async def test_no_edit_transport_leaves_the_static_text_and_does_not_raise():
     clock, adapter, card = _Clock(), _Adapter(with_edit=False), _card()
     editor = await _bind(adapter, card, clock)
     clock.now += 10
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed")
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done")
     await _settle(editor)
     assert editor.gone and adapter.sends == [card.initial_text]
 

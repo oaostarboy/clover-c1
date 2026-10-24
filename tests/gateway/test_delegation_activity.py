@@ -431,7 +431,7 @@ async def test_completion_error_and_cancellation_final_states():
     for cb in (a, b, c):
         cb("subagent.start", preview="g")
 
-    a("subagent.complete", preview="Fixed", status="completed", duration_seconds=75.0,
+    a("subagent.complete", preview="Fixed", status="completed", outcome="done", duration_seconds=75.0,
       summary=f"Fixed the scope leak in authz_mixin. Commit abc1234. Tests: 12 passed. token={SECRET}",
       files_written=["gateway/authz_mixin.py", "tests/gateway/test_authz.py"], api_calls=6)
     b("subagent.complete", preview="boom", status="failed", duration_seconds=12.0,
@@ -446,11 +446,11 @@ async def test_completion_error_and_cancellation_final_states():
     assert snap["sa-3"]["state"] == "cancelled"
     assert pub.tracker.group_finished("deleg_aaaa0001")
     # Every result is reported ONCE, in one summary message at the bottom:
-    # no per-worker ✅/❌/⏹ pings.
+    # no per-worker ✅/🥀/⏹ pings.
     assert len(adapter.sends) == 1
     final = adapter.summary()
     assert SECRET not in final
-    assert final.startswith("❌ 3 subagents ·") and "⏱" in final.splitlines()[0]
+    assert final.startswith("🥀 3 subagents ·") and "⏱" in final.splitlines()[0]
     assert "Fixed the scope leak" in final
     assert "Port tests" in final and "failed" in final.lower()
     assert "Update docs" in final and "stopped" in final.lower()
@@ -547,7 +547,7 @@ async def test_transport_failure_never_reaches_the_child_and_recovers():
     await pub.drain()
     assert adapter.status_calls  # delivery was attempted
     adapter._raise = False
-    a("subagent.complete", status="completed", summary="done", duration_seconds=3)
+    a("subagent.complete", status="completed", outcome="done", summary="done", duration_seconds=3)
     await pub.drain()
     snap = pub.tracker.snapshot("deleg_aaaa0001")[0]
     assert snap["state"] == "completed"
@@ -583,7 +583,7 @@ async def test_stale_and_replayed_events_cannot_regress_final_state():
     runner = _turn_runner(pub)
     a = _child_cb(runner)
     a("subagent.start", preview="g")
-    a("subagent.complete", status="completed", summary="all good", duration_seconds=4)
+    a("subagent.complete", status="completed", outcome="done", summary="all good", duration_seconds=4)
     # Late/replayed events from a racing thread or a duplicate relay.
     a("tool.started", "terminal", "rm -rf build", {"command": "rm -rf build"})
     a("subagent.start", preview="g")
@@ -789,7 +789,7 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     # no separate per-worker message.
     clock.advance(3)
     b("tool.completed", "terminal", None, None, duration=3.0, is_error=False)
-    b("subagent.complete", status="completed", duration_seconds=10,
+    b("subagent.complete", status="completed", outcome="done", duration_seconds=10,
       summary="Ported 14 cron tests; all pass.")
     c("subagent.start", preview="g")
     await pub.drain()
@@ -807,12 +807,12 @@ async def test_rendered_frames_finished_workers_leave_the_active_feed():
     assert adapter.sends == []
 
     # Final: ONE summary message posted at the bottom; live card removed.
-    a("subagent.complete", status="completed", duration_seconds=80, summary="Found the leak.")
+    a("subagent.complete", status="completed", outcome="done", duration_seconds=80, summary="Found the leak.")
     c("subagent.complete", status="failed", duration_seconds=70, summary="network error")
     await pub.drain()
     assert len(adapter.sends) == 1
     final = adapter.summary()
-    assert final.startswith("❌ 3 subagents ·") and "⏱" in final.splitlines()[0]
+    assert final.startswith("🥀 3 subagents ·") and "⏱" in final.splitlines()[0]
     for title in ("Audit auth scoping", "Port cron tests", "Draft release notes"):
         assert title in final
     assert "Found the leak." in final and "Ported 14 cron tests" in final
@@ -834,7 +834,7 @@ async def test_active_card_stays_compact_with_many_workers():
         cb("tool.started", "web_search", f"q{i}", {"query": f"q{i}"})
         cb("tool.completed", "web_search", None, None, duration=0.2, is_error=False)
     for cb in cbs[:6]:
-        cb("subagent.complete", status="completed", duration_seconds=5, summary="ok")
+        cb("subagent.complete", status="completed", outcome="done", duration_seconds=5, summary="ok")
     await pub.drain()
     lines = _card_lines(adapter)
     # header + <=6 worker lines + overflow
@@ -909,7 +909,7 @@ async def test_edit_only_transient_failure_backs_off_then_keeps_editing_same_car
     await pub.flush()
     assert len(adapter.edits) == 2
     assert "b.py" in adapter.messages["s1"], "card must not freeze after one failed edit"
-    a("subagent.complete", status="completed", summary="done", duration_seconds=3)
+    a("subagent.complete", status="completed", outcome="done", summary="done", duration_seconds=3)
     await pub.drain()
     # Final summary is a NEW message at the bottom; the old live card is
     # retired (edit-only adapters can't delete, so it points below).
@@ -970,7 +970,7 @@ async def test_card_fits_the_adapter_message_limit():
         cb("subagent.start", preview="g")
         cb("tool.started", "terminal", "x" * 300, {"command": "echo " + "x" * 300})
     for cb in cbs:
-        cb("subagent.complete", status="completed", duration_seconds=5, summary="ok " * 80)
+        cb("subagent.complete", status="completed", outcome="done", duration_seconds=5, summary="ok " * 80)
     await pub.drain()
     assert adapter.sends, "card must be delivered"
     assert all(len(m) <= adapter.MAX_MESSAGE_LENGTH for m in adapter.messages.values())
@@ -1036,7 +1036,7 @@ async def test_summary_waits_for_the_parent_reply_then_posts_below_it():
     a("subagent.start", preview="g")
     a("tool.started", "read_file", "x.py", {"path": "x.py"})
     await pub.drain()
-    a("subagent.complete", status="completed", summary="Root cause found.", duration_seconds=9)
+    a("subagent.complete", status="completed", outcome="done", summary="Root cause found.", duration_seconds=9)
     await pub.drain()
     assert adapter.sends == [], "summary must wait while the parent is still working"
     assert len(state["released"]) == 1, "summary registered to fire after the parent's reply"
@@ -1064,7 +1064,7 @@ async def test_summary_posts_immediately_when_parent_is_idle():
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
-    a("subagent.complete", status="completed", summary="Done.", duration_seconds=3)
+    a("subagent.complete", status="completed", outcome="done", summary="Done.", duration_seconds=3)
     await pub.drain()
     assert len(adapter.sends) == 1 and "Done." in adapter.summary()
     assert state["released"] == []
@@ -1085,7 +1085,7 @@ async def test_summary_falls_back_if_the_parent_reply_never_releases_it(monkeypa
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
-    a("subagent.complete", status="completed", summary="Still delivered.", duration_seconds=3)
+    a("subagent.complete", status="completed", outcome="done", summary="Still delivered.", duration_seconds=3)
     await pub.drain()
     await asyncio.sleep(0.05)
     await pub.drain()
@@ -1114,7 +1114,7 @@ async def test_lost_hook_still_posts_once_parent_goes_idle(monkeypatch):
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
-    a("subagent.complete", status="completed", summary="Polled out.", duration_seconds=3)
+    a("subagent.complete", status="completed", outcome="done", summary="Polled out.", duration_seconds=3)
     await pub.drain()
     for _ in range(5):
         await asyncio.sleep(0.02)
@@ -1136,7 +1136,7 @@ async def test_held_summary_shows_result_on_live_card_while_parent_works():
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
-    a("subagent.complete", status="completed", summary="Visible early.", duration_seconds=3)
+    a("subagent.complete", status="completed", outcome="done", summary="Visible early.", duration_seconds=3)
     await pub.drain()
     assert adapter.sends == []
     assert "Visible early." in adapter.card()
@@ -1161,7 +1161,7 @@ async def test_ambiguous_summary_send_error_is_not_retried():
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
-    a("subagent.complete", status="completed", summary="x", duration_seconds=1)
+    a("subagent.complete", status="completed", outcome="done", summary="x", duration_seconds=1)
     await pub.drain()
     await pub.flush()
     await pub.flush()
@@ -1210,7 +1210,7 @@ async def test_without_a_delivery_hook_summary_polls_until_parent_is_idle(monkey
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
-    a("subagent.complete", status="completed", summary="Polled.", duration_seconds=3)
+    a("subagent.complete", status="completed", outcome="done", summary="Polled.", duration_seconds=3)
     await pub.drain()
     await asyncio.sleep(0.05)
     await pub.drain()
@@ -1248,7 +1248,7 @@ async def test_gateway_posts_summary_as_soon_as_the_subagent_finishes(monkeypatc
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
-    a("subagent.complete", status="completed", summary="Plain summary: Done early.", duration_seconds=2)
+    a("subagent.complete", status="completed", outcome="done", summary="Plain summary: Done early.", duration_seconds=2)
     await pub.drain()
     assert len(adapter.sends) == 1
     assert adapter.summary().startswith("**> ✅") and "Done early." in adapter.summary()
@@ -1299,7 +1299,7 @@ async def test_subagent_output_is_quoted_apart_from_the_main_chat():
     await pub.drain()
     live = adapter.card().splitlines()
     assert live[0].startswith("🔀 Opus 5.5") and all(l.startswith("> ") for l in live[1:])
-    a("subagent.complete", status="completed", duration_seconds=3,
+    a("subagent.complete", status="completed", outcome="done", duration_seconds=3,
       summary="**Done** (`a/b.py:3`).\n\nPlain summary: I checked the file. It is fine.")
     await pub.drain()
     final = adapter.summary().splitlines()
@@ -1354,7 +1354,7 @@ async def test_header_matches_the_main_agent_turn_card():
     await pub.drain()
     assert adapter.card().splitlines()[0] == "🔀 Opus 5.5 · 🛠 2 tool calls · ⏱ 22s"
     a("tool.completed", "read_file", None, None, duration=0.1, is_error=False)
-    a("subagent.complete", status="completed", summary="Plain summary: Done.", duration_seconds=25)
+    a("subagent.complete", status="completed", outcome="done", summary="Plain summary: Done.", duration_seconds=25)
     await pub.drain()
     assert adapter.summary().splitlines()[0] == "✅ Opus 5.5 · 🛠 2 tool calls · ⏱ 25s"
     await pub.aclose()
@@ -1400,10 +1400,10 @@ async def test_group_header_shows_failure_not_running_icon():
     b = _child_cb(runner, index=1, count=2, subagent_id="s2", title="Two")
     a("subagent.start", preview="g")
     b("subagent.start", preview="g")
-    a("subagent.complete", status="completed", summary="ok", duration_seconds=1)
+    a("subagent.complete", status="completed", outcome="done", summary="ok", duration_seconds=1)
     b("subagent.complete", status="failed", summary="boom", duration_seconds=1)
     await pub.drain()
-    assert adapter.summary().startswith("❌ 2 subagents")
+    assert adapter.summary().startswith("🥀 2 subagents")
     await pub.aclose()
 
 
@@ -1424,7 +1424,7 @@ async def test_telegram_cards_are_collapsible_quotes_like_the_turn_card():
     live = adapter.card().splitlines()
     assert live[0].startswith("**> 🔀 Opus 5.5 · 🛠 1 tool call")
     assert all(l.startswith("> ") for l in live[1:]) and live[-1].endswith("||")
-    a("subagent.complete", status="completed", duration_seconds=3,
+    a("subagent.complete", status="completed", outcome="done", duration_seconds=3,
       summary="Plain summary: I checked it. It is fine.")
     await pub.drain()
     final = adapter.summary()
@@ -1480,11 +1480,11 @@ def test_group_summary_is_spaced_and_only_flags_problems():
         kw = dict(delegation_id="d", subagent_id=f"s{i}", task_index=i, task_count=2,
                   title=title, model="claude-opus-5-5")
         tr.observe("subagent.start", **kw)
-        tr.observe("subagent.complete", status=status, summary="Plain summary: ok.",
+        tr.observe("subagent.complete", status=status, outcome="done", summary="Plain summary: ok.",
                    duration_seconds=3, **kw)
     lines = tr.render("d").splitlines()
     assert lines[lines.index("> 🍀 **One**") + 1] == "> *Opus 5.5 · ⏱ 3s*"
-    assert lines[lines.index("> ❌ **Two**") + 1] == "> *Opus 5.5 · ⏱ 3s*"
+    assert lines[lines.index("> 🥀 **Two**") + 1] == "> *Opus 5.5 · ⏱ 3s*"
     assert "> failed: ok." in lines  # reason uses the plain paragraph
     assert f"> {SPACER}" in lines and not any("↳" in l for l in lines)
 
@@ -1501,7 +1501,7 @@ def test_every_worker_takes_the_same_two_rows():
         kw = dict(delegation_id="d", subagent_id=f"s{i}", task_index=i, task_count=2,
                   title=title, model="claude-opus-5-5")
         tr.observe("subagent.start", **kw)
-        tr.observe("subagent.complete", status="completed", summary="Plain summary: ok.",
+        tr.observe("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.",
                    duration_seconds=3, **kw)
     lines = tr.render("d").splitlines()
     rows = [l for l in lines if l.startswith("> 🍀")]
@@ -1559,7 +1559,7 @@ async def test_combined_mode_holds_results_for_the_turn_card(monkeypatch):
     a = _child_cb(runner)
     a("subagent.start", preview="g")
     await pub.drain()
-    a("subagent.complete", status="completed", summary="Plain summary: All good.", duration_seconds=2)
+    a("subagent.complete", status="completed", outcome="done", summary="Plain summary: All good.", duration_seconds=2)
     await pub.drain()
     assert _summaries(adapter) == [], "no standalone summary while the turn runs"
     workers, ids = pub.absorb_finished()
@@ -1587,7 +1587,7 @@ async def test_combined_mode_posts_late_results_on_their_own(monkeypatch):
     await pub.drain()
     pub.absorb_finished()  # turn card built while the worker still runs
     pub.end_turn()
-    a("subagent.complete", status="completed", summary="Plain summary: Late.", duration_seconds=2)
+    a("subagent.complete", status="completed", outcome="done", summary="Plain summary: Late.", duration_seconds=2)
     await pub.drain()
     await asyncio.sleep(0.05)
     await pub.drain()
@@ -1603,13 +1603,13 @@ async def test_separate_mode_restores_standalone_cards(monkeypatch):
     await pub.aclose()
 
 
-def test_ran_out_of_steps_is_hourglass_not_red_x():
+def test_ran_out_of_steps_is_unfinished_not_a_failure():
     from agent.delegation_activity import DelegationActivityTracker
 
     t = DelegationActivityTracker()
     for i, (status, extra) in enumerate([
-        ("completed", {}),
-        ("error", {"exit_reason": "max_iterations"}),
+        ("completed", {"outcome": "done"}),
+        ("incomplete", {"exit_reason": "max_iterations"}),
     ]):
         t.observe("subagent.start", None, "g", None, delegation_id="d", subagent_id=f"s{i}",
                   task_index=i, task_count=2, goal=f"Task {i}", model="claude-sonnet-5")
@@ -1617,8 +1617,8 @@ def test_ran_out_of_steps_is_hourglass_not_red_x():
                   task_index=i, task_count=2, status=status, summary="x", duration_seconds=1, **extra)
     card = t.render("d")
     head = card.splitlines()[0]
-    assert head.startswith("⏳ 2 subagents · 1 done · 1 unfinished"), head
-    assert "❌" not in card and "ran out of steps" in card
+    assert head.startswith("☘️ 2 subagents · 1 done · 1 unfinished"), head
+    assert "🥀" not in card and "ran out of steps" in card
 
 
 
@@ -1635,7 +1635,7 @@ async def test_background_result_folds_into_the_next_turns_card(monkeypatch):
     await pub1.drain()
     pub1.absorb_finished()
     pub1.end_turn()  # turn 1 over, worker still running
-    a("subagent.complete", status="completed", summary="Plain summary: Late result.", duration_seconds=5)
+    a("subagent.complete", status="completed", outcome="done", summary="Plain summary: Late result.", duration_seconds=5)
     await pub1.drain()
     assert _summaries(adapter) == [], "parked for the next turn, not posted"
     assert da.inbox_pending(adapter, "chat-A") == 1
@@ -1670,7 +1670,7 @@ async def test_unclaimed_background_result_still_posts(monkeypatch):
     await pub.drain()
     pub.absorb_finished()
     pub.end_turn()
-    a("subagent.complete", status="completed", summary="Plain summary: Nobody came.", duration_seconds=5)
+    a("subagent.complete", status="completed", outcome="done", summary="Plain summary: Nobody came.", duration_seconds=5)
     await pub.drain()
     await asyncio.sleep(0.05)
     await pub.drain()
@@ -1691,7 +1691,7 @@ async def test_claiming_turn_without_a_card_hands_results_back(monkeypatch):
     await pub1.drain()
     pub1.absorb_finished()
     pub1.end_turn()
-    a("subagent.complete", status="completed", summary="Plain summary: Keep me.", duration_seconds=5)
+    a("subagent.complete", status="completed", outcome="done", summary="Plain summary: Keep me.", duration_seconds=5)
     await pub1.drain()
     pub2 = da.DelegationActivityPublisher(
         adapter=adapter, chat_id="chat-A", loop=asyncio.get_running_loop(),

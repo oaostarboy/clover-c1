@@ -5243,6 +5243,28 @@ class TurnRunner:
             except (TypeError, ValueError):
                 _edit_accepts_metadata = False
 
+        async def _progress_request(request, *, track_send=False):
+            if not ctx._cleanup_progress:
+                return await request
+            # Cancelling the sender cannot retract a request already accepted
+            # by Telegram. Keep the request and its receipt alive, and let the
+            # post-delivery cleanup wait for sends AND edits before collapsing.
+            task = asyncio.create_task(request)
+            ctx._progress_requests.add(task)
+
+            def _completed(fut):
+                try:
+                    result = fut.result()
+                    if track_send:
+                        _track_progress_result(result)
+                except BaseException:
+                    pass
+                finally:
+                    ctx._progress_requests.discard(fut)
+
+            task.add_done_callback(_completed)
+            return await asyncio.shield(task)
+
         async def _edit_progress_message(message_id: str, content: str):
             kwargs = {
                 "chat_id": ctx.source.chat_id,
@@ -5253,7 +5275,7 @@ class TurnRunner:
                 kwargs["finalize"] = True
             if _edit_accepts_metadata:
                 kwargs["metadata"] = ctx._progress_metadata
-            return await adapter.edit_message(**kwargs)
+            return await _progress_request(adapter.edit_message(**kwargs))
 
         def _progress_text(lines: list) -> str:
             return "\n".join(str(line) for line in lines)
@@ -5282,14 +5304,12 @@ class TurnRunner:
                 ctx._cleanup_msg_ids.append(str(result.message_id))
 
         async def _send_progress_text(text: str):
-            result = await adapter.send(
+            return await _progress_request(adapter.send(
                 chat_id=ctx.source.chat_id,
                 content=text,
                 reply_to=ctx._progress_reply_to,
                 metadata=ctx._progress_metadata,
-            )
-            _track_progress_result(result)
-            return result
+            ), track_send=True)
 
         async def _roll_progress_overflow_if_needed() -> bool:
             """Start fresh editable progress bubbles before a bubble exceeds limit.
@@ -5437,40 +5457,17 @@ class TurnRunner:
                             _last_edit_ts = time.monotonic()
                         else:
                             can_edit = False
-                        _flood_result = await adapter.send(
-                            chat_id=ctx.source.chat_id,
-                            content=msg,
-                            reply_to=ctx._progress_reply_to,
-                            metadata=ctx._progress_metadata,
-                        )
-                        if (
-                            ctx._cleanup_progress
-                            and getattr(_flood_result, "success", False)
-                            and getattr(_flood_result, "message_id", None)
-                        ):
-                            ctx._cleanup_msg_ids.append(str(_flood_result.message_id))
+                        await _send_progress_text(msg)
                 else:
                     if can_edit:
                         # First tool: send all accumulated text as new message
                         full_text = "\n".join(progress_lines)
-                        result = await adapter.send(
-                            chat_id=ctx.source.chat_id,
-                            content=full_text,
-                            reply_to=ctx._progress_reply_to,
-                            metadata=ctx._progress_metadata,
-                        )
+                        result = await _send_progress_text(full_text)
                     else:
                         # Editing unsupported: send just this line
-                        result = await adapter.send(
-                            chat_id=ctx.source.chat_id,
-                            content=msg,
-                            reply_to=ctx._progress_reply_to,
-                            metadata=ctx._progress_metadata,
-                        )
+                        result = await _send_progress_text(msg)
                     if result.success and result.message_id:
                         progress_msg_id = result.message_id
-                        if ctx._cleanup_progress:
-                            ctx._cleanup_msg_ids.append(str(result.message_id))
 
                 _last_edit_ts = time.monotonic()
 
@@ -32942,7 +32939,7 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
                 # was in flight when the turn ended) is deleted directly
                 # rather than tracked for a callback that already ran.
                 _cleanup_armed[0] = True
-            if _cleanup_eligible and _cleanup_msg_ids:
+            if _cleanup_eligible and (_cleanup_msg_ids or turn_ctx._progress_requests):
                 _ids_snapshot = list(_cleanup_msg_ids)
                 _chat_id_snapshot = source.chat_id
                 _adapter_snapshot = _cleanup_adapter
@@ -32990,8 +32987,17 @@ class GatewayRunner(GatewayAuthorizationMixin, GatewayKanbanWatchersMixin, Gatew
 
                 def _cleanup_temp_bubbles() -> None:
                     async def _delete_all() -> None:
-                        # Re-read the live list: a heartbeat send that was in
-                        # flight at turn end can land after the snapshot above.
+                        # The sender may still be draining at the queued-turn
+                        # exit. Let it stop, then await its shielded requests so
+                        # every send ID is known and no late edit can overwrite
+                        # the collapsed card. This task never blocks delivery.
+                        if progress_task is not None:
+                            await asyncio.gather(progress_task, return_exceptions=True)
+                        while turn_ctx._progress_requests:
+                            await asyncio.gather(
+                                *list(turn_ctx._progress_requests), return_exceptions=True,
+                            )
+                        # Re-read the live list after the receipts arrive.
                         await _collapse_or_delete_bubbles(
                             _adapter_snapshot,
                             _chat_id_snapshot,

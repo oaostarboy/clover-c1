@@ -138,7 +138,7 @@ async def test_a_finished_card_never_moves():
     chat, card = _Chat(), _card()
     editor = await _bind(chat, card)
     first = editor._message_id
-    ac.on_child_event("subagent.complete", delegation_id=DID, status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id=DID, status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle()
     await chat.send("chat", "the parent's reply")
     await _settle()
@@ -153,7 +153,7 @@ async def test_a_card_that_finishes_before_the_debounce_stays_put(monkeypatch):
     chat, card = _Chat(), _card()
     editor = await _bind(chat, card)
     await chat.send("chat", "reply")
-    ac.on_child_event("subagent.complete", delegation_id=DID, status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id=DID, status="completed", outcome="done", summary="Plain summary: ok.")
     await asyncio.sleep(0.2)
     await _settle()
     assert len(chat.sends) == 2 and chat.deleted == []
@@ -262,7 +262,7 @@ async def test_when_the_newest_card_finishes_the_older_one_takes_over():
     editor_a = await _bind(chat, card_a)
     card_b = _card("deleg_b", "\U0001f504 second job \u2192 result B, ~5 min")
     editor_b = await _bind(chat, card_b)
-    ac.on_child_event("subagent.complete", delegation_id="deleg_b", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="deleg_b", status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle()
     a_id = editor_a._message_id
     await chat.send("chat", "reply")
@@ -507,14 +507,14 @@ async def test_events_of_the_joined_part_edit_the_one_card_and_counts_span_all_p
     assert "**disks** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 3 calls" in text
     assert "**network** \u00b7 Sonnet 5.5 \u00b7 \U0001f6e0 4 calls" in text
     assert "*2 running \u00b7 \U0001f6e0 7 calls \u00b7" in text
-    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: Disks fine.")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", outcome="done", summary="Plain summary: Disks fine.")
     await _settle()
     mid = chat.edits[-1]["text"]
     # the ended job LEFT the card: the card is the single layout of the job still running
     assert mid.splitlines()[0].startswith("**> \U0001f500 Sonnet 5.5 \u00b7 ") and "tap to watch" in mid
     assert "> **network**" in mid.splitlines()
     assert "Goal: a network report" in mid and "disks" not in mid and "Disks fine." not in mid
-    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: Net fine.")
+    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", outcome="done", summary="Plain summary: Net fine.")
     await _settle()
     done = chat.edits[-1]["text"]
     assert done.startswith("> \U0001f340 **network** \u00b7 done") and first.finished
@@ -529,9 +529,9 @@ async def test_the_card_stays_live_until_every_part_has_ended():
     await _dispatch(chat, first)
     second = _opener_card("dj2", "network", "a network report", "and this")
     await _dispatch(chat, second)
-    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", outcome="done", summary="Plain summary: ok.")
     assert first.finished is False
-    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", outcome="done", summary="Plain summary: ok.")
     assert first.finished is True
 
 
@@ -560,7 +560,7 @@ async def test_a_dispatch_never_joins_a_finished_card():
     chat = _TgChat()
     first = _opener_card("dj1", "disks", "a disk report", "on it")
     await _dispatch(chat, first)
-    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle()
     second = _opener_card("dj2", "network", "a network report", "and this")
     await _dispatch(chat, second)
@@ -644,7 +644,7 @@ async def _ended_single(chat, did="dj1", status="completed", work="disks"):
     card = _opener_card(did, work, f"a {work} report", "on it")
     await _dispatch(chat, card)
     ac.on_child_event("subagent.start", delegation_id=did, model="claude-sonnet-5-5")
-    ac.on_child_event("subagent.complete", delegation_id=did, status=status, summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id=did, status=status, outcome="done", summary="Plain summary: ok.")
     await _settle()
     return card
 
@@ -710,7 +710,7 @@ async def test_a_stopped_part_above_a_real_reply_keeps_its_stop_line():
     n = len(chat.sends)
     await _reply(chat, "Stopped as asked.", ["dj1"])
     posted = _order(chat)[n:]
-    assert posted[0] == "Stopped as asked." and posted[1].startswith("> \U0001f940 **disks** \u00b7 stopped")
+    assert posted[0] == "Stopped as asked." and posted[1].startswith("> ⏹ **disks** \u00b7 stopped")
 
 
 @pytest.mark.asyncio
@@ -746,7 +746,7 @@ async def test_a_joined_part_posts_its_own_line_under_its_reply_and_the_last_par
     editor = da._ACK_EDITORS[id(first)]
     for did in ("dj1", "dj2"):
         ac.on_child_event("subagent.start", delegation_id=did, model="claude-sonnet-5-5")
-    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle()
     # part 1 ended while part 2 still runs: the live card dropped it
     assert "disks" not in first.render() and editor._closed is False
@@ -756,7 +756,7 @@ async def test_a_joined_part_posts_its_own_line_under_its_reply_and_the_last_par
     assert len(posted) == 2 and posted[0] == "Disks are fine.", "the reply, then its own line"
     assert posted[1].startswith("> \U0001f340 **disks** \u00b7 done")
     assert not first.finished, "the card still runs for the other part"
-    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="dj2", status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle()
     await chat.send("chat", "chatter")
     n = len(chat.sends)
@@ -775,7 +775,7 @@ async def test_a_batched_completion_for_several_parts_posts_each_line_under_the_
     await _dispatch(chat, second)
     for did in ("dj1", "dj2"):
         ac.on_child_event("subagent.start", delegation_id=did, model="claude-sonnet-5-5")
-        ac.on_child_event("subagent.complete", delegation_id=did, status="completed", summary="Plain summary: ok.")
+        ac.on_child_event("subagent.complete", delegation_id=did, status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle()
     await chat.send("chat", "chatter")
     n = len(chat.sends)
@@ -819,7 +819,7 @@ async def test_the_real_send_wrapper_puts_the_card_right_under_the_reply():
     sent = await chat.send("chat", card.say_text())
     await _settle()
     ac.on_child_event("subagent.start", delegation_id="dj1", model="claude-sonnet-5-5")
-    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle()
     await chat.send("chat", "chatter in between")
     n = len(chat.sent)
@@ -870,7 +870,7 @@ async def _finished_card_on_real_chat(chat):
     await chat.send("chat", card.say_text())
     await _settle()
     ac.on_child_event("subagent.start", delegation_id="dj1", model="claude-sonnet-5-5")
-    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="dj1", status="completed", outcome="done", summary="Plain summary: ok.")
     await _settle()
     return card
 

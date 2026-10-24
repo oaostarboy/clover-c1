@@ -87,6 +87,20 @@ RUNNING = "running"
 DONE = "done"
 FAILED = "failed"
 STOPPED = "stopped"
+PARTIAL = "partial"
+BLOCKED = "blocked"
+UNVERIFIED = "unverified"
+UNFINISHED = "unfinished"
+_INCOMPLETE = (PARTIAL, BLOCKED, UNVERIFIED, UNFINISHED)
+_TERMINAL = (DONE, FAILED, STOPPED) + _INCOMPLETE
+
+
+def _status_icon(state: str) -> str:
+    from agent.clover_flavor import outcome_mark
+
+    return outcome_mark(state, {DONE: DONE_ICON, FAILED: FAILED_ICON,
+                               STOPPED: STOPPED_ICON}.get(state, "☘️"))
+
 
 PENDING = "pending"  # a helper of a multi dispatch that has not started
 RECENT_TOOLS_SINGLE = 3  # tool lines on a one-helper card
@@ -103,9 +117,9 @@ CARD_BUDGET = 3900  # Telegram's message limit, with room to spare
 PENDING_ICON = "\u2b1c"  # ⬜
 ACTIVE_ICON = "\U0001f504"  # 🔄
 DONE_ICON = "\U0001f340"  # 🍀
-FAILED_ICON = "\U0001f342"  # 🍂
-TITLE_ICON = "\U0001f500"  # 🔀 leads a unified card's title (🍂 instead when it ended badly)
-STOPPED_ICON = "\U0001f940"  # 🥀
+FAILED_ICON = "\U0001f940"  # 🥀
+TITLE_ICON = "\U0001f500"  # 🔀 leads a running unified card's title
+STOPPED_ICON = "⏹"  # stopped, never a failure
 
 _STEP_ICON = {
     "completed": DONE_ICON,
@@ -113,24 +127,33 @@ _STEP_ICON = {
     "pending": PENDING_ICON,
     "cancelled": STOPPED_ICON,
     "failed": FAILED_ICON,
+    "unfinished": "☘️",
 }
-_END_ICON = {DONE: DONE_ICON, FAILED: FAILED_ICON, STOPPED: STOPPED_ICON}
-# The unified card uses plain marks, not emojis: the only emojis on it are the
-# 🔀 in front of the title (🍂 in its place when the card ended badly), the 🍀 in
-# the "tap to ..." hint, a 🍂 / 🥀 in front of a failed / stopped subagent's name, the
-# 🛠 / ⏱ leading each stats line (calls, time), and the 🔧 on a running tool line.
+_END_ICON = {DONE: DONE_ICON, FAILED: FAILED_ICON, STOPPED: STOPPED_ICON,
+             **{state: "☘️" for state in _INCOMPLETE}}
+# Progress/tool marks stay plain. Terminal task marks use the active skin:
+# success, true failure, incomplete work and stopped work stay distinct.
 _STEP_MARK = {
     "completed": "\u2713",  # ✓
     "in_progress": "\u25b8",  # ▸
     "pending": "\u25cb",  # ○
     "failed": "\u2717",  # ✗
     "cancelled": "\u2013",  # –
+    "unfinished": "☘️",
 }
 # Tool phrases are cut so the WHOLE line (indent + "\U0001f527 " + phrase) fits one
 # phone row: a few characters more on the single card (no indent).
 TOOL_PHRASE_MULTI = 32  # tool lines nest two levels deep on a several-subagent card
 TOOL_PHRASE_SINGLE = 38  # ...and one level deep on the single card
 _MAX_OPEN_TOOLS = 8
+
+
+def _step_icon(status: str, *, unified_step: bool = False) -> str:
+    state = {"completed": DONE, "failed": FAILED, "cancelled": STOPPED,
+             "unfinished": UNFINISHED}.get(status)
+    if state is not None and (not unified_step or state in (FAILED, UNFINISHED)):
+        return _status_icon(state)
+    return (_STEP_MARK if unified_step else _STEP_ICON)[status]
 
 
 def clean_say(value: Any) -> str:
@@ -314,7 +337,7 @@ def _finish_steps_for(steps: List[List[str]], state: str) -> None:
     else:
         # The step that was running is where it stopped / went wrong;
         # steps never reached stay as they were.
-        mark = "failed" if state == FAILED else "cancelled"
+        mark = "failed" if state == FAILED else "unfinished" if state in _INCOMPLETE else "cancelled"
         for row in steps:
             if row[1] == "in_progress":
                 row[1] = mark
@@ -452,6 +475,8 @@ class Checklist:
         return _one_row_goal(outcome)
 
     def _title_line(self, title: str, tail: str, single: bool = False) -> str:
+        if self.state in _INCOMPLETE or self.state == DONE:
+            return f"{_status_icon(self.state)} **{title}**{tail}"
         return _title_line(title, tail, self.state in (FAILED, STOPPED),
                            stopped=single and self.state == STOPPED)
 
@@ -463,7 +488,7 @@ class Checklist:
         if self.state != RUNNING:
             tail = " \u00b7 " + self.state
         stats = _stats_line(self.model, self.calls, self.started, self.ended, now)
-        steps = [f"{_STEP_MARK[status]} {text}" for text, status in self.steps]
+        steps = [f"{_step_icon(status, unified_step=True)} {text}" for text, status in self.steps]
         if self.state == RUNNING:
             # One live subagent, in this order (no indent, no \u25a0): line 1 is
             # the model / calls / time (visible when the quote is collapsed,
@@ -499,16 +524,14 @@ class Checklist:
         if len(kids) >= 2:
             # Two or more subagents: the header says how many; the job's own
             # title (and its Goal) moves inside, above the sections.
-            head = _title_line(
+            head = self._title_line(
                 _joined_title(len(kids)),
                 _count_tail(self.state == RUNNING, [k.state for k in kids]),
-                self.state == FAILED,
             )
             blocks: List[List[str]] = [[f"**{title}**", self._goal_line(outcome)]]
         else:
-            head = _title_line(
+            head = self._title_line(
                 title, _count_tail(self.state == RUNNING, [k.state for k in kids]),
-                self.state == FAILED,
             )
             blocks = [[ln for ln in (self._goal_line(outcome),) if ln]]
         if len(kids) > COMPACT_OVER:
@@ -531,9 +554,14 @@ class Checklist:
     def render_classic(self, include_say: bool = True) -> str:
         head = self.header
         if self.state != RUNNING:
-            head = _END_ICON[self.state] + _after_icon(head)
+            head = _status_icon(self.state) + _after_icon(head)
+            if self.state in _INCOMPLETE:
+                head += " · " + self.state
+        states = [kid.state for kid in self.kids]
+        if len(set(states)) > 1:
+            head += _count_tail(self.state == RUNNING, states)
         lines = [head]
-        lines += [f"{_STEP_ICON[status]} {text}" for text, status in self.steps]
+        lines += [f"{_step_icon(status)} {text}" for text, status in self.steps]
         body = "\n".join(lines)
         return f"{self.say}\n\n{body}" if (self.say and include_say) else body
 
@@ -626,7 +654,7 @@ def _cut_word(text: str, limit: int) -> str:
 
 def _kid_step_lines(kid: Any) -> List[str]:
     """The helper's own checklist (nothing when it has none)."""
-    return [f"{_STEP_MARK[status]} {text}" for text, status in kid.steps]
+    return [f"{_step_icon(status, unified_step=True)} {text}" for text, status in kid.steps]
 
 
 def _steps_with_tools(
@@ -648,7 +676,7 @@ def _steps_with_tools(
     if at < 0:
         out += [nest + t for t in tools]
     for i, (text, status) in enumerate(rows):
-        out.append(f"{step_indent}{_STEP_MARK[status]} {text}")
+        out.append(f"{step_indent}{_step_icon(status, unified_step=True)} {text}")
         if i == at:
             out += [nest + t for t in tools]
     return out
@@ -685,10 +713,21 @@ def _joined_goal(outcome: str) -> str:
 
 
 def _title_line(title: str, tail: str, lost: bool, stopped: bool = False) -> str:
-    """``🔀 **title** · k of N done``; 🍂 takes the 🔀's place when it ended badly
-    (🥀 when a single subagent was stopped)."""
-    icon = STOPPED_ICON if stopped else FAILED_ICON if lost else TITLE_ICON
+    """Running title, or the skin's distinct failure/stopped mark."""
+    icon = _status_icon(STOPPED) if stopped else _status_icon(FAILED) if lost else TITLE_ICON
     return f"{icon} **{title}**{tail}"
+
+
+def _aggregate_state(states: Sequence[str]) -> str:
+    for state in (FAILED, PARTIAL, BLOCKED, UNVERIFIED, UNFINISHED, STOPPED):
+        if state in states:
+            return state
+    return DONE if states and all(s == DONE for s in states) else RUNNING
+
+
+def _outstanding_counts(states: Sequence[str]) -> List[str]:
+    return [f"{states.count(state)} {state}" for state in (FAILED,) + _INCOMPLETE + (STOPPED,)
+            if state in states]
 
 
 def _footer_counts(states: Sequence[str], running: bool) -> List[str]:
@@ -704,17 +743,13 @@ def _footer_counts(states: Sequence[str], running: bool) -> List[str]:
             ("waiting", sum(1 for s in states if s == PENDING)),
             ("done", sum(1 for s in states if s == DONE)),
             ("failed", failed),
+            *((state, states.count(state)) for state in _INCOMPLETE),
             ("stopped", stopped),
         )
         parts = [f"{c} {word}" for word, c in counts if c]
         if parts:
             return parts
-    parts = [f"{n} subagent{'s' if n != 1 else ''}"]
-    if failed:
-        parts.append(f"{failed} failed")
-    if stopped:
-        parts.append(f"{stopped} stopped")
-    return parts
+    return [f"{n} subagent{'s' if n != 1 else ''}"] + _outstanding_counts(states)
 
 
 def _count_tail(running: bool, states: Sequence[str]) -> str:
@@ -722,17 +757,11 @@ def _count_tail(running: bool, states: Sequence[str]) -> str:
     count plus `` · 1 failed`` / `` · 1 stopped``."""
     n = len(states)
     done = sum(1 for s in states if s == DONE)
-    failed = sum(1 for s in states if s == FAILED)
-    stopped = sum(1 for s in states if s == STOPPED)
     if running:
         return f" \u00b7 {done} of {n} done"
     if done == n:
         return " \u00b7 done"
-    bits = [f"{done} of {n} done"]
-    if failed:
-        bits.append(f"{failed} failed")
-    if stopped:
-        bits.append(f"{stopped} stopped")
+    bits = [f"{done} of {n} done"] + _outstanding_counts(states)
     return " \u00b7 " + " \u00b7 ".join(bits)
 
 
@@ -740,8 +769,8 @@ SECTION_MARK = "\u25a0"  # ■ leads each subagent's name on a several-subagent 
 
 
 def _name_label(name: str, state: str) -> str:
-    """``■ **Name**`` (🍂 instead of the ■ for a failed subagent)."""
-    return f"{FAILED_ICON if state == FAILED else SECTION_MARK} **{name}**"
+    """Section name with a distinct terminal outcome mark when needed."""
+    return f"{_status_icon(state) if state in (FAILED,) + _INCOMPLETE else SECTION_MARK} **{name}**"
 
 
 def _visible_len(text: str) -> int:
@@ -867,8 +896,10 @@ def _ended_line(name: str, obj: Any) -> List[str]:
     (A subagent stopped on purpose is not on the card at all.)"""
     if obj.state == FAILED:
         reason = no_command_links(_cut_word(getattr(obj, "reason", "") or "hit an error", REASON_CHARS))
-        return [f"{FAILED_ICON} **{name}** \u00b7 failed \u00b7 {reason}"]
-    parts = [f"{DONE_ICON} **{name}** \u00b7 {obj.state}"]
+        return [f"{_status_icon(FAILED)} **{name}** \u00b7 failed \u00b7 {reason}"]
+    parts = [f"{_status_icon(obj.state)} **{name}** \u00b7 {obj.state}"]
+    if obj.state in _INCOMPLETE and getattr(obj, "reason", ""):
+        parts.append(no_command_links(_cut_word(obj.reason, REASON_CHARS)))
     if obj.model:
         parts.append(obj.model)
     if obj.calls:
@@ -883,7 +914,7 @@ def _is_lost(k: Any) -> bool:
 
 
 def _is_ended(k: Any) -> bool:
-    return k.state in (DONE, FAILED)
+    return k.state in _TERMINAL
 
 
 def _kid_block(k: Child, now: float, summary_chars: int, tool_cap: int) -> List[str]:
@@ -1702,23 +1733,20 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
             plain = plain_summary(summary)
         except Exception:
             plain = ""
-    state = end_state_for(kw.get("status"))
+    from agent.delegation_activity import completion_display_state
+
+    state = completion_display_state(kw)
     if state == STOPPED or _is_raw(plain):
         plain = ""  # an interrupt notice or raw error text is never shown
-    if str(kw.get("exit_reason") or "").lower() in {"max_iterations", "max_turns"}:
-        state = FAILED
-    if kw.get("exited_unverified") and str(kw.get("status") or "").lower() == "incomplete":
-        # An outside job that exited 0 without a verdict line (parser "none"):
-        # it ended cleanly, so it is done, not failed.
-        state = DONE
-    report = kw.get("task_outcome")
-    task_incomplete = isinstance(report, dict) and report.get("status") in {"partial", "blocked", "unknown"}
-    if state == DONE and (kw.get("outcome") == "not_done" or task_incomplete):
-        # The run ended cleanly but the helper says the job is not done.
-        state = FAILED
-        if task_incomplete and isinstance(report, dict):
-            from agent.task_outcome import outcome_reason
-            plain = outcome_reason(report)
+    reason = plain_reason(kw, plain)
+    if state in _INCOMPLETE:
+        fallback = {PARTIAL: "some work remains", BLOCKED: "waiting on a dependency",
+                    UNVERIFIED: "task success not verified", UNFINISHED: "work did not finish"}[state]
+        # A task's prompt, paths and raw report stay off the short result card.
+        safe = _public_step_text(plain)
+        safe = re.sub(r"(?:[A-Za-z]:)?[/\\]\S+", "", safe)
+        reason = (plain_reason(kw, safe) if kw.get("exit_reason") in {"max_iterations", "max_turns"}
+                  else _cut_word(safe, REASON_CHARS) if safe and state != UNVERIFIED else fallback)
     now = time.monotonic()
     if cl.kids:
         kid = _child_for(cl, kw, ending=True)
@@ -1726,8 +1754,8 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
             return False
         _note_identity(kid, kw)
         kid.state = state
-        if state == FAILED:
-            kid.reason = plain_reason(kw, plain)
+        if state == FAILED or state in _INCOMPLETE:
+            kid.reason = reason
         _finish_steps_for(kid.steps, state)
         kid.open.clear()
         if plain and not kid.summary:
@@ -1737,12 +1765,12 @@ def _record_complete(part: Part, kw: Dict[str, Any]) -> bool:
     else:
         if plain and not cl.summary:
             cl.summary = plain
-        if state == FAILED and not cl.reason:
-            cl.reason = plain_reason(kw, plain)
+        if (state == FAILED or state in _INCOMPLETE) and not cl.reason:
+            cl.reason = reason
     part.ended.append(state)
     if len(part.ended) < part.expected:
         return bool(cl.kids)
-    final = FAILED if FAILED in part.ended else STOPPED if STOPPED in part.ended else DONE
+    final = _aggregate_state(part.ended)
     if cl.started is not None or any(k.started is not None for k in cl.kids):
         cl.ended = now
     cl.open.clear()
@@ -1845,22 +1873,18 @@ class Card:
         subs: List[Any] = []
         for p in parts:
             cl = p.checklist
-            subs += cl.shown_kids() if cl.kids else [cl]
+            subs += cl.kids if cl.kids else [cl]
         n = len(subs)
         done = sum(1 for x in subs if x.state == DONE)
         failed = [x for x in subs if x.state == FAILED]
         joined = len(parts) > 1
         title = _joined_title(n) if (joined or n > 1) else parts[0].checklist._title_outcome()[0]
         stats: List[str] = []
-        if not failed:
-            status = "done"
-            if n > 1:
-                stats.append(f"{n} done")
-        elif n == 1:
-            status = "failed"
-        else:
-            status = "failed"
-            stats.append(f"{done} of {n} done \u00b7 {len(failed)} failed")
+        states = [x.state for x in subs]
+        status = _aggregate_state(states)
+        if n > 1:
+            stats.append(f"{n} done" if done == n else
+                         f"{done} of {n} done" + " · " + " · ".join(_outstanding_counts(states)))
         if n == 1 and subs[0].model:
             stats.append(subs[0].model)
         calls = sum(x.calls for x in subs)
@@ -1870,11 +1894,12 @@ class Card:
         ended = [x.ended for x in subs if x.ended is not None]
         if started and ended:
             stats.append(_elapsed(max(0.0, max(ended) - min(started))))
-        lines = [f"{FAILED_ICON if failed else DONE_ICON} **{title}** \u00b7 {status}"]
+        lines = [f"{_status_icon(status)} **{title}** \u00b7 {status}"]
         if stats:
             lines.append(_italic(" \u00b7 ".join(stats)))
-        if failed:
-            reason = getattr(failed[0], "reason", "") or "hit an error"
+        reasons = failed or [x for x in subs if x.state in _INCOMPLETE]
+        if reasons:
+            reason = getattr(reasons[0], "reason", "") or "work did not finish"
             lines.append(no_command_links(_cut_word(reason, REASON_CHARS)))
         body = _quoted(lines)
         say = self.say_text()

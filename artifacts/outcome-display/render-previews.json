@@ -1,0 +1,133 @@
+{
+  "telegram_edits": [
+    {
+      "status": "completed",
+      "task_outcome": "done",
+      "edits": [
+        {
+          "raw": "**> 🔀 **checking work**\n> *tap to watch 🍀*\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||",
+          "formatted": "**> 🔀 *checking work*\n> _tap to watch 🍀_\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||"
+        },
+        {
+          "raw": "> 🍀 **checking work** · done\n> *⏱ 0s*",
+          "formatted": "> 🍀 *checking work* · done\n> _⏱ 0s_"
+        }
+      ],
+      "finalize": true,
+      "transport": "mocked: no live Telegram message"
+    },
+    {
+      "status": "completed",
+      "task_outcome": "partial",
+      "edits": [
+        {
+          "raw": "**> 🔀 **checking work**\n> *tap to watch 🍀*\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||",
+          "formatted": "**> 🔀 *checking work*\n> _tap to watch 🍀_\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||"
+        },
+        {
+          "raw": "> ☘️ **checking work** · partial\n> *⏱ 0s*\n> some work remains",
+          "formatted": "> ☘️ *checking work* · partial\n> _⏱ 0s_\n> some work remains"
+        }
+      ],
+      "finalize": true,
+      "transport": "mocked: no live Telegram message"
+    },
+    {
+      "status": "completed",
+      "task_outcome": "blocked",
+      "edits": [
+        {
+          "raw": "**> 🔀 **checking work**\n> *tap to watch 🍀*\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||",
+          "formatted": "**> 🔀 *checking work*\n> _tap to watch 🍀_\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||"
+        },
+        {
+          "raw": "> ☘️ **checking work** · blocked\n> *⏱ 0s*\n> waiting on a dependency",
+          "formatted": "> ☘️ *checking work* · blocked\n> _⏱ 0s_\n> waiting on a dependency"
+        }
+      ],
+      "finalize": true,
+      "transport": "mocked: no live Telegram message"
+    },
+    {
+      "status": "completed",
+      "task_outcome": "unknown",
+      "edits": [
+        {
+          "raw": "**> 🔀 **checking work**\n> *tap to watch 🍀*\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||",
+          "formatted": "**> 🔀 *checking work*\n> _tap to watch 🍀_\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||"
+        },
+        {
+          "raw": "> ☘️ **checking work** · unverified\n> *⏱ 0s*\n> task success not verified",
+          "formatted": "> ☘️ *checking work* · unverified\n> _⏱ 0s_\n> task success not verified"
+        }
+      ],
+      "finalize": true,
+      "transport": "mocked: no live Telegram message"
+    },
+    {
+      "status": "failed",
+      "task_outcome": "done",
+      "edits": [
+        {
+          "raw": "**> 🔀 **checking work**\n> *tap to watch 🍀*\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||",
+          "formatted": "**> 🔀 *checking work*\n> _tap to watch 🍀_\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||"
+        },
+        {
+          "raw": "> 🥀 **checking work** · failed\n> *⏱ 0s*\n> hit an error",
+          "formatted": "> 🥀 *checking work* · failed\n> _⏱ 0s_\n> hit an error"
+        }
+      ],
+      "finalize": true,
+      "transport": "mocked: no live Telegram message"
+    },
+    {
+      "status": "cancelled",
+      "task_outcome": "done",
+      "edits": [
+        {
+          "raw": "**> 🔀 **checking work**\n> *tap to watch 🍀*\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||",
+          "formatted": "**> 🔀 *checking work*\n> _tap to watch 🍀_\n> ⠀\n> Goal: verified result\n> ▸ check\n> ○ verify||"
+        },
+        {
+          "raw": "> ⏹ **checking work** · stopped",
+          "formatted": "> ⏹ *checking work* · stopped"
+        }
+      ],
+      "finalize": true,
+      "transport": "mocked: no live Telegram message"
+    }
+  ],
+  "photographed_batch_shapes": [
+    {
+      "batch": "four-one-failure",
+      "raw": "> 🥀 **4 subagents** · failed\n> *1 of 4 done · 1 failed · 1 partial · 1 unverified · ⏱ 0s*\n> hit an error",
+      "formatted": "> 🥀 *4 subagents* · failed\n> _1 of 4 done · 1 failed · 1 partial · 1 unverified · ⏱ 0s_\n> hit an error",
+      "counts": [
+        "1 of 4 done",
+        "1 failed",
+        "1 partial",
+        "1 unverified"
+      ]
+    },
+    {
+      "batch": "six-no-failures",
+      "raw": "> ☘️ **6 subagents** · partial\n> *2 of 6 done · 3 partial · 1 blocked · ⏱ 0s*\n> some work remains",
+      "formatted": "> ☘️ *6 subagents* · partial\n> _2 of 6 done · 3 partial · 1 blocked · ⏱ 0s_\n> some work remains",
+      "counts": [
+        "2 of 6 done",
+        "3 partial",
+        "1 blocked"
+      ]
+    },
+    {
+      "batch": "four-no-failures",
+      "raw": "> ☘️ **4 subagents** · partial\n> *2 of 4 done · 1 partial · 1 blocked · ⏱ 0s*\n> some work remains",
+      "formatted": "> ☘️ *4 subagents* · partial\n> _2 of 4 done · 1 partial · 1 blocked · ⏱ 0s_\n> some work remains",
+      "counts": [
+        "2 of 4 done",
+        "1 partial",
+        "1 blocked"
+      ]
+    }
+  ]
+}

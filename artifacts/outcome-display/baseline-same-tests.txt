@@ -1,0 +1,629 @@
+.......F.FF.......F.......F.........FFF................................. [ 14%]
+...FFF.F.....................................F....F..........FF.F....... [ 28%]
+............F....FF..........F.....................................FFF.F [ 42%]
+.FF.F...............................................................F... [ 56%]
+..........F..................................F....F.....F............... [ 70%]
+........................F............................................... [ 84%]
+...........................FFFFFFFFFFFFFF.....FFFFFFFFFFFFFFFFFFFFF..... [ 98%]
+.F.FFFFF                                                                 [100%]
+=================================== FAILURES ===================================
+____________________ test_cancelled_step_shows_stopped_icon ____________________
+tests/agent/test_ack_checklist.py:93: in test_cancelled_step_shows_stopped_icon
+    assert cl.render().splitlines()[2].startswith("⏹")
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36c1a10db0>('⏹')
+E    +    where <built-in method startswith of str object at 0x7f36c1a10db0> = '🥀 writing the fix'.startswith
+______ test_failure_marks_the_failing_step_and_header_x_and_nothing_else _______
+tests/agent/test_ack_checklist.py:113: in test_failure_marks_the_failing_step_and_header_x_and_nothing_else
+    assert lines[0].startswith("\U0001f940 ")
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36c1132170>('🥀 ')
+E    +    where <built-in method startswith of str object at 0x7f36c1132170> = '🍂 fixing the helper-card bugs → test build + PR, ~10–25 min'.startswith
+_____ test_stopped_uses_the_stop_icon_and_a_second_finish_changes_nothing ______
+tests/agent/test_ack_checklist.py:122: in test_stopped_uses_the_stop_icon_and_a_second_finish_changes_nothing
+    assert cl.render().startswith("⏹ ")
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36c0e46db0>('⏹ ')
+E    +    where <built-in method startswith of str object at 0x7f36c0e46db0> = '🥀 fixing the helper-card bugs → test build + PR, ~10–25 min\n🥀 found the bugs\n⬜ writing the fix'.startswith
+E    +      where '🥀 fixing the helper-card bugs → test build + PR, ~10–25 min\n🥀 found the bugs\n⬜ writing the fix' = render()
+E    +        where render = Checklist(header='🔄 fixing the helper-card bugs → test build + PR, ~10–25 min', steps=[['found the bugs', 'cancelled']...one, open=[], recent=deque([], maxlen=3), kids=[], hidden=0, hidden_ids=set(), lifecycle=False, reason='', step_ids=[]).render
+_____________ test_a_helper_that_says_not_done_never_gets_a_clover _____________
+tests/agent/test_ack_checklist.py:164: in test_a_helper_that_says_not_done_never_gets_a_clover
+    assert first.startswith("☘️ ") and "unfinished" in first and not first.startswith("\U0001f340")
+E   AssertionError: assert (False)
+E    +  where False = <built-in method startswith of str object at 0x7f36c1132040>('☘️ ')
+E    +    where <built-in method startswith of str object at 0x7f36c1132040> = '🍂 fixing the helper-card bugs → test build + PR, ~10–25 min'.startswith
+____________ test_a_fan_out_finishes_only_when_every_child_reported ____________
+tests/agent/test_ack_checklist.py:192: in test_a_fan_out_finishes_only_when_every_child_reported
+    assert card.finished and card.render().startswith("\U0001f940 ")
+E   AssertionError: assert (True and False)
+E    +  where True = <agent.ack_checklist.Card object at 0x7f36c03212b0>.finished
+E    +  and   False = <built-in method startswith of str object at 0x7f36c1132170>('🥀 ')
+E    +    where <built-in method startswith of str object at 0x7f36c1132170> = '🍂 fixing the helper-card bugs → test build + PR, ~10–25 min'.startswith
+E    +      where '🍂 fixing the helper-card bugs → test build + PR, ~10–25 min' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36c03212b0>.render
+____________ test_unfinished_card_is_one_line_with_one_short_reason ____________
+tests/agent/test_ack_checklist_unified.py:118: in test_unfinished_card_is_one_line_with_one_short_reason
+    assert lines[2] == "> ☘️ **fixing the bugs** \u00b7 unfinished"
+E   AssertionError: assert '> 🍂 **fixing...gs** · failed' == '> ☘️ **fixin... · unfinished'
+E     
+E     - > ☘️ **fixing the bugs** · unfinished
+E     ?   ^^                       --  ^^^^
+E     + > 🍂 **fixing the bugs** · failed
+E     ?   ^                        + ^
+__________________ test_failed_status_gives_the_failed_header __________________
+tests/agent/test_ack_checklist_unified.py:127: in test_failed_status_gives_the_failed_header
+    assert card.render().splitlines()[2] == "> \U0001f940 **fixing the bugs** \u00b7 failed"
+E   AssertionError: assert '> 🍂 **fixing...gs** · failed' == '> 🥀 **fixing...gs** · failed'
+E     
+E     - > 🥀 **fixing the bugs** · failed
+E     ?   ^
+E     + > 🍂 **fixing the bugs** · failed
+E     ?   ^
+___________________________ test_stopped_card_shape ____________________________
+tests/agent/test_ack_checklist_unified.py:134: in test_stopped_card_shape
+    assert lines[2] == "> ⏹ **fixing the bugs** \u00b7 stopped"
+E   AssertionError: assert '> 🥀 **fixing...s** · stopped' == '> ⏹ **fixing...s** · stopped'
+E     
+E     - > ⏹ **fixing the bugs** · stopped
+E     ?   ^
+E     + > 🥀 **fixing the bugs** · stopped
+E     ?   ^
+_____ test_multi_finished_with_one_unfinished_and_one_stopped_counts_both ______
+tests/agent/test_ack_checklist_unified.py:595: in test_multi_finished_with_one_unfinished_and_one_stopped_counts_both
+    assert lines[0] == "> ☘️ **3 subagents** \u00b7 unfinished"
+E   AssertionError: assert '> 🍂 **2 subagents** · failed' == '> ☘️ **3 sub... · unfinished'
+E     
+E     - > ☘️ **3 subagents** · unfinished
+E     ?   ^^   ^               --  ^^^^
+E     + > 🍂 **2 subagents** · failed
+E     ?   ^   ^                + ^
+____________ test_multi_stopped_without_a_failure_is_still_stopped _____________
+tests/agent/test_ack_checklist_unified.py:605: in test_multi_stopped_without_a_failure_is_still_stopped
+    assert first == "> ⏹ **2 subagents** \u00b7 stopped", "a stop is neither failure nor verified success"
+E   AssertionError: a stop is neither failure nor verified success
+E   assert '> 🍀 **checki...ites** · done' == '> ⏹ **2 suba...s** · stopped'
+E     
+E     - > ⏹ **2 subagents** · stopped
+E     + > 🍀 **checking the 3 sites** · done
+_________ test_max_iterations_counts_as_unfinished_for_a_multi_helper __________
+tests/agent/test_ack_checklist_unified.py:614: in test_max_iterations_counts_as_unfinished_for_a_multi_helper
+    assert lines[0].startswith("> ☘️ **") and "1 unfinished" in lines[1]
+E   AssertionError: assert (False)
+E    +  where False = <built-in method startswith of str object at 0x7f36c048ece0>('> ☘️ **')
+E    +    where <built-in method startswith of str object at 0x7f36c048ece0> = '> 🍂 **2 subagents** · failed'.startswith
+_______ test_multi_complete_before_the_part_exists_is_replayed_per_child _______
+tests/agent/test_ack_checklist_unified.py:638: in test_multi_complete_before_the_part_exists_is_replayed_per_child
+    assert any(ln.startswith("> ☘️ **second** \u00b7 unfinished \u00b7 ") for ln in lines)
+E   assert False
+E    +  where False = any(<generator object test_multi_complete_before_the_part_exists_is_replayed_per_child.<locals>.<genexpr> at 0x7f36c0cbca00>)
+_ test_the_failure_emoji_appears_only_on_a_failed_or_stopped_title_and_a_failed_name _
+tests/agent/test_ack_checklist_unified.py:1071: in test_the_failure_emoji_appears_only_on_a_failed_or_stopped_title_and_a_failed_name
+    assert text.count("\U0001f940") == 1 and text.splitlines()[2] == "> \U0001f940 **fixing the bugs** \u00b7 failed"
+E   AssertionError: assert (0 == 1)
+E    +  where 0 = <built-in method count of str object at 0x7f36c04d7840>('🥀')
+E    +    where <built-in method count of str object at 0x7f36c04d7840> = 'on it\n\n> 🍂 **fixing the bugs** · failed\n> *Sonnet 5.5 · 🛠 14 · ⏱ 0s*\n> boom'.count
+___________ test_step_marks_keep_plain_progress_and_semantic_failure ___________
+tests/agent/test_ack_checklist_unified.py:1125: in test_step_marks_keep_plain_progress_and_semantic_failure
+    assert lines[-5:] == ["> \u2713 a", "> \u25b8 b", "> \u25cb c", "> 🥀 d", "> \u2013 e"]
+E   AssertionError: assert ['> ✓ a', '> ...✗ d', '> – e'] == ['> ✓ a', '> ...🥀 d', '> – e']
+E     
+E     At index 3 diff: '> ✗ d' != '> 🥀 d'
+E     Use -v to get more diff
+______ test_all_ended_with_a_failure_shows_the_counts_and_the_title_emoji ______
+tests/agent/test_ack_checklist_unified.py:1247: in test_all_ended_with_a_failure_shows_the_counts_and_the_title_emoji
+    assert lines[0] == "> \U0001f940 **3 subagents** \u00b7 failed"
+E   AssertionError: assert '> 🍂 **3 subagents** · failed' == '> 🥀 **3 subagents** · failed'
+E     
+E     - > 🥀 **3 subagents** · failed
+E     ?   ^
+E     + > 🍂 **3 subagents** · failed
+E     ?   ^
+__ test_compaction_starts_above_six_with_plain_one_liners_and_grouped_waiting __
+tests/agent/test_ack_checklist_unified.py:1271: in test_compaction_starts_above_six_with_plain_one_liners_and_grouped_waiting
+    assert "> \U0001f940 **job 1** \u00b7 failed \u00b7 it broke" in lines
+E   AssertionError: assert '> 🥀 **job 1** · failed · it broke' in ['🔀 **9 subagents** · 1 of 9 done', '> **fixing the bugs**', '> Goal: test build + PR · ~10–25 min', '> ⠀', '> 🍀 **job 0** · done · Sonnet 5.5 · ⏱ 0s', '> 🍂 **job 1** · failed · it broke', ...]
+__ test_a_failed_subagent_keeps_the_failure_mark_instead_of_the_section_mark ___
+tests/agent/test_ack_checklist_unified.py:1292: in test_a_failed_subagent_keeps_the_failure_mark_instead_of_the_section_mark
+    assert "> \U0001f940 **b** \u00b7 failed \u00b7 broke." in lines and not any("\u25a0 **b**" in ln for ln in lines)
+E   AssertionError: assert ('> 🥀 **b** · failed · broke.' in ['🔀 **2 subagents** · 0 of 2 done', '> **checking the 3 sites**', '> Goal: outcome · ~5 min', '> ⠀', '> ■ **a** · waiting', '> \u2003\u2003○ a', ...])
+_ test_a_failed_part_leaves_the_joined_card_and_the_last_part_gets_the_single_layout _
+tests/agent/test_ack_checklist_unified.py:1441: in test_a_failed_part_leaves_the_joined_card_and_the_last_part_gets_the_single_layout
+    assert liner[0] == "> \U0001f940 **2 subagents** \u00b7 failed"
+E   AssertionError: assert '> 🍂 **2 subagents** · failed' == '> 🥀 **2 subagents** · failed'
+E     
+E     - > 🥀 **2 subagents** · failed
+E     ?   ^
+E     + > 🍂 **2 subagents** · failed
+E     ?   ^
+_______ test_an_ended_part_with_a_failure_or_a_stop_counts_both_honestly _______
+tests/agent/test_ack_checklist_unified.py:1518: in test_an_ended_part_with_a_failure_or_a_stop_counts_both_honestly
+    assert a[0] == "> \U0001f940 **3 subagents** \u00b7 failed"
+E   AssertionError: assert '> 🍂 **3 subagents** · failed' == '> 🥀 **3 subagents** · failed'
+E     
+E     - > 🥀 **3 subagents** · failed
+E     ?   ^
+E     + > 🍂 **3 subagents** · failed
+E     ?   ^
+__________ test_a_single_subagent_part_that_failed_or_stopped_says_so __________
+tests/agent/test_ack_checklist_unified.py:1533: in test_a_single_subagent_part_that_failed_or_stopped_says_so
+    assert card.part_liner(card.parts[0]).splitlines() == [
+E   AssertionError: assert ['> 🍂 **disks...', '> broke.'] == ['> 🥀 **disks...', '> broke.']
+E     
+E     At index 0 diff: '> 🍂 **disks** · failed' != '> 🥀 **disks** · failed'
+E     Use -v to get more diff
+__________ test_a_finished_failed_joined_card_is_the_last_ended_part ___________
+tests/agent/test_ack_checklist_unified.py:1649: in test_a_finished_failed_joined_card_is_the_last_ended_part
+    assert lines[0] == "> \U0001f940 **2 subagents** \u00b7 failed"
+E   AssertionError: assert '> 🍂 **2 subagents** · failed' == '> 🥀 **2 subagents** · failed'
+E     
+E     - > 🥀 **2 subagents** · failed
+E     ?   ^
+E     + > 🍂 **2 subagents** · failed
+E     ?   ^
+__________ test_a_failed_next_to_a_stopped_one_keeps_only_the_failure __________
+tests/agent/test_ack_checklist_unified.py:1817: in test_a_failed_next_to_a_stopped_one_keeps_only_the_failure
+    assert any(ln.startswith("> \U0001f940 **b** \u00b7 failed") for ln in lines)
+E   assert False
+E    +  where False = any(<generator object test_a_failed_next_to_a_stopped_one_keeps_only_the_failure.<locals>.<genexpr> at 0x7f36c0d07780>)
+___ test_an_ended_subagent_is_always_exactly_one_line_however_long_its_name ____
+tests/agent/test_ack_checklist_unified.py:1826: in test_an_ended_subagent_is_always_exactly_one_line_however_long_its_name
+    assert lines == [f"\U0001f940 **{long_name}** \u00b7 failed \u00b7 hit an error"], "always ONE line"
+E   AssertionError: always ONE line
+E   assert ['🍂 **a very ...hit an error'] == ['🥀 **a very ...hit an error']
+E     
+E     At index 0 diff: '🍂 **a very long subagent name that will not fit** · failed · hit an error' != '🥀 **a very long subagent name that will not fit** · failed · hit an error'
+E     Use -v to get more diff
+_________ test_a_failed_subagent_collapses_with_one_short_plain_reason _________
+tests/agent/test_ack_checklist_unified.py:1839: in test_a_failed_subagent_collapses_with_one_short_plain_reason
+    assert lines[i] == "> \U0001f940 **a** \u00b7 failed \u00b7 hit an error"
+E   AssertionError: assert '> 🍂 **a** · ... hit an error' == '> 🥀 **a** · ... hit an error'
+E     
+E     - > 🥀 **a** · failed · hit an error
+E     ?   ^
+E     + > 🍂 **a** · failed · hit an error
+E     ?   ^
+____ test_a_single_stopped_subagent_card_has_the_stop_mark_and_no_raw_text _____
+tests/agent/test_ack_checklist_unified.py:1864: in test_a_single_stopped_subagent_card_has_the_stop_mark_and_no_raw_text
+    assert text.splitlines()[2] == "> ⏹ **fixing the bugs** \u00b7 stopped"
+E   AssertionError: assert '> 🥀 **fixing...s** · stopped' == '> ⏹ **fixing...s** · stopped'
+E     
+E     - > ⏹ **fixing the bugs** · stopped
+E     ?   ^
+E     + > 🥀 **fixing the bugs** · stopped
+E     ?   ^
+_____ test_a_joined_card_with_every_job_stopped_keeps_just_the_stop_title ______
+tests/agent/test_ack_checklist_unified.py:1885: in test_a_joined_card_with_every_job_stopped_keeps_just_the_stop_title
+    assert card.render().splitlines() == ["> ⏹ **logs** \u00b7 stopped"]
+E   AssertionError: assert ['> 🥀 **logs** · stopped'] == ['> ⏹ **logs** · stopped']
+E     
+E     At index 0 diff: '> 🥀 **logs** · stopped' != '> ⏹ **logs** · stopped'
+E     Use -v to get more diff
+______________ test_a_partly_stopped_job_keeps_its_stopped_count _______________
+tests/agent/test_ack_checklist_unified.py:1893: in test_a_partly_stopped_job_keeps_its_stopped_count
+    assert text.startswith("> ⏹ **2 subagents** \u00b7 stopped")
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36c0c95960>('> ⏹ **2 subagents** · stopped')
+E    +    where <built-in method startswith of str object at 0x7f36c0c95960> = '> 🍀 **checking the 3 sites** · done'.startswith
+__________ test_a_joined_card_with_done_running_and_failed_subagents ___________
+tests/agent/test_ack_checklist_unified.py:1947: in test_a_joined_card_with_done_running_and_failed_subagents
+    assert "> \U0001f940 **two** \u00b7 failed \u00b7 the server said no." in lines
+E   AssertionError: assert '> 🥀 **two** · failed · the server said no.' in ['🔀 **4 subagents** · 1 of 4 done', '> **first job**', '> Goal: an outcome', '> ⠀', '> 🍀 **one** · done · Opus 5.5 · ⏱ 0s', '> 🍂 **two** · failed · the server said no.', ...]
+_____________ test_completion_error_and_cancellation_final_states ______________
+tests/gateway/test_delegation_activity.py:453: in test_completion_error_and_cancellation_final_states
+    assert final.startswith("🥀 3 subagents ·") and "⏱" in final.splitlines()[0]
+E   AssertionError: assert (False)
+E    +  where False = <built-in method startswith of str object at 0x55e28e88d7f0>('🥀 3 subagents ·')
+E    +    where <built-in method startswith of str object at 0x55e28e88d7f0> = '❌ 3 subagents · 1 done · 1 failed · 1 stopped · ⏱ 0s\n> 🍀 **Fix auth**\n> *Opus 5.5 · ⏱ 1m15s*\n> Fixed the scope lea...: ImportError: no module named foo\n> ⠀\n> ⏹ **Update docs**\n> *Opus 5.5 · ⏱ 5s*\n> stopped: stopped before finishing'.startswith
+_________ test_rendered_frames_finished_workers_leave_the_active_feed __________
+tests/gateway/test_delegation_activity.py:815: in test_rendered_frames_finished_workers_leave_the_active_feed
+    assert final.startswith("🥀 3 subagents ·") and "⏱" in final.splitlines()[0]
+E   AssertionError: assert (False)
+E    +  where False = <built-in method startswith of str object at 0x55e28be28000>('🥀 3 subagents ·')
+E    +    where <built-in method startswith of str object at 0x55e28be28000> = '❌ 3 subagents · 2 done · 1 failed · 🛠 5 tool calls · ⏱ 1m17s\n> 🍀 **Audit auth scoping**\n> *Opus 5.5 · 🛠 4 tool call...\n> Ported 14 cron tests; all pass.\n> ⠀\n> ❌ **Draft release notes**\n> *Opus 5.5 · ⏱ 1m10s*\n> failed: network error'.startswith
+_______________ test_group_header_shows_failure_not_running_icon _______________
+tests/gateway/test_delegation_activity.py:1406: in test_group_header_shows_failure_not_running_icon
+    assert adapter.summary().startswith("🥀 2 subagents")
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x55e28d78bfe0>('🥀 2 subagents')
+E    +    where <built-in method startswith of str object at 0x55e28d78bfe0> = '❌ 2 subagents · 1 done · 1 failed · ⏱ 0s\n> 🍀 **One**\n> *Opus 5.5 · ⏱ 1s*\n> ok\n> ⠀\n> ❌ **Two**\n> *Opus 5.5 · ⏱ 1s*\n> failed: boom'.startswith
+E    +      where '❌ 2 subagents · 1 done · 1 failed · ⏱ 0s\n> 🍀 **One**\n> *Opus 5.5 · ⏱ 1s*\n> ok\n> ⠀\n> ❌ **Two**\n> *Opus 5.5 · ⏱ 1s*\n> failed: boom' = summary()
+E    +        where summary = <tests.gateway.test_delegation_activity.FakeTelegramAdapter object at 0x7f36bc98b1d0>.summary
+_____________ test_group_summary_is_spaced_and_only_flags_problems _____________
+tests/gateway/test_delegation_activity.py:1487: in test_group_summary_is_spaced_and_only_flags_problems
+    assert lines[lines.index("> 🥀 **Two**") + 1] == "> *Opus 5.5 · ⏱ 3s*"
+                 ^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   ValueError: '> 🥀 **Two**' is not in list
+______________ test_ran_out_of_steps_is_unfinished_not_a_failure _______________
+tests/gateway/test_delegation_activity.py:1620: in test_ran_out_of_steps_is_unfinished_not_a_failure
+    assert head.startswith("☘️ 2 subagents · 1 done · 1 unfinished"), head
+E   AssertionError: ⏳ 2 subagents · 1 done · 1 unfinished · ⏱ 0s
+E   assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b73ccc10>('☘️ 2 subagents · 1 done · 1 unfinished')
+E    +    where <built-in method startswith of str object at 0x7f36b73ccc10> = '⏳ 2 subagents · 1 done · 1 unfinished · ⏱ 0s'.startswith
+__________ test_a_stopped_part_above_a_real_reply_keeps_its_stop_line __________
+tests/gateway/test_ack_card_follow.py:713: in test_a_stopped_part_above_a_real_reply_keeps_its_stop_line
+    assert posted[0] == "Stopped as asked." and posted[1].startswith("> ⏹ **disks** \u00b7 stopped")
+E   AssertionError: assert ('Stopped as asked.' == 'Stopped as asked.'
+E     
+E       Stopped as asked. and False)
+E    +  where False = <built-in method startswith of str object at 0x7f36b7bde970>('> ⏹ **disks** · stopped')
+E    +    where <built-in method startswith of str object at 0x7f36b7bde970> = '> 🥀 **disks** · stopped'.startswith
+------------------------------ Captured log call -------------------------------
+INFO     gateway.delegation_activity:delegation_activity.py:2144 helper card finalized (moved under the reply): chat=chat message=105 old=102 parts=1
+__ test_completed_task_outcome_is_not_a_failure[partial-partial-\u2618\ufe0f] __
+tests/agent/test_delegation_outcome_display.py:45: in test_completed_task_outcome_is_not_a_failure
+    assert text.startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36bc12fdb0>('> ☘️ **checking work** · partial')
+E    +    where <built-in method startswith of str object at 0x7f36bc12fdb0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…'.startswith
+__ test_completed_task_outcome_is_not_a_failure[blocked-blocked-\u2618\ufe0f] __
+tests/agent/test_delegation_outcome_display.py:45: in test_completed_task_outcome_is_not_a_failure
+    assert text.startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77d8030>('> ☘️ **checking work** · blocked')
+E    +    where <built-in method startswith of str object at 0x7f36b77d8030> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…'.startswith
+_ test_completed_task_outcome_is_not_a_failure[unknown-unverified-\u2618\ufe0f] _
+tests/agent/test_delegation_outcome_display.py:45: in test_completed_task_outcome_is_not_a_failure
+    assert text.startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7934c00>('> ☘️ **checking work** · unverified')
+E    +    where <built-in method startswith of str object at 0x7f36b7934c00> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.startswith
+__________ test_six_completed_workers_keep_partial_and_blocked_counts __________
+tests/agent/test_delegation_outcome_display.py:55: in test_six_completed_workers_keep_partial_and_blocked_counts
+    assert text.startswith('> ☘️ **6 subagents** · partial')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7b9eb50>('> ☘️ **6 subagents** · partial')
+E    +    where <built-in method startswith of str object at 0x7f36b7b9eb50> = '> 🍂 **6 subagents** · failed\n> *2 of 6 done · 4 failed · ⏱ 0s*\n> partial — verification — owner: parent…'.startswith
+_________________ test_real_failure_beats_positive_task_report _________________
+tests/agent/test_delegation_outcome_display.py:63: in test_real_failure_beats_positive_task_report
+    assert card.render().startswith('> 🥀 **checking work** · failed')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77e0170>('> 🥀 **checking work** · failed')
+E    +    where <built-in method startswith of str object at 0x7f36b77e0170> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> Everything looks good.'.startswith
+E    +      where '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> Everything looks good.' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c4d4f0>.render
+_____________ test_classic_tracker_counts_agree_with_unified_card ______________
+tests/agent/test_delegation_outcome_display.py:73: in test_classic_tracker_counts_agree_with_unified_card
+    assert '2 done · 3 partial · 1 blocked' in text
+E   AssertionError: assert '2 done · 3 partial · 1 blocked' in '⏳ 6 subagents · 2 done · 4 unfinished · ⏱ 0s\n> 🍀 **Untitled task**\n> *⏱ 0s*\n> ⠀\n> 🍀 **Untitled task**\n> *⏱ 0s*\n...*⏱ 0s*\n> ran out of steps before finishing\n> ⠀\n> ⏳ **Untitled task**\n> *⏱ 0s*\n> ran out of steps before finishing'
+_ test_lifecycle_precedence_and_honest_unknown[kwargs0-unverified-\u2618\ufe0f] _
+tests/agent/test_delegation_outcome_display.py:90: in test_lifecycle_precedence_and_honest_unknown
+    assert card.render().startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7934570>('> ☘️ **checking work** · unverified')
+E    +    where <built-in method startswith of str object at 0x7f36b7934570> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.startswith
+E    +      where '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c59d90>.render
+_____ test_lifecycle_precedence_and_honest_unknown[kwargs1-stopped-\u23f9] _____
+tests/agent/test_delegation_outcome_display.py:90: in test_lifecycle_precedence_and_honest_unknown
+    assert card.render().startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7b64930>('> ⏹ **checking work** · stopped')
+E    +    where <built-in method startswith of str object at 0x7f36b7b64930> = '> 🥀 **checking work** · stopped'.startswith
+E    +      where '> 🥀 **checking work** · stopped' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c4d940>.render
+_____ test_lifecycle_precedence_and_honest_unknown[kwargs2-stopped-\u23f9] _____
+tests/agent/test_delegation_outcome_display.py:90: in test_lifecycle_precedence_and_honest_unknown
+    assert card.render().startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7a9f3f0>('> ⏹ **checking work** · stopped')
+E    +    where <built-in method startswith of str object at 0x7f36b7a9f3f0> = '> 🥀 **checking work** · stopped'.startswith
+E    +      where '> 🥀 **checking work** · stopped' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c324e0>.render
+_ test_lifecycle_precedence_and_honest_unknown[kwargs3-unfinished-\u2618\ufe0f] _
+tests/agent/test_delegation_outcome_display.py:90: in test_lifecycle_precedence_and_honest_unknown
+    assert card.render().startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36bc115f10>('> ☘️ **checking work** · unfinished')
+E    +    where <built-in method startswith of str object at 0x7f36bc115f10> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> ran out of steps'.startswith
+E    +      where '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> ran out of steps' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c33c50>.render
+___ test_lifecycle_precedence_and_honest_unknown[kwargs4-failed-\U0001f940] ____
+tests/agent/test_delegation_outcome_display.py:90: in test_lifecycle_precedence_and_honest_unknown
+    assert card.render().startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b79f8030>('> 🥀 **checking work** · failed')
+E    +    where <built-in method startswith of str object at 0x7f36b79f8030> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> ran out of steps'.startswith
+E    +      where '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> ran out of steps' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c338f0>.render
+___________ test_missing_evidence_does_not_infer_success_from_prose ____________
+tests/agent/test_delegation_outcome_display.py:98: in test_missing_evidence_does_not_infer_success_from_prose
+    assert '☘️' in card.render() and 'unverified' in card.render()
+E   AssertionError: assert ('☘️' in '> 🍀 **checking work** · done')
+E    +  where '> 🍀 **checking work** · done' = render()
+E    +    where render = <agent.ack_checklist.Card object at 0x7f36b7c2e0c0>.render
+_________ test_mixed_failed_partial_blocked_unverified_stopped_counts __________
+tests/agent/test_delegation_outcome_display.py:109: in test_mixed_failed_partial_blocked_unverified_stopped_counts
+    assert text.startswith('> 🥀 **6 subagents** · failed')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b790d2e0>('> 🥀 **6 subagents** · failed')
+E    +    where <built-in method startswith of str object at 0x7f36b790d2e0> = '> 🍂 **5 subagents** · failed\n> *1 of 5 done · 4 failed · ⏱ 0s*\n> hit an error'.startswith
+______ test_late_completion_and_replay_do_not_double_count_or_turn_green _______
+tests/agent/test_delegation_outcome_display.py:118: in test_late_completion_and_replay_do_not_double_count_or_turn_green
+    assert not card.finished and '1 blocked' in before
+E   AssertionError: assert (not False and '1 blocked' in '🔀 **2 subagents** · 0 of 2 done\n> **checking work**\n> Goal: verified result\n> ⠀\n> 🍂 **Work 0** · failed · blocked...fication — owner: parent…\n> ⠀\n> ■ **Work 1** · waiting\n> \u2003\u2003○ Work 1\n> ⠀\n> *1 waiting · 1 failed · ⏱ 0s*')
+E    +  where False = <agent.ack_checklist.Card object at 0x7f36b7c5b8f0>.finished
+_ test_skin_identity_and_card_style_share_marks[done-\U0001f340-tentacle-test-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77aa590>('🫧')
+E    +    where <built-in method startswith of str object at 0x7f36b77aa590> = '🍀 **checking work** · done\n> *⏱ 0s*'.startswith
+E    +      where '🍀 **checking work** · done\n> *⏱ 0s*' = <built-in method lstrip of str object at 0x7f36b77aaf50>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b77aaf50> = '> 🍀 **checking work** · done\n> *⏱ 0s*'.lstrip
+_ test_skin_identity_and_card_style_share_marks[done-\U0001f340-tentacle-test-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b79be670>('🫧')
+E    +    where <built-in method startswith of str object at 0x7f36b79be670> = '🍀 checking work → verified result\n🍀 check\n🍀 verify'.startswith
+E    +      where '🍀 checking work → verified result\n🍀 check\n🍀 verify' = <built-in method lstrip of str object at 0x7f36b79be670>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b79be670> = '🍀 checking work → verified result\n🍀 check\n🍀 verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-default-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b779c1b0>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b779c1b0> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…' = <built-in method lstrip of str object at 0x7f36b779c030>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b779c030> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…'.lstrip
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-default-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b79bf110>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b79bf110> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36b79bf110>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b79bf110> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-boring-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77bc030>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b77bc030> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…' = <built-in method lstrip of str object at 0x7f36bc12fdb0>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36bc12fdb0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…'.lstrip
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-boring-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36bd36f550>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36bd36f550> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36bd36f550>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36bd36f550> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-tentacle-test-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77bc330>('🪸')
+E    +    where <built-in method startswith of str object at 0x7f36b77bc330> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…' = <built-in method lstrip of str object at 0x7f36b77bc1b0>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b77bc1b0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — verification — owner: parent…'.lstrip
+_ test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-tentacle-test-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7b6d350>('🪸')
+E    +    where <built-in method startswith of str object at 0x7f36b7b6d350> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36b7b6d350>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b7b6d350> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-default-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77bc630>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b77bc630> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…' = <built-in method lstrip of str object at 0x7f36b77bc4b0>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b77bc4b0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…'.lstrip
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-default-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b79bf440>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b79bf440> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36b79bf440>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b79bf440> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-boring-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77bc930>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b77bc930> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…' = <built-in method lstrip of str object at 0x7f36b77bc7b0>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b77bc7b0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…'.lstrip
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-boring-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b79bd790>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b79bd790> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36b79bd790>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b79bd790> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-tentacle-test-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77bcc30>('🪸')
+E    +    where <built-in method startswith of str object at 0x7f36b77bcc30> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…' = <built-in method lstrip of str object at 0x7f36b77bcab0>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b77bcab0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — verification — owner: parent…'.lstrip
+_ test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-tentacle-test-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b79bdac0>('🪸')
+E    +    where <built-in method startswith of str object at 0x7f36b79bdac0> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36b79bdac0>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b79bdac0> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-default-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77e0030>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b77e0030> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported' = <built-in method lstrip of str object at 0x7f36b7935530>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b7935530> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.lstrip
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-default-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b78b0030>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b78b0030> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36b78b0030>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b78b0030> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-boring-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36be0956b0>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36be0956b0> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported' = <built-in method lstrip of str object at 0x7f36b7935680>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b7935680> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.lstrip
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-boring-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b79bdf00>('☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b79bdf00> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36b79bdf00>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b79bdf00> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-tentacle-test-unified] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b77e0530>('🪸')
+E    +    where <built-in method startswith of str object at 0x7f36b77e0530> = '🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.startswith
+E    +      where '🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported' = <built-in method lstrip of str object at 0x7f36b79357d0>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b79357d0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.lstrip
+_ test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-tentacle-test-classic] _
+tests/agent/test_delegation_outcome_display.py:158: in test_skin_identity_and_card_style_share_marks
+    assert text.lstrip('> ').startswith(mark)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b79be560>('🪸')
+E    +    where <built-in method startswith of str object at 0x7f36b79be560> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.startswith
+E    +      where '🍂 checking work → verified result\n🍂 check\n⬜ verify' = <built-in method lstrip of str object at 0x7f36b79be560>('> ')
+E    +        where <built-in method lstrip of str object at 0x7f36b79be560> = '🍂 checking work → verified result\n🍂 check\n⬜ verify'.lstrip
+______________ test_custom_failed_steps_and_headers_respect_pack _______________
+tests/agent/test_delegation_outcome_display.py:175: in test_custom_failed_steps_and_headers_respect_pack
+    assert card.render().startswith('> 🦑')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7a1aaf0>('> 🦑')
+E    +    where <built-in method startswith of str object at 0x7f36b7a1aaf0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> hit an error'.startswith
+E    +      where '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> hit an error' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c2dc40>.render
+_______ test_unified_live_classic_tracker_does_not_count_unknown_as_done _______
+tests/agent/test_delegation_outcome_display.py:234: in test_unified_live_classic_tracker_does_not_count_unknown_as_done
+    assert '☘️' in text
+E   AssertionError: assert '☘️' in '🔀 2 subagents · ⏱ 0s\n> ⏳ **Untitled task**\n> *⏱ 0s*\n> ⠀\n> 🍀 **Untitled task**\n> *starting…*'
+_ test_photographed_batch_shapes_have_truthful_counts[four-one-failure-workers0-counts0-\U0001f940] _
+tests/agent/test_delegation_outcome_display.py:265: in test_photographed_batch_shapes_have_truthful_counts
+    assert raw.startswith(f'> {mark}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7a97b40>('> 🥀')
+E    +    where <built-in method startswith of str object at 0x7f36b7a97b40> = '> 🍂 **4 subagents** · failed\n> *1 of 4 done · 3 failed · ⏱ 0s*\n> task success not reported'.startswith
+_ test_photographed_batch_shapes_have_truthful_counts[six-no-failures-workers1-counts1-\u2618\ufe0f] _
+tests/agent/test_delegation_outcome_display.py:265: in test_photographed_batch_shapes_have_truthful_counts
+    assert raw.startswith(f'> {mark}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7b9eb50>('> ☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b7b9eb50> = '> 🍂 **6 subagents** · failed\n> *2 of 6 done · 4 failed · ⏱ 0s*\n> partial — verification — owner: parent…'.startswith
+_ test_photographed_batch_shapes_have_truthful_counts[four-no-failures-workers2-counts2-\u2618\ufe0f] _
+tests/agent/test_delegation_outcome_display.py:265: in test_photographed_batch_shapes_have_truthful_counts
+    assert raw.startswith(f'> {mark}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7b9e3d0>('> ☘️')
+E    +    where <built-in method startswith of str object at 0x7f36b7b9e3d0> = '> 🍂 **4 subagents** · failed\n> *2 of 4 done · 2 failed · ⏱ 0s*\n> partial — verification — owner: parent…'.startswith
+_ test_custom_terminal_identity_in_unified_and_classic_tracker[failed-\U0001f991] _
+tests/agent/test_delegation_outcome_display.py:289: in test_custom_terminal_identity_in_unified_and_classic_tracker
+    assert card.render().startswith('> ' + expected)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7a1a670>(('> ' + '🦑'))
+E    +    where <built-in method startswith of str object at 0x7f36b7a1a670> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> hit an error'.startswith
+E    +      where '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> hit an error' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c89ca0>.render
+_ test_custom_terminal_identity_in_unified_and_classic_tracker[cancelled-\u2693] _
+tests/agent/test_delegation_outcome_display.py:289: in test_custom_terminal_identity_in_unified_and_classic_tracker
+    assert card.render().startswith('> ' + expected)
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f36b7792070>(('> ' + '⚓'))
+E    +    where <built-in method startswith of str object at 0x7f36b7792070> = '> 🥀 **checking work** · stopped'.startswith
+E    +      where '> 🥀 **checking work** · stopped' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f36b7c8aa80>.render
+=========================== short test summary info ============================
+FAILED tests/agent/test_ack_checklist.py::test_cancelled_step_shows_stopped_icon
+FAILED tests/agent/test_ack_checklist.py::test_failure_marks_the_failing_step_and_header_x_and_nothing_else
+FAILED tests/agent/test_ack_checklist.py::test_stopped_uses_the_stop_icon_and_a_second_finish_changes_nothing
+FAILED tests/agent/test_ack_checklist.py::test_a_helper_that_says_not_done_never_gets_a_clover
+FAILED tests/agent/test_ack_checklist.py::test_a_fan_out_finishes_only_when_every_child_reported
+FAILED tests/agent/test_ack_checklist_unified.py::test_unfinished_card_is_one_line_with_one_short_reason
+FAILED tests/agent/test_ack_checklist_unified.py::test_failed_status_gives_the_failed_header
+FAILED tests/agent/test_ack_checklist_unified.py::test_stopped_card_shape - A...
+FAILED tests/agent/test_ack_checklist_unified.py::test_multi_finished_with_one_unfinished_and_one_stopped_counts_both
+FAILED tests/agent/test_ack_checklist_unified.py::test_multi_stopped_without_a_failure_is_still_stopped
+FAILED tests/agent/test_ack_checklist_unified.py::test_max_iterations_counts_as_unfinished_for_a_multi_helper
+FAILED tests/agent/test_ack_checklist_unified.py::test_multi_complete_before_the_part_exists_is_replayed_per_child
+FAILED tests/agent/test_ack_checklist_unified.py::test_the_failure_emoji_appears_only_on_a_failed_or_stopped_title_and_a_failed_name
+FAILED tests/agent/test_ack_checklist_unified.py::test_step_marks_keep_plain_progress_and_semantic_failure
+FAILED tests/agent/test_ack_checklist_unified.py::test_all_ended_with_a_failure_shows_the_counts_and_the_title_emoji
+FAILED tests/agent/test_ack_checklist_unified.py::test_compaction_starts_above_six_with_plain_one_liners_and_grouped_waiting
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_failed_subagent_keeps_the_failure_mark_instead_of_the_section_mark
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_failed_part_leaves_the_joined_card_and_the_last_part_gets_the_single_layout
+FAILED tests/agent/test_ack_checklist_unified.py::test_an_ended_part_with_a_failure_or_a_stop_counts_both_honestly
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_single_subagent_part_that_failed_or_stopped_says_so
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_finished_failed_joined_card_is_the_last_ended_part
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_failed_next_to_a_stopped_one_keeps_only_the_failure
+FAILED tests/agent/test_ack_checklist_unified.py::test_an_ended_subagent_is_always_exactly_one_line_however_long_its_name
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_failed_subagent_collapses_with_one_short_plain_reason
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_single_stopped_subagent_card_has_the_stop_mark_and_no_raw_text
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_joined_card_with_every_job_stopped_keeps_just_the_stop_title
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_partly_stopped_job_keeps_its_stopped_count
+FAILED tests/agent/test_ack_checklist_unified.py::test_a_joined_card_with_done_running_and_failed_subagents
+FAILED tests/gateway/test_delegation_activity.py::test_completion_error_and_cancellation_final_states
+FAILED tests/gateway/test_delegation_activity.py::test_rendered_frames_finished_workers_leave_the_active_feed
+FAILED tests/gateway/test_delegation_activity.py::test_group_header_shows_failure_not_running_icon
+FAILED tests/gateway/test_delegation_activity.py::test_group_summary_is_spaced_and_only_flags_problems
+FAILED tests/gateway/test_delegation_activity.py::test_ran_out_of_steps_is_unfinished_not_a_failure
+FAILED tests/gateway/test_ack_card_follow.py::test_a_stopped_part_above_a_real_reply_keeps_its_stop_line
+FAILED tests/agent/test_delegation_outcome_display.py::test_completed_task_outcome_is_not_a_failure[partial-partial-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_completed_task_outcome_is_not_a_failure[blocked-blocked-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_completed_task_outcome_is_not_a_failure[unknown-unverified-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_six_completed_workers_keep_partial_and_blocked_counts
+FAILED tests/agent/test_delegation_outcome_display.py::test_real_failure_beats_positive_task_report
+FAILED tests/agent/test_delegation_outcome_display.py::test_classic_tracker_counts_agree_with_unified_card
+FAILED tests/agent/test_delegation_outcome_display.py::test_lifecycle_precedence_and_honest_unknown[kwargs0-unverified-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_lifecycle_precedence_and_honest_unknown[kwargs1-stopped-\u23f9]
+FAILED tests/agent/test_delegation_outcome_display.py::test_lifecycle_precedence_and_honest_unknown[kwargs2-stopped-\u23f9]
+FAILED tests/agent/test_delegation_outcome_display.py::test_lifecycle_precedence_and_honest_unknown[kwargs3-unfinished-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_lifecycle_precedence_and_honest_unknown[kwargs4-failed-\U0001f940]
+FAILED tests/agent/test_delegation_outcome_display.py::test_missing_evidence_does_not_infer_success_from_prose
+FAILED tests/agent/test_delegation_outcome_display.py::test_mixed_failed_partial_blocked_unverified_stopped_counts
+FAILED tests/agent/test_delegation_outcome_display.py::test_late_completion_and_replay_do_not_double_count_or_turn_green
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[done-\U0001f340-tentacle-test-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[done-\U0001f340-tentacle-test-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-default-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-default-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-boring-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-boring-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-tentacle-test-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[partial-\u2618\ufe0f-tentacle-test-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-default-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-default-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-boring-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-boring-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-tentacle-test-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[blocked-\u2618\ufe0f-tentacle-test-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-default-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-default-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-boring-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-boring-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-tentacle-test-unified]
+FAILED tests/agent/test_delegation_outcome_display.py::test_skin_identity_and_card_style_share_marks[unknown-\u2618\ufe0f-tentacle-test-classic]
+FAILED tests/agent/test_delegation_outcome_display.py::test_custom_failed_steps_and_headers_respect_pack
+FAILED tests/agent/test_delegation_outcome_display.py::test_unified_live_classic_tracker_does_not_count_unknown_as_done
+FAILED tests/agent/test_delegation_outcome_display.py::test_photographed_batch_shapes_have_truthful_counts[four-one-failure-workers0-counts0-\U0001f940]
+FAILED tests/agent/test_delegation_outcome_display.py::test_photographed_batch_shapes_have_truthful_counts[six-no-failures-workers1-counts1-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_photographed_batch_shapes_have_truthful_counts[four-no-failures-workers2-counts2-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_custom_terminal_identity_in_unified_and_classic_tracker[failed-\U0001f991]
+FAILED tests/agent/test_delegation_outcome_display.py::test_custom_terminal_identity_in_unified_and_classic_tracker[cancelled-\u2693]
+75 failed, 437 passed in 18.13s
