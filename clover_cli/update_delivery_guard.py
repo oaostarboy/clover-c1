@@ -15,6 +15,71 @@ from typing import NoReturn
 CAPABILITY = 'reply-carriers-through-ack-v1'
 
 
+def _macos_framework_wrapper(wrapper, child, argv: list[str], command: list[str], home: Path) -> bool:
+    """Bind framework argv aliases to the live launchd job and OUR venv.
+
+    A shared base executable or VIRTUAL_ENV claim is not venv ownership. Use
+    launchd's loaded program/arguments (not an editable plist), bound to the
+    wrapper PID/UID, in addition to the admitted child's parent/start identity.
+    Unknown/unreadable evidence fails closed. Never used on Windows/Linux.
+    """
+    import os
+    import re
+    import subprocess
+    import sys
+
+    if sys.platform != 'darwin':
+        return False
+    try:
+        interpreter = Path(command[0])
+        own_bin = Path(sys.executable).parent.resolve()
+        if (not interpreter.is_absolute() or interpreter.parent.resolve() != own_bin
+                or own_bin != (Path(sys.prefix) / 'bin').resolve()
+                or not (Path(sys.prefix) / 'pyvenv.cfg').is_file()
+                or not re.fullmatch(r'python(?:3(?:\.\d+)?)?', interpreter.name)):
+            return False
+        base = Path(sys._base_executable).resolve()
+        if base.parent.name == 'bin':
+            base = base.parent.parent / 'Resources/Python.app/Contents/MacOS/Python'
+        if ('/Python.framework/' not in str(base)
+                or not base.samefile(wrapper.exe()) or not base.samefile(child.exe())
+                or argv[0] not in (command[0], str(base))
+                or child.cmdline()[0] not in (command[0], str(base))):
+            return False
+        uid = os.getuid()
+        if (wrapper.ppid() != 1 or tuple(wrapper.uids()) != (uid, uid, uid)
+                or tuple(child.uids()) != (uid, uid, uid)):
+            return False
+        wrapper_env = wrapper.environ()
+        for env in (wrapper_env, child.environ()):
+            if env.get('VIRTUAL_ENV') and Path(env['VIRTUAL_ENV']).resolve() != Path(sys.prefix).resolve():
+                return False
+            if env.get('CLOVER_HOME') and Path(env['CLOVER_HOME']).resolve() != home.resolve():
+                return False
+        label = wrapper_env.get('XPC_SERVICE_NAME', '')
+        if not re.fullmatch(r'[A-Za-z0-9_.-]+', label) or label == '0':
+            return False
+        loaded = subprocess.run(
+            ['/bin/launchctl', 'print', f'gui/{uid}/{label}'],
+            capture_output=True, text=True, timeout=5, stdin=subprocess.DEVNULL,
+        )
+        if loaded.returncode != 0:
+            return False
+        # Only top-level fields; nested service/endpoint PIDs are not owners.
+        lines = loaded.stdout.splitlines()
+        if (lines.count(f'\tpid = {wrapper.pid}') != 1
+                or lines.count(f'\tprogram = {command[0]}') != 1
+                or lines.count('\targuments = {') != 1):
+            return False
+        start = lines.index('\targuments = {') + 1
+        end = lines.index('\t}', start)
+        args = lines[start:end]
+        expected = [command[0], *argv[1:]]
+        return args == ['\t\t' + value for value in expected]
+    except Exception:
+        return False
+
+
 def _proved_stderr_wrapper(pid: int, admitted: dict[int, tuple[Path, int]]) -> bool:
     """Recognize only our exact wrapper around an already admitted direct child.
 
@@ -36,17 +101,23 @@ def _proved_stderr_wrapper(pid: int, admitted: dict[int, tuple[Path, int]]) -> b
                 or argv[5] != '--'):
             return False
         command = argv[6:]
-        if command[0] != argv[0] or not _is_clover_gateway_run_argv(command):
+        if not _is_clover_gateway_run_argv(command):
             return False
         for child_pid, (home, child_start) in admitted.items():
             child = psutil.Process(child_pid)
             if child.ppid() != pid:
                 continue
             child_command = child.cmdline()
+            expected = command
             if child_command != command:
                 # Historical launchd plists omit the flag which the loaded
                 # wrapper adds. Require its real environment, not ambient env.
-                if child_command != _prepare_child_command(command, wrapper.environ()):
+                expected = _prepare_child_command(command, wrapper.environ())
+            import sys
+            framework = sys.platform == 'darwin' and '/Python.framework/' in argv[0]
+            if command[0] != argv[0] or child_command != expected or framework:
+                if (not child_command or child_command[1:] != expected[1:]
+                        or not _macos_framework_wrapper(wrapper, child, argv, command, home)):
                     continue
             if (Path(argv[4]).resolve() == (home/'logs/gateway.error.log').resolve()
                     and _get_process_start_time(child_pid) == child_start

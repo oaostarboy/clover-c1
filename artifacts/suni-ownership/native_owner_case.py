@@ -79,12 +79,17 @@ s=socket.socket();s.bind(('127.0.0.1',0));s.listen()
 while not (h/'finish').exists():time.sleep(0.05)
 s.close()
 ''')
-        runtime = tmp / 'venv'
-        venv.EnvBuilder(with_pip=False, symlinks=True).create(runtime)
+        runtime = Path(sys.prefix) if native else tmp / 'venv'
+        if native:
+            if not (runtime / 'pyvenv.cfg').is_file():
+                raise RuntimeError('native evaluator and launchd must use the same private framework venv')
+        else:
+            venv.EnvBuilder(with_pip=False, symlinks=True).create(runtime)
         py = runtime / 'bin/python'
         command = [str(py), '-m', 'clover_cli.stderr_timestamp', '--error-log', str(home / 'logs/gateway.error.log'), '--', str(py), '-m', 'clover_cli.main', 'gateway', 'run', '--external-supervisor']
         env = {'PATH': os.environ.get('PATH', '/usr/bin:/bin'), 'HOME': str(home), 'CLOVER_HOME': str(home), 'PYTHONPATH': str(fixture), 'VIRTUAL_ENV': str(runtime), 'PYTHONDONTWRITEBYTECODE': '1'}
         child = None
+        wrapper = None
         loaded = False
         label = 'ai.clover.acceptance.suni.' + uuid.uuid4().hex
         target = f'gui/{os.getuid()}/{label}'
@@ -123,12 +128,28 @@ s.close()
             stderr.__dict__.update(os=os, EXTERNAL_SUPERVISOR_FLAG='--external-supervisor')
             replay.functions('clover_cli/stderr_timestamp.py', {'_is_clover_gateway_run_argv', '_is_launchd_supervised', '_with_external_supervisor_flag', '_prepare_child_command'}, stderr.__dict__)
             guard = {'Path': Path, 'json': json}
-            replay.functions('clover_cli/update_delivery_guard.py', {'_proved_stderr_wrapper'}, guard)
+            names = {'_proved_stderr_wrapper'}
+            if 'def _macos_framework_wrapper(' in replay.source('clover_cli/update_delivery_guard.py'):
+                names.add('_macos_framework_wrapper')
+            replay.functions('clover_cli/update_delivery_guard.py', names, guard)
+            import hashlib
+            report['guard_sha256'] = hashlib.sha256(replay.source('clover_cli/update_delivery_guard.py').encode()).hexdigest()
+            report['false_return_lines'] = []
+            def trace(frame, event, value):
+                if event == 'return' and value is False and frame.f_code.co_filename == 'clover_cli/update_delivery_guard.py':
+                    report['false_return_lines'].append({'function': frame.f_code.co_name, 'line': frame.f_lineno})
+                return trace
             with unittest.mock.patch.dict(sys.modules, {'gateway': ModuleType('gateway'), 'gateway.status': status, 'clover_cli': ModuleType('clover_cli'), 'clover_cli.stderr_timestamp': stderr}):
                 start = status._get_process_start_time(wp.pid)
                 wrapper_start = status._get_process_start_time(wrapper.pid)
                 admitted = {wp.pid: (home, start)}
-                report['owner_admission'] = guard['_proved_stderr_wrapper'](wrapper.pid, admitted)
+                report['worker_start'] = start
+                report['wrapper_start'] = wrapper_start
+                sys.settrace(trace)
+                try:
+                    report['owner_admission'] = guard['_proved_stderr_wrapper'](wrapper.pid, admitted)
+                finally:
+                    sys.settrace(None)
                 report['stale_worker_rejected'] = not guard['_proved_stderr_wrapper'](wrapper.pid, {wp.pid: (home, start + 1)})
                 report['wrong_home_rejected'] = not guard['_proved_stderr_wrapper'](wrapper.pid, {wp.pid: (home / 'foreign', start)})
                 report['unadmitted_rejected'] = not guard['_proved_stderr_wrapper'](wrapper.pid, {})
@@ -143,10 +164,26 @@ s.close()
             (home / 'finish').touch()
             if child is not None:
                 child.wait(timeout=15)
-            if loaded:
-                # This exact label was created above in this disposable runner.
-                subprocess.run(['launchctl', 'bootout', target], check=True, capture_output=True)
-                report['fixture_label_absent_after_cleanup'] = subprocess.run(['launchctl', 'print', target], capture_output=True).returncode != 0
+            if loaded and wrapper is not None:
+                # Wait for the synthetic worker AND wrapper to finish naturally.
+                # Never use bootout as a way to force a passing cleanup result.
+                alive = True
+                deadline = time.monotonic() + 15
+                while time.monotonic() < deadline:
+                    try:
+                        alive = wrapper.is_running() and wrapper.status() != psutil.STATUS_ZOMBIE
+                    except psutil.NoSuchProcess:
+                        alive = False
+                    if not alive:
+                        break
+                    time.sleep(0.05)
+                if alive:
+                    report['passed'] = False
+                    report['cleanup_error'] = 'synthetic wrapper did not finish naturally; no forced kill attempted'
+                else:
+                    subprocess.run(['launchctl', 'bootout', target], check=True, capture_output=True)
+                    report['fixture_label_absent_after_cleanup'] = subprocess.run(['launchctl', 'print', target], capture_output=True).returncode != 0
+                    report['passed'] = report['passed'] and report['fixture_label_absent_after_cleanup']
     (evidence / 'native-owner-case.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps({'passed': report['passed'], 'scope': report['scope'], 'evidence': str(evidence / 'native-owner-case.json')}))
     return 0 if report['passed'] else 1

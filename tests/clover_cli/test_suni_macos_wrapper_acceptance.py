@@ -79,15 +79,17 @@ class SuniWrapperAcceptance(unittest.TestCase):
             def ppid(self):
                 return self.data['parent']
             def environ(self):
-                return {'XPC_SERVICE_NAME': 'ai.clover.gateway' if self.pid == 40563 else '0', 'VIRTUAL_ENV': '/Users/ant/agents/clover-c1/venv'}
+                if self.data.get('env_unreadable'):
+                    raise PermissionError('process environment unavailable')
+                return self.data.get('env', {'XPC_SERVICE_NAME': 'ai.clover.gateway' if self.pid == 40563 else '0', 'VIRTUAL_ENV': '/Users/ant/agents/clover-c1/venv'})
             def exe(self):
-                return self.data['argv'][0]
+                return self.data.get('exe', FRAMEWORK)
             def cwd(self):
                 return str(outer.home)
             def create_time(self):
                 return outer.start[self.pid] / 100
             def uids(self):
-                return SimpleNamespace(real=501, effective=501, saved=501)
+                return (501, 501, 501)
 
         self.modules = {
             'psutil': module('psutil', Process=Process),
@@ -102,7 +104,33 @@ class SuniWrapperAcceptance(unittest.TestCase):
         self.addCleanup(self.ctx.close)
         self.ctx.enter_context(patch.dict(sys.modules, self.modules))
         self.guard = {'Path': Path, 'json': json, 'CAPABILITY': 'reply-carriers-through-ack-v1'}
-        functions('clover_cli/update_delivery_guard.py', {'_proved_stderr_wrapper', '_unsafe_gateways'}, self.guard)
+        names = {'_proved_stderr_wrapper', '_unsafe_gateways'}
+        if 'def _macos_framework_wrapper(' in source('clover_cli/update_delivery_guard.py'):
+            names.add('_macos_framework_wrapper')
+        functions('clover_cli/update_delivery_guard.py', names, self.guard)
+        # Model native OS attestation, not just claimed process environment.
+        # launchctl's loaded program/arguments bind the intended venv to this PID.
+        self.launch_program = VENV
+        self.launch_pid = 40563
+        self.launch_argv = list(self.rows[40563]['argv'])
+        self.launch_argv[0] = VENV
+        self.uid = 501
+        self.ctx.enter_context(patch.object(sys, 'platform', 'darwin'))
+        self.ctx.enter_context(patch.object(sys, 'executable', VENV))
+        self.ctx.enter_context(patch.object(sys, '_base_executable', FRAMEWORK))
+        self.ctx.enter_context(patch.object(sys, 'prefix', str(Path(VENV).parent.parent)))
+        self.ctx.enter_context(patch.object(os, 'getuid', lambda: self.uid))
+        self.ctx.enter_context(patch.object(Path, 'is_file', lambda p: str(p).endswith('/venv/pyvenv.cfg')))
+        self.ctx.enter_context(patch.object(Path, 'samefile', lambda p, other: str(p) == str(other)))
+        original_run = subprocess.run
+        def launchctl(*args, **kwargs):
+            if args[0][0] != '/bin/launchctl':
+                return original_run(*args, **kwargs)
+            return SimpleNamespace(returncode=0, stdout=(
+                'gui/501/ai.clover.gateway = {\n'
+                f'\tprogram = {self.launch_program}\n\tpid = {self.launch_pid}\n'
+                '\targuments = {\n' + ''.join('\t\t' + v + '\n' for v in self.launch_argv) + '\t}\n}\n'))
+        self.ctx.enter_context(patch.object(subprocess, 'run', launchctl))
 
     def proved(self):
         return self.guard['_proved_stderr_wrapper'](40563, self.admitted)
@@ -148,6 +176,91 @@ class SuniWrapperAcceptance(unittest.TestCase):
     def test_foreign_worker_command_rejected(self):
         self.rows[40564]['argv'] = [FRAMEWORK, '-m', 'unrelated', 'gateway', 'run']
         self.assertFalse(self.proved())
+
+    def test_loaded_launchd_foreign_venv_rejected_despite_claimed_environment(self):
+        self.launch_program = '/Users/ant/foreign/venv/bin/python'
+        self.assertFalse(self.proved())
+
+    def test_loaded_launchd_wrong_pid_rejected(self):
+        self.launch_pid += 1
+        self.assertFalse(self.proved())
+
+    def test_loaded_launchd_wrong_arguments_rejected(self):
+        self.launch_argv[-1] = '--foreign'
+        self.assertFalse(self.proved())
+
+    def test_shared_base_alias_outside_own_venv_rejected(self):
+        self.rows[40563]['argv'][6] = FRAMEWORK
+        self.launch_program = FRAMEWORK
+        self.launch_argv[0] = FRAMEWORK
+        self.launch_argv[6] = FRAMEWORK
+        self.assertFalse(self.proved())
+
+    def test_unreadable_wrapper_environment_rejected(self):
+        self.rows[40563]['env_unreadable'] = True
+        self.assertFalse(self.proved())
+
+    def test_unreadable_child_environment_rejected(self):
+        self.rows[40564]['env_unreadable'] = True
+        self.assertFalse(self.proved())
+
+    def test_foreign_child_environment_rejected(self):
+        self.rows[40564]['env'] = {'VIRTUAL_ENV': '/Users/ant/foreign/venv'}
+        self.assertFalse(self.proved())
+
+    def test_cross_uid_rejected(self):
+        self.uid = 502
+        self.assertFalse(self.proved())
+
+    def test_wrapper_not_launchd_child_rejected(self):
+        self.rows[40563]['parent'] = 77777
+        self.assertFalse(self.proved())
+
+    def test_non_mac_alias_stays_rejected(self):
+        with patch.object(sys, 'platform', 'win32'):
+            self.assertFalse(self.proved())
+
+    def test_framework_executable_mismatch_rejected(self):
+        self.rows[40564]['exe'] = '/foreign/Python'
+        self.assertFalse(self.proved())
+
+    def test_foreign_symlink_to_shared_base_is_not_own_venv(self):
+        own = self.home / 'own/venv/bin'
+        foreign = self.home / 'foreign/venv/bin'
+        own.mkdir(parents=True)
+        foreign.mkdir(parents=True)
+        base = self.home / 'shared-python'
+        base.write_text('test executable identity')
+        (own / 'python').symlink_to(base)
+        (foreign / 'python').symlink_to(base)
+        self.assertEqual((own / 'python').resolve(), (foreign / 'python').resolve())
+        self.rows[40563]['argv'][6] = str(foreign / 'python')
+        self.launch_program = str(foreign / 'python')
+        self.launch_argv[0] = self.launch_program
+        self.launch_argv[6] = self.launch_program
+        with patch.object(sys, 'executable', str(own / 'python')), patch.object(sys, 'prefix', str(own.parent)):
+            self.assertFalse(self.proved())
+
+    def test_launchctl_failure_rejected(self):
+        with patch.object(subprocess, 'run', return_value=SimpleNamespace(returncode=1, stdout='')):
+            self.assertFalse(self.proved())
+
+    def test_duplicate_launchctl_owner_field_rejected(self):
+        original = subprocess.run
+        def duplicate(*args, **kwargs):
+            result = original(*args, **kwargs)
+            result.stdout += '\tpid = 40563\n'
+            return result
+        with patch.object(subprocess, 'run', duplicate):
+            self.assertFalse(self.proved())
+
+    def test_wrapper_reused_during_attestation_rejected(self):
+        original = subprocess.run
+        def reuse(*args, **kwargs):
+            self.start[40563] += 1
+            return original(*args, **kwargs)
+        with patch.object(subprocess, 'run', reuse):
+            self.assertFalse(self.proved())
 
     def test_frozen_caller_defers_without_forced_restart_and_keeps_recovery(self):
         if os.environ.get('SUNI_SOURCE_REF') != PUBLISHED:
