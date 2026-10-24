@@ -20,7 +20,7 @@ $Evidence = (Resolve-Path -LiteralPath $Evidence).Path
 $hostExe = (Get-Process -Id $PID).Path
 $tag = [Guid]::NewGuid().ToString('N')
 $name = 'clv' + $tag.Substring(0,16)
-$description = 'Disposable Clover CI fixture ' + $tag
+$description = 'Clover CI ' + $tag
 $account = $null; $sid = $null; $profile = $null; $secret = $null; $process = $null
 $childExit = -1; $passed = $false; $cleanupPassed = $false
 $childEvidence = Join-Path $Evidence 'child'

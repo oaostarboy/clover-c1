@@ -22,6 +22,16 @@ class AccountPowerShellContracts(unittest.TestCase):
             return subprocess.run([PWSH, '-NoLogo', '-NoProfile', '-File', str(script)],
                                   capture_output=True, text=True, timeout=20, check=False)
 
+    def test_account_description_fits_windows_limit_and_retains_full_owner_tag(self):
+        assignment = next(line for line in (HERE / 'disposable_account.ps1').read_text().splitlines()
+                          if line.startswith('$description = '))
+        result = self.run_ps("$tag = [Guid]::NewGuid().ToString('N')\n" + assignment + "\n" + """
+if ($description.Length -gt 48) { throw 'Account description exceeds Windows 48-character limit' }
+if (-not $description.EndsWith($tag, [StringComparison]::Ordinal)) { throw 'Full ownership tag lost' }
+'PASS'
+""")
+        self.assertEqual(result.returncode, 0, result.stderr)
+
     def test_environment_excludes_secrets_and_rebuilds_account_locations(self):
         result = self.run_ps("""
 $locations = @{ SystemRoot='C:/Windows'; PATH='owned-tool-path'; USERPROFILE='runner-profile';
