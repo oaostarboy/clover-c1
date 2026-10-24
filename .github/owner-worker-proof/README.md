@@ -93,6 +93,20 @@ synthetic roles are not themselves an installed-gateway update proof.
 - The baseline's update job is intentionally SKIPPED, NOT EXERCISED. No green
   release claim follows from the plan job.
 
+- Candidate native safety on run40049337485: **58 cases:56 passed,2 skipped**;
+  canonical JUnit/source-sha artifact verifies exact PR148. One/four real
+  reporters retained owner6560/2492 respectively. The two skips are POSIX-only
+  real stderr-wrapper tests, not Windows positives. The previously failing
+  strict clock case passed this attempt; that is not proof of a clock fix.
+- The 16 update jobs on that run all failed **before starting any gateway**:
+  `sqlite-before` correctly rejected CPython3.12.12/SQLite3.50.4. The fixture had
+  copied uv0.9.28 from a different OS-test workflow, not the proven native run.
+  Raw logs/ZIP/artifacts are retained. No launcher/update row passed or ran.
+  Historical run40029884972's actual setup log proves uv0.13.5 installed
+  CPython3.12.15/SQLite3.53.1. The corrected update fixture pins that exact uv;
+  the vulnerable-SQLite rejection is unchanged. A corrected native run is
+  required; this is a tool-catalog correction, not a product/update pass.
+
 Local portable checks: `python .github/owner-worker-proof/test_contract.py`.
 They validate immutable caller pins, 16-case uniqueness, refusal to substitute a
 different 1.5.6 ref, and exact candidate-parent/marker-only Git behavior. They do

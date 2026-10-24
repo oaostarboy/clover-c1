@@ -119,7 +119,10 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
-          version: '0.9.28'
+          # Exact uv used by the successful historical native run40029884972.
+          # Its catalog supplies safe CPython3.12.15/SQLite3.53.1; 0.9.28
+          # supplies vulnerable3.12.12/SQLite3.50.4 and must fail sqlite-before.
+          version: '0.13.5'
           enable-cache: false
       - name: Prepare exact candidate or candidate-plus-marker target
         shell: bash
