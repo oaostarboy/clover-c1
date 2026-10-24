@@ -1,0 +1,121 @@
+{
+  "observed_at": "2026-10-24T01:08:56.561516+00:00",
+  "platform": {
+    "exit_code": 0,
+    "stdout": "26.6.2"
+  },
+  "processes": {
+    "exit_code": 0,
+    "stdout": "40563     1   501 Sat Oct 17 15:54:14 2026     06-05:14:42 S    /opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python\n40564 40563   501 Sat Oct 17 15:54:14 2026     06-05:14:42 S    /opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+  },
+  "direct_children": [
+    "40564 40563 /opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python"
+  ],
+  "pid_40563_argv": {
+    "exit_code": 0,
+    "stdout": "/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m clover_cli.stderr_timestamp --error-log /Users/ant/.clover/logs/gateway.error.log -- /Users/ant/agents/clover-c1/venv/bin/python -m clover_cli.main gateway run --external-supervisor"
+  },
+  "pid_40563_files": {
+    "exit_code": 0,
+    "stdout": "p40563\nfcwd\nn/Users/ant/.clover\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/math.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/fcntl.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_posixsubprocess.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/select.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/zlib.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_datetime.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_bz2.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_lzma.cpython-312-darwin.so\nftxt\nn/usr/lib/dyld\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_json.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_opcode.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/xz/5.8.4/lib/liblzma.5.dylib\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/termios.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_bisect.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_decimal.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_random.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Python\nftxt\nn/opt/homebrew/Cellar/mpdecimal/4.0.1/lib/libmpdec.4.0.1.dylib\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_sha2.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_struct.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/binascii.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_contextvars.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_csv.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/array.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_heapq.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/yaml/_yaml.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_socket.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/unicodedata.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_hashlib.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_blake2.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_ssl.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_asyncio.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_queue.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_scproxy.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_uuid.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/openssl@3/3.6.4/lib/libssl.3.dylib\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/jiter/jiter.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/openssl@3/3.6.4/lib/libcrypto.3.dylib"
+  },
+  "pid_40563_listen": {
+    "exit_code": 1,
+    "stdout": ""
+  },
+  "pid_40564_argv": {
+    "exit_code": 0,
+    "stdout": "/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python -m clover_cli.main gateway run --external-supervisor"
+  },
+  "pid_40564_files": {
+    "exit_code": 0,
+    "stdout": "p40564\nfcwd\nn/Users/ant/.clover\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python\nftxt\nn/Library/Preferences/Logging/.plist-cache.4ptK9LZa\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/math.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/zlib.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_bz2.cpython-312-darwin.so\nftxt\nn/usr/lib/dyld\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_lzma.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/fcntl.cpython-312-darwin.so\nftxt\nn/Users/ant/.clover/state.db-shm\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_posixsubprocess.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/select.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/xz/5.8.4/lib/liblzma.5.dylib\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/termios.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_hashlib.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_blake2.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/Python\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_json.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_bisect.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_random.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_sha2.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_contextvars.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_opcode.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_struct.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_decimal.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/mpdecimal/4.0.1/lib/libmpdec.4.0.1.dylib\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/binascii.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/unicodedata.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_datetime.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_csv.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/array.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/tornado/speedups.abi3.so\nftxt\nn/opt/homebrew/Cellar/openssl@3/3.6.4/lib/libcrypto.3.dylib\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_socket.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_heapq.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_queue.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_scproxy.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/yaml/_yaml.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_asyncio.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/grp.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_ssl.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_uuid.cpython-312-darwin.so\nftxt\nn/Users/ant/.clover/response_store.db-shm\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_pickle.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_ctypes.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_codecs_iso2022.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/mmap.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_sqlite3.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/openssl@3/3.6.4/lib/libssl.3.dylib\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/jiter/jiter.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_codecs_kr.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_codecs_hk.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_multibytecodec.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/charset_normalizer/md.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_codecs_cn.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/sqlite/3.53.4/lib/libsqlite3.3.53.4.dylib\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/charset_normalizer/cd.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/resource.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_multiprocessing.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/aiohttp/_http_writer.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_codecs_jp.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_codecs_tw.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/multidict/_multidict.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/yarl/_quoting_c.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/propcache/_helpers_c.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/aiohttp/_websocket/mask.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_zoneinfo.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/frozenlist/_frozenlist.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/aiohttp/_http_parser.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/aiohttp/_websocket/reader_c.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/pyexpat.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/_cffi_backend.cpython-312-darwin.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_curses.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/psutil/_psutil_osx.abi3.so\nftxt\nn/opt/homebrew/Cellar/python@3.12/3.12.13/Frameworks/Python.framework/Versions/3.12/lib/python3.12/lib-dynload/_elementtree.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/websockets/speedups.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/cryptography/hazmat/bindings/_rust.abi3.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/pydantic_core/_pydantic_core.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/watchfiles/_rust_notify.cpython-312-darwin.so\nftxt\nn/Users/ant/agents/clover-c1/venv/lib/python3.12/site-packages/nemo_relay/_native.abi3.so"
+  },
+  "pid_40564_listen": {
+    "exit_code": 0,
+    "stdout": "COMMAND   PID USER   FD   TYPE             DEVICE SIZE/OFF NODE NAME\nPython  40564  ant   27u  IPv4 0x3a262755b43bf50a      0t0  TCP 127.0.0.1:8645 (LISTEN)"
+  },
+  "gateway_state.json": {
+    "mtime": 1792613870.2486868,
+    "keys": [
+      "active_agents",
+      "argv",
+      "clover_home",
+      "code_sha",
+      "code_version",
+      "exit_reason",
+      "gateway_state",
+      "kind",
+      "pid",
+      "platforms",
+      "restart_requested",
+      "session_store",
+      "start_time",
+      "updated_at"
+    ],
+    "selected": {
+      "pid": 40564,
+      "clover_home": "/Users/ant/.clover",
+      "restart_requested": false,
+      "active_agents": 0,
+      "updated_at": "2026-10-21T20:17:50.248529+00:00",
+      "code_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+      "code_version": "1.5.6"
+    }
+  },
+  "gateway.pid": {
+    "mtime": 1792266855.3823469,
+    "keys": [
+      "argv",
+      "clover_home",
+      "kind",
+      "pid",
+      "start_time"
+    ],
+    "selected": {
+      "pid": 40564,
+      "clover_home": "/Users/ant/.clover"
+    }
+  },
+  "launch_agents": [
+    {
+      "file": "/Users/ant/Library/LaunchAgents/ai.clover.gateway.plist",
+      "selected": {
+        "Label": "ai.clover.gateway",
+        "ProgramArguments": [
+          "/Users/ant/agents/clover-c1/venv/bin/python",
+          "-m",
+          "clover_cli.stderr_timestamp",
+          "--error-log",
+          "/Users/ant/.clover/logs/gateway.error.log",
+          "--",
+          "/Users/ant/agents/clover-c1/venv/bin/python",
+          "-m",
+          "clover_cli.main",
+          "gateway",
+          "run",
+          "--external-supervisor"
+        ],
+        "WorkingDirectory": "/Users/ant/.clover",
+        "KeepAlive": true,
+        "RunAtLoad": true
+      },
+      "launchctl_selected": {
+        "exit_code": 0,
+        "lines": [
+          "active count = 1",
+          "path = /Users/ant/Library/LaunchAgents/ai.clover.gateway.plist",
+          "state = running",
+          "program = /Users/ant/agents/clover-c1/venv/bin/python",
+          "runs = 35",
+          "pid = 40563",
+          "last exit code = 75: EX_TEMPFAIL",
+          "state = active",
+          "active count = 1",
+          "state = active",
+          "active count = 1"
+        ]
+      }
+    }
+  ]
+}

@@ -1,0 +1,1298 @@
+{
+  "product_sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+  "files": [
+    {
+      "path": "artifacts/suni-ownership/chat-checkpoint-native-watch.log",
+      "raw_sha256": "76d3d7ff0acbdb55a65cba8dc30e6606cdd7a6e0c4138330fe5f34b1a792a5cf",
+      "raw_bytes": 17145,
+      "compressed_path": "artifacts/suni-ownership/chat-checkpoint-native-watch.log.gz",
+      "compressed_sha256": "22805516bc11b33d763f16e3dc9ee5cd6d844da758dccd15c0a93e74a3d5a88f"
+    },
+    {
+      "path": "artifacts/suni-ownership/chat-kernel-native-watch.log",
+      "raw_sha256": "8c512a0078838dbdc82ff385950c6076cc7e5fa78932456e20d4c5a090809b97",
+      "raw_bytes": 43549,
+      "compressed_path": "artifacts/suni-ownership/chat-kernel-native-watch.log.gz",
+      "compressed_sha256": "0f4bc03db4c0fb3b7761bf420141789f4216d73925484e82f82609d89a7f26ee"
+    },
+    {
+      "path": "artifacts/suni-ownership/chat-native-watch.log",
+      "raw_sha256": "738f1635cf25584527d9d05e295830264f1f9633aa322cf03adbeeb36723af1a",
+      "raw_bytes": 55179,
+      "compressed_path": "artifacts/suni-ownership/chat-native-watch.log.gz",
+      "compressed_sha256": "1be50f1b7aaea2f0e0ce593c9d7151ef661e8bf103f1a79bab1bdb5e2f835e6f"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/logs.zip",
+      "raw_sha256": "742789f82a04a25a48338cc5d5edd02d589ac8832086c17334a44c7f1df8e2b8",
+      "raw_bytes": 85108
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-framework-owner-40052983324/green/native-owner-case.json",
+      "raw_sha256": "7b38503ed8e33b23ce7445630760efcc4cc6461b9077a301700a3fa3e973d47e",
+      "raw_bytes": 2418
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-framework-owner-40052983324/red/native-owner-case.json",
+      "raw_sha256": "e8ad9981128ddf98ea549b6f40977f41c173f226a2f61c850668df4ed14a09be",
+      "raw_bytes": 2494
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-framework-owner-40052983324/replay.log",
+      "raw_sha256": "1a4caa27b3d336d2535ffa02bb1b49488273db86dd632871aa63b8ce5d809211",
+      "raw_bytes": 3665,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-framework-owner-40052983324/replay.log.gz",
+      "compressed_sha256": "5ad31c3af545580d9fbfc216b56c1522561dafa33a243164a645a571ec498321"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/acceptance.json",
+      "raw_sha256": "c1bc1eeed1f4dbce6567e6ea60c3c9371c9a5807ee15d99747dd277edc79c6ca",
+      "raw_bytes": 1635
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/actual-update-receipt.json",
+      "raw_sha256": "fde156a3c8756b1aa50ae16fc66edeca033bff2c2784efebc2d3d5a2148ab789",
+      "raw_bytes": 2163
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/after-imports.json",
+      "raw_sha256": "abd610d3fdfb68b4f743b2a296e2c2b71749246b71e94267ea9607aee64b48ac",
+      "raw_bytes": 918
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/after-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/after-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/after-state.json",
+      "raw_sha256": "3dcdf727209538c7fccde9471917e80d168b39b1cddd5baa0b1e08d0164f7a60",
+      "raw_bytes": 2003
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/after-state.json.window.json",
+      "raw_sha256": "b2df842e5362071d7689d3bb43947ab95b928bf10296403def9723f695776e1d",
+      "raw_bytes": 64143
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/after-state.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/after-state.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/before-imports.json",
+      "raw_sha256": "2b045801732e3cecd201f9539ceb48cfc28e337104141a85a4c5f848e169b011",
+      "raw_bytes": 893
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/before-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/before-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/before-state.json",
+      "raw_sha256": "6d601eee84ffdbd82d725b38168b75c51c3ff6b878d4d79bf0a9e1bd783f741d",
+      "raw_bytes": 1939
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/before-state.json.window.json",
+      "raw_sha256": "dfa325be61af84a44d15dd772430eae80a6cb733ad6377142ce1b64dadde0406",
+      "raw_bytes": 2075
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/before-state.log",
+      "raw_sha256": "5cd8ca4486e9aac691d44de0a11b89ebab8b55ea7ebcbb0674f42b6c6b4daf16",
+      "raw_bytes": 960,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/before-state.log.gz",
+      "compressed_sha256": "6423caf10cff72d340d4bbe9f6be5d1d11442336c23da297314aafcd943cdd48"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/begin.json",
+      "raw_sha256": "ef8296dbd26305a2035fd400be40dffb62aa144a652432752788d0f9ca201d4c",
+      "raw_bytes": 129
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/begin.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/begin.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/chat-pending-origin.json",
+      "raw_sha256": "0f3f9b3893a0180095a143cf2266a8bdb5d3096eed8ec669e7925ab26f452117",
+      "raw_bytes": 314
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/chat-user-visible-messages.json",
+      "raw_sha256": "5edaa0af52cf027aa4af08ab98cbfe1a6b78389d35e7f42030e92632eccb220d",
+      "raw_bytes": 16433
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/chat-wire.jsonl",
+      "raw_sha256": "8d88d3a9534c5562f4eb12ace7507f8cecba0b2c713a1c76cef3c8f0da1b6c38",
+      "raw_bytes": 36588
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/clone.log",
+      "raw_sha256": "68356206c326e5f0ec3e9be3c8c89766088d1a1ae3d0d80698aaeb7ad5e73ad6",
+      "raw_bytes": 85,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/clone.log.gz",
+      "compressed_sha256": "b101aad879c6638ed257fe7e9793cee338b93377047cf8374720cc177f7c2c36"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/configure-model.api_mode.log",
+      "raw_sha256": "51fae03f31f2ebc9db009123841bdb72d7a9663ba6db0b252ccb37a0e787e7d1",
+      "raw_bytes": 123,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/configure-model.api_mode.log.gz",
+      "compressed_sha256": "504d5d2c29b30af624dd5a8e9503160b377818448bc6a041418429e1fc8ba66b"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/configure-model.base_url.log",
+      "raw_sha256": "d419f4d5e5c51057c719fb75299b9d0c36e6aec0d4e2b472e03742b510dc0887",
+      "raw_bytes": 132,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/configure-model.base_url.log.gz",
+      "compressed_sha256": "29c24c732eab0103482287ea5e93681147f90903a66be0dc1cf460986bf52ff4"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/configure-model.default.log",
+      "raw_sha256": "1b14c3d131e7c9bd9e1b3356a8c935ed13dec3986edbdfd323212ab004dcd76d",
+      "raw_bytes": 120,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/configure-model.default.log.gz",
+      "compressed_sha256": "99e3ca37724942b0d50cf54fb3dc9459469c9764fe492a9dd38d2846227460fb"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/configure-model.provider.log",
+      "raw_sha256": "5b6d3a9ce272b7365b7c8b0ddd9604049fc71f48ef504aa14a8c75ed9fbda4c1",
+      "raw_bytes": 113,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/configure-model.provider.log.gz",
+      "compressed_sha256": "fee329038eb0775193cc3362a54255001e43c4b1fec51e7e3965a839a0c456a7"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/dependencies.log",
+      "raw_sha256": "e5b2a1bbfbb9dd86f4bce0bde39c3d2488e38976f376e35002678197c3aecfdc",
+      "raw_bytes": 2629,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/dependencies.log.gz",
+      "compressed_sha256": "989a902d223edbab1d80b8b6019b56911819756db864e7966509fb4a07f58674"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/fixture-origin.log",
+      "raw_sha256": "4ec33f2fd4d80e5bdbc7b8588a4286f205e339aac2bb0fd9770981a11eedcd34",
+      "raw_bytes": 1087,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/fixture-origin.log.gz",
+      "compressed_sha256": "2959a58897181fcf072dfc561f6ebd20af3678989fc44e49e0addfd26d47e538"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/gateway-install.log",
+      "raw_sha256": "3ae1c152b66e9b58e182571589c86b0363ff514374d2a46de8b09ca3e12312ec",
+      "raw_bytes": 239,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/gateway-install.log.gz",
+      "compressed_sha256": "23cdde368562590fa711b8ea64352d9de25007b3c73e32662a1ac514144151d9"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/gateway.error.log",
+      "raw_sha256": "c95131cfc1baa12558ab9ac18d98d21970f96e9c57b720814d7502637452434a",
+      "raw_bytes": 4056,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/gateway.error.log.gz",
+      "compressed_sha256": "7343df87c4afd1d850244e55acbb7c1757c02bc2078dc4afe3a529d3b3993dd0"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/gateway.log",
+      "raw_sha256": "a6b3eb392ac91fc5628ad45d1c40c0b42e73a9c47ff2520443a8ba7ebbfb0d1e",
+      "raw_bytes": 8497,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/gateway.log.gz",
+      "compressed_sha256": "2b06cf8c96bba18779652b0d86c3e340f1d94874e57126b3cd7d6d4fd4f6a0b7"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/old-checkout.log",
+      "raw_sha256": "459471d422fcaa25fbd78824a9f23d439fa79a9d68637ac9eb4fa51f1c8d785d",
+      "raw_bytes": 97,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/old-checkout.log.gz",
+      "compressed_sha256": "24825e0c354fa6b50bff651b05639f8bd9998ae28d51133e46f40f61345684ba"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/owned-cleanup.log",
+      "raw_sha256": "3741b5a7da6a0a9034c6e5a45a2544b8fbc7dfd51ae1ed711f458581df4875fa",
+      "raw_bytes": 55,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/owned-cleanup.log.gz",
+      "compressed_sha256": "778838bac3bfed54a8c4c5d827eabb850c4a6580ea1c08499964bb2c7d16419d"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/receipt.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/receipt.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/update-receipt.json",
+      "raw_sha256": "fde156a3c8756b1aa50ae16fc66edeca033bff2c2784efebc2d3d5a2148ab789",
+      "raw_bytes": 2163
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/update.log",
+      "raw_sha256": "2ef687e95b24e610e5846af3443a4ce3151c237e2dc1d31121e3050d7ffc5381",
+      "raw_bytes": 10361,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/update.log.gz",
+      "compressed_sha256": "114f147d40f055f82cf5076de7e140a520846f9fecc269e9bb0c39efc374799e"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/venv.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-chat-40052983324/venv.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/acceptance.json",
+      "raw_sha256": "b1b1881aa58c34cb11c3cb667036e4f283e02e6b0665d3687d3b5f4feb0430fa",
+      "raw_bytes": 1705
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/before-imports.json",
+      "raw_sha256": "2b045801732e3cecd201f9539ceb48cfc28e337104141a85a4c5f848e169b011",
+      "raw_bytes": 893
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/before-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/before-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/before-state.json",
+      "raw_sha256": "da3f8aad0fce4a1bf51574f57122ad5809b36aa6414af6266ef464408a16b3df",
+      "raw_bytes": 1939
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/before-state.json.window.json",
+      "raw_sha256": "4769ba16ddbef6be7349fc8cfac631e90887b5a7c097f5a2d182c0b51d369c67",
+      "raw_bytes": 2075
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/before-state.log",
+      "raw_sha256": "3a13669dcfe99f38f1eeb87c56a62937d5b59a070c5d570000dabe788e28d118",
+      "raw_bytes": 456,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/before-state.log.gz",
+      "compressed_sha256": "c7af52fb8109160aefa6af186267c2f6770f3df9f07c64007993b19ff0f8b8cf"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/begin.json",
+      "raw_sha256": "fdb283b793553296506f3ab2bf9c8182b5eca31a4084bc0fd7d10c34a88e8c96",
+      "raw_bytes": 129
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/begin.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/begin.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/chat-pending-origin.json",
+      "raw_sha256": "6cc1b4eb3dc71bc8de02e4fd291e028f918598fe7ccfc5a2e366f6f1ea6e12f6",
+      "raw_bytes": 314
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/chat-wire.jsonl",
+      "raw_sha256": "c6a019ffff33c209021180482f10d6c9c58fb5f2e2708497d7c35d935f1864eb",
+      "raw_bytes": 19823
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/clone.log",
+      "raw_sha256": "68356206c326e5f0ec3e9be3c8c89766088d1a1ae3d0d80698aaeb7ad5e73ad6",
+      "raw_bytes": 85,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/clone.log.gz",
+      "compressed_sha256": "b101aad879c6638ed257fe7e9793cee338b93377047cf8374720cc177f7c2c36"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/configure-model.api_mode.log",
+      "raw_sha256": "51fae03f31f2ebc9db009123841bdb72d7a9663ba6db0b252ccb37a0e787e7d1",
+      "raw_bytes": 123,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/configure-model.api_mode.log.gz",
+      "compressed_sha256": "504d5d2c29b30af624dd5a8e9503160b377818448bc6a041418429e1fc8ba66b"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/configure-model.base_url.log",
+      "raw_sha256": "1923807ac24dc71c22148d32a77046d727bd9ef5a899903a906c344312a4ce56",
+      "raw_bytes": 132,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/configure-model.base_url.log.gz",
+      "compressed_sha256": "8e155fc1fa627f2ee85e1b4815e58dd7eba3d334e01cde42b7ef705261d01e04"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/configure-model.default.log",
+      "raw_sha256": "1b14c3d131e7c9bd9e1b3356a8c935ed13dec3986edbdfd323212ab004dcd76d",
+      "raw_bytes": 120,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/configure-model.default.log.gz",
+      "compressed_sha256": "99e3ca37724942b0d50cf54fb3dc9459469c9764fe492a9dd38d2846227460fb"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/configure-model.provider.log",
+      "raw_sha256": "5b6d3a9ce272b7365b7c8b0ddd9604049fc71f48ef504aa14a8c75ed9fbda4c1",
+      "raw_bytes": 113,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/configure-model.provider.log.gz",
+      "compressed_sha256": "fee329038eb0775193cc3362a54255001e43c4b1fec51e7e3965a839a0c456a7"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/dependencies.log",
+      "raw_sha256": "8063e0b9a1ade773ccaed0cfa81f63fa99c96632c68c24cb631c55b80422a9c0",
+      "raw_bytes": 2630,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/dependencies.log.gz",
+      "compressed_sha256": "c39276200c4fc55fa281ef7b5f72fd304c2ccc81571bf31a7928f022c128c7b1"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/fixture-origin.log",
+      "raw_sha256": "4ec33f2fd4d80e5bdbc7b8588a4286f205e339aac2bb0fd9770981a11eedcd34",
+      "raw_bytes": 1087,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/fixture-origin.log.gz",
+      "compressed_sha256": "2959a58897181fcf072dfc561f6ebd20af3678989fc44e49e0addfd26d47e538"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/gateway-install.log",
+      "raw_sha256": "3ae1c152b66e9b58e182571589c86b0363ff514374d2a46de8b09ca3e12312ec",
+      "raw_bytes": 239,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/gateway-install.log.gz",
+      "compressed_sha256": "23cdde368562590fa711b8ea64352d9de25007b3c73e32662a1ac514144151d9"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/gateway.error.log",
+      "raw_sha256": "14beb47159e7b2882f8ac342170b3883ab9d1e7a87f187c4982c8a5f431d622f",
+      "raw_bytes": 4057,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/gateway.error.log.gz",
+      "compressed_sha256": "fb57a721f57899ef3d19b8b8e5ada9494dbeb05d3450453052656074d5d97366"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/gateway.log",
+      "raw_sha256": "97b704fc21e712ddc6905beffe543cdf585a1a6458b15e91addd0fa71afd6be0",
+      "raw_bytes": 4858,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/gateway.log.gz",
+      "compressed_sha256": "15a86fe070f2c8513e8f8bade5ba0a9f839fe814b885de631c964594b855815c"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/old-checkout.log",
+      "raw_sha256": "459471d422fcaa25fbd78824a9f23d439fa79a9d68637ac9eb4fa51f1c8d785d",
+      "raw_bytes": 97,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/old-checkout.log.gz",
+      "compressed_sha256": "24825e0c354fa6b50bff651b05639f8bd9998ae28d51133e46f40f61345684ba"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/owned-cleanup.log",
+      "raw_sha256": "3741b5a7da6a0a9034c6e5a45a2544b8fbc7dfd51ae1ed711f458581df4875fa",
+      "raw_bytes": 55,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/owned-cleanup.log.gz",
+      "compressed_sha256": "778838bac3bfed54a8c4c5d827eabb850c4a6580ea1c08499964bb2c7d16419d"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/seed-pending.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/seed-pending.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/seeded-pending-marker.txt",
+      "raw_sha256": "dbff95f3fa3a05f1b7cc4048b7c59863b18249be4d451d8cdc6df084928b26e7",
+      "raw_bytes": 89
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/stage-source.log",
+      "raw_sha256": "0a4bc176e8688495394f582295dd628ad1277f6469eaa469e2281ea690895aa7",
+      "raw_bytes": 37195,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/stage-source.log.gz",
+      "compressed_sha256": "1d400a5f5ffeb8548ff76276f4af7dac1cb8c095401971eb2f43519f4ab844cd"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/venv.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40052983324/macos-frozen-launchd-update-pending-chat-40052983324/venv.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40052983324/run.json",
+      "raw_sha256": "c5792bed40856e3a37048ea694f13606bec7c98093dbbb1817050feba4d3021c",
+      "raw_bytes": 5042
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/logs.zip",
+      "raw_sha256": "3e80a6b90c8f09d5f51097ef48b22b922550d919d3b02e3754f3d25edce84916",
+      "raw_bytes": 86458
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-framework-owner-40054144491/green/native-owner-case.json",
+      "raw_sha256": "d70993f8fadf4c6fd660b1b21f4b63569066df3997fdefbb4a02b38157b19da4",
+      "raw_bytes": 2414
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-framework-owner-40054144491/red/native-owner-case.json",
+      "raw_sha256": "c243f29e97de98986b53fd3a99d4cc4f00966e533d119e529be50bac4eb08861",
+      "raw_bytes": 2490
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-framework-owner-40054144491/replay.log",
+      "raw_sha256": "e4867b651d46794777f2abc3b925d98d53c8f892fffd94d0002e7a0f3fb5144b",
+      "raw_bytes": 3665,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-framework-owner-40054144491/replay.log.gz",
+      "compressed_sha256": "4a0012035a0236aa34e3a3221c629f7fe46c3646010b1215247978de04aad829"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/acceptance.json",
+      "raw_sha256": "40e56889596c7dfb0085a23373631c6cf7cc20d0b18e91c99314c29b8ee72bdd",
+      "raw_bytes": 1634
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/actual-update-receipt.json",
+      "raw_sha256": "1a0a98f0cf66adf8b97f12e28beff3dbd889eec0531514c23f9200dfcaa6dfb1",
+      "raw_bytes": 2163
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/after-imports.json",
+      "raw_sha256": "3ed835a32aa9531fc339b583cbc7bfc8d3679d20f79e052800f6105a07ca9422",
+      "raw_bytes": 918
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/after-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/after-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/after-state.json",
+      "raw_sha256": "3e6eb8c14667b6bfa42113f8deef339b66352452a55a7fc9018c09b961463433",
+      "raw_bytes": 2003
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/after-state.json.window.json",
+      "raw_sha256": "003a520edaae843b9b717a807377925cc1da314b30eb042e03e2a8f9b63b93d2",
+      "raw_bytes": 66281
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/after-state.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/after-state.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/before-imports.json",
+      "raw_sha256": "2b045801732e3cecd201f9539ceb48cfc28e337104141a85a4c5f848e169b011",
+      "raw_bytes": 893
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/before-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/before-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/before-state.json",
+      "raw_sha256": "39d24e1600492b21a59bd9c2070b842520ff15b8bced3e63cf3a5e68e2f01f84",
+      "raw_bytes": 1939
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/before-state.json.window.json",
+      "raw_sha256": "ae6933c7c940a1705e9a19c680e5af47d4edd3520cfe03d98ac61b395264b80e",
+      "raw_bytes": 2075
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/before-state.log",
+      "raw_sha256": "70ec4e5a6bf3964f3ea3a7f16dbcb0a246dfeeebd1fdc2b431889d4fe700a702",
+      "raw_bytes": 304,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/before-state.log.gz",
+      "compressed_sha256": "de682c325761ec72f60a9208d487a2343de9c0cc3bc6fad84348a0ccf176e865"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/begin.json",
+      "raw_sha256": "a51a342ef02b4fc9deb77cdeebd5591b56a9a64c8f74feb337685236423a806b",
+      "raw_bytes": 129
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/begin.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/begin.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/chat-pending-origin.json",
+      "raw_sha256": "1bbc1be29a3b39f793dc1f63dbda9dd73a79277965e40c4e00f3d638673408e0",
+      "raw_bytes": 314
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/chat-user-visible-messages.json",
+      "raw_sha256": "adb357aff05d8456798e8bf2125b15bde549f06d68f4d0e9cecf90317f9de1da",
+      "raw_bytes": 16453
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/chat-wire.jsonl",
+      "raw_sha256": "72919e5082d4b623338df5e8845ca06f80cedfb3df38ffb9e4e8ba17eb4fd5b9",
+      "raw_bytes": 36635
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/clone.log",
+      "raw_sha256": "68356206c326e5f0ec3e9be3c8c89766088d1a1ae3d0d80698aaeb7ad5e73ad6",
+      "raw_bytes": 85,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/clone.log.gz",
+      "compressed_sha256": "b101aad879c6638ed257fe7e9793cee338b93377047cf8374720cc177f7c2c36"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/configure-model.api_mode.log",
+      "raw_sha256": "51fae03f31f2ebc9db009123841bdb72d7a9663ba6db0b252ccb37a0e787e7d1",
+      "raw_bytes": 123,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/configure-model.api_mode.log.gz",
+      "compressed_sha256": "504d5d2c29b30af624dd5a8e9503160b377818448bc6a041418429e1fc8ba66b"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/configure-model.base_url.log",
+      "raw_sha256": "e3412515d8dddd27b7db4c46555ebbea4c518ca4bcbe2bae97aad87a84016874",
+      "raw_bytes": 132,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/configure-model.base_url.log.gz",
+      "compressed_sha256": "0b54f7fc2a4b53232db90e16f31315c661a666d3b4b8a0fd4b08a68360632a8d"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/configure-model.default.log",
+      "raw_sha256": "1b14c3d131e7c9bd9e1b3356a8c935ed13dec3986edbdfd323212ab004dcd76d",
+      "raw_bytes": 120,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/configure-model.default.log.gz",
+      "compressed_sha256": "99e3ca37724942b0d50cf54fb3dc9459469c9764fe492a9dd38d2846227460fb"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/configure-model.provider.log",
+      "raw_sha256": "5b6d3a9ce272b7365b7c8b0ddd9604049fc71f48ef504aa14a8c75ed9fbda4c1",
+      "raw_bytes": 113,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/configure-model.provider.log.gz",
+      "compressed_sha256": "fee329038eb0775193cc3362a54255001e43c4b1fec51e7e3965a839a0c456a7"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/dependencies.log",
+      "raw_sha256": "e8fdf4eb60b31702f5242a7901421c1147e2004f3bf2a4cf81e371581b37b22a",
+      "raw_bytes": 2629,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/dependencies.log.gz",
+      "compressed_sha256": "f42582181242a509321224c2cecb777d5d786615d56a8904d89e834af606c121"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/fixture-origin.log",
+      "raw_sha256": "9a9b29f81f29982a7ba932378eef264fa155a1ff1ed471f4b18351cb8dc420e7",
+      "raw_bytes": 1087,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/fixture-origin.log.gz",
+      "compressed_sha256": "b97bedce105dc32c01bf04be7c69b8f4c754df2732569b8b03807f75a5fb8d3f"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/gateway-install.log",
+      "raw_sha256": "3ae1c152b66e9b58e182571589c86b0363ff514374d2a46de8b09ca3e12312ec",
+      "raw_bytes": 239,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/gateway-install.log.gz",
+      "compressed_sha256": "23cdde368562590fa711b8ea64352d9de25007b3c73e32662a1ac514144151d9"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/gateway.error.log",
+      "raw_sha256": "a7709f386b169f1f1049bdb942b26a652ead58e24fb1a00ec0d97c8433fdf8f6",
+      "raw_bytes": 4057,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/gateway.error.log.gz",
+      "compressed_sha256": "23cc447ac524120efe66c8676abc95bcedb82a17d35bec424953eec9a7a0fbc6"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/gateway.log",
+      "raw_sha256": "7ac026c3e2adbeced2761c96c6e7bc3e7d963012bdcee6659522537c34be80c4",
+      "raw_bytes": 8718,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/gateway.log.gz",
+      "compressed_sha256": "c0d56684d123415c71308d4ca0303ac0a7d662e56fff4eaf85ecab04a31f6bac"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/live-chat-updater.json",
+      "raw_sha256": "ae9400008f1cb1ed950003f402aac7ec49e43048926db4ac1017bea6f0cf5a65",
+      "raw_bytes": 392
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/old-checkout.log",
+      "raw_sha256": "459471d422fcaa25fbd78824a9f23d439fa79a9d68637ac9eb4fa51f1c8d785d",
+      "raw_bytes": 97,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/old-checkout.log.gz",
+      "compressed_sha256": "24825e0c354fa6b50bff651b05639f8bd9998ae28d51133e46f40f61345684ba"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/owned-cleanup.log",
+      "raw_sha256": "3741b5a7da6a0a9034c6e5a45a2544b8fbc7dfd51ae1ed711f458581df4875fa",
+      "raw_bytes": 55,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/owned-cleanup.log.gz",
+      "compressed_sha256": "778838bac3bfed54a8c4c5d827eabb850c4a6580ea1c08499964bb2c7d16419d"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/receipt.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/receipt.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/update-receipt.json",
+      "raw_sha256": "1a0a98f0cf66adf8b97f12e28beff3dbd889eec0531514c23f9200dfcaa6dfb1",
+      "raw_bytes": 2163
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/update.log",
+      "raw_sha256": "57f9fdb7c00e31639122dfed1cab522fd043fb62e1764bd9c6f9c00bc015b3e7",
+      "raw_bytes": 10361,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/update.log.gz",
+      "compressed_sha256": "268a6cc748f30ced7f61c2aaa50e34f94ee16928f761080ae0f81f125058e3ce"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/venv.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-chat-40054144491/venv.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/acceptance.json",
+      "raw_sha256": "b7e221a5debafa42c5fb5eec3bf3b41949375b7554f09c1f263f0ca88ac5b2c1",
+      "raw_bytes": 1686
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/actual-update-receipt.json",
+      "raw_sha256": "8209f1a9c4d976b4b908be314ac5b69a0d248987adf32255c242eea0db373cc8",
+      "raw_bytes": 1684
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/before-imports.json",
+      "raw_sha256": "2b045801732e3cecd201f9539ceb48cfc28e337104141a85a4c5f848e169b011",
+      "raw_bytes": 893
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/before-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/before-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/before-state.json",
+      "raw_sha256": "156b412bf54fbeaef0caab8311c8dbb5d50bf2a9f441782c1be3f253cf0cd9d5",
+      "raw_bytes": 1939
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/before-state.json.window.json",
+      "raw_sha256": "c987edd16bd3b6714af36d6624bd640bfe5a5af55db15fc3ee6c21e2ba7f6780",
+      "raw_bytes": 2075
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/before-state.log",
+      "raw_sha256": "3a13669dcfe99f38f1eeb87c56a62937d5b59a070c5d570000dabe788e28d118",
+      "raw_bytes": 456,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/before-state.log.gz",
+      "compressed_sha256": "c7af52fb8109160aefa6af186267c2f6770f3df9f07c64007993b19ff0f8b8cf"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/begin.json",
+      "raw_sha256": "152633e7d50ceef99160f6397adbe7ad97a33a527c077b1bea52e8784b3fb1fa",
+      "raw_bytes": 129
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/begin.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/begin.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/chat-pending-origin.json",
+      "raw_sha256": "3f989b680f7c0ead92424a5afbab47540758701811b04f6f1dc0fb9ecba33e80",
+      "raw_bytes": 314
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/chat-wire.jsonl",
+      "raw_sha256": "809f406e9b2f3fe81cf3e6dc3721efd140257a115d4737484ba687f4210b2df0",
+      "raw_bytes": 19471
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/clone.log",
+      "raw_sha256": "68356206c326e5f0ec3e9be3c8c89766088d1a1ae3d0d80698aaeb7ad5e73ad6",
+      "raw_bytes": 85,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/clone.log.gz",
+      "compressed_sha256": "b101aad879c6638ed257fe7e9793cee338b93377047cf8374720cc177f7c2c36"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/configure-model.api_mode.log",
+      "raw_sha256": "51fae03f31f2ebc9db009123841bdb72d7a9663ba6db0b252ccb37a0e787e7d1",
+      "raw_bytes": 123,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/configure-model.api_mode.log.gz",
+      "compressed_sha256": "504d5d2c29b30af624dd5a8e9503160b377818448bc6a041418429e1fc8ba66b"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/configure-model.base_url.log",
+      "raw_sha256": "321f0e4fa860c0e74b11b6b2eff8855087e520e31e87a0e21fec98824ee64f2b",
+      "raw_bytes": 132,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/configure-model.base_url.log.gz",
+      "compressed_sha256": "10aaae9d84c5f80969ccafe5ed1f62e525d34d82c556964ca422fdee5a052ad4"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/configure-model.default.log",
+      "raw_sha256": "1b14c3d131e7c9bd9e1b3356a8c935ed13dec3986edbdfd323212ab004dcd76d",
+      "raw_bytes": 120,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/configure-model.default.log.gz",
+      "compressed_sha256": "99e3ca37724942b0d50cf54fb3dc9459469c9764fe492a9dd38d2846227460fb"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/configure-model.provider.log",
+      "raw_sha256": "5b6d3a9ce272b7365b7c8b0ddd9604049fc71f48ef504aa14a8c75ed9fbda4c1",
+      "raw_bytes": 113,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/configure-model.provider.log.gz",
+      "compressed_sha256": "fee329038eb0775193cc3362a54255001e43c4b1fec51e7e3965a839a0c456a7"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/dependencies.log",
+      "raw_sha256": "4e0dc5bd6c389ca3f68afc153e7d5dc74922dd293e47e9139191d1a453f05a79",
+      "raw_bytes": 2630,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/dependencies.log.gz",
+      "compressed_sha256": "80acc2cb4245f43fc0e9497094b52a9dde89b485b6d77c495f3d5e02c3f60ba4"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/fixture-origin.log",
+      "raw_sha256": "9a9b29f81f29982a7ba932378eef264fa155a1ff1ed471f4b18351cb8dc420e7",
+      "raw_bytes": 1087,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/fixture-origin.log.gz",
+      "compressed_sha256": "b97bedce105dc32c01bf04be7c69b8f4c754df2732569b8b03807f75a5fb8d3f"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/gateway-install.log",
+      "raw_sha256": "3ae1c152b66e9b58e182571589c86b0363ff514374d2a46de8b09ca3e12312ec",
+      "raw_bytes": 239,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/gateway-install.log.gz",
+      "compressed_sha256": "23cdde368562590fa711b8ea64352d9de25007b3c73e32662a1ac514144151d9"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/gateway.error.log",
+      "raw_sha256": "efc586c1c1b30542d11ae538eae0a573a7b0a88e206a832dde508aec0873d88c",
+      "raw_bytes": 9252,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/gateway.error.log.gz",
+      "compressed_sha256": "652796be02590bc560d6bec32a437f8dbb1d68eee3c627b2a194694012b77082"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/gateway.log",
+      "raw_sha256": "b399974d524c3a0b664c7b99b8303f9aba0fe1b575776ef8295a95f5eb546d3f",
+      "raw_bytes": 2288,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/gateway.log.gz",
+      "compressed_sha256": "feed415f7783ecd91719a6b88ef6022b82bce35e477597ed1c391de6168de63c"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/old-checkout.log",
+      "raw_sha256": "459471d422fcaa25fbd78824a9f23d439fa79a9d68637ac9eb4fa51f1c8d785d",
+      "raw_bytes": 97,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/old-checkout.log.gz",
+      "compressed_sha256": "24825e0c354fa6b50bff651b05639f8bd9998ae28d51133e46f40f61345684ba"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/seed-pending.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/seed-pending.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/seeded-pending-marker.txt",
+      "raw_sha256": "4c10993c7641fdb0dbe1a8195773e6d2eb2144a254927c327ae4bf7cc7761a2c",
+      "raw_bytes": 87
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/stage-source.log",
+      "raw_sha256": "e6aff9d3e6374ec2afc18433905a37d4c5d3aadc60e0fc34849a0316c6ba82c4",
+      "raw_bytes": 37458,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/stage-source.log.gz",
+      "compressed_sha256": "7e2a562e5908b90efc8dc555a68a21346b45303acdb6bb0fa4ea9dfaf6e136de"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/venv.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40054144491/macos-frozen-launchd-update-pending-chat-40054144491/venv.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40054144491/run.json",
+      "raw_sha256": "b440a4ab52277292a6077d94925dd0bd7efae9ef278aeb17cb6ca85ee27882f7",
+      "raw_bytes": 5042
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/logs.zip",
+      "raw_sha256": "ffd1c95ffa0abe147f029be7d18b2ac35304539447d299f87783ef02bf486e09",
+      "raw_bytes": 85238
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-framework-owner-40055028542/green/native-owner-case.json",
+      "raw_sha256": "65cd003bc7b36859440a01be2d4be9a52d456890f3139db8ebb17acfe7095716",
+      "raw_bytes": 2414
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-framework-owner-40055028542/red/native-owner-case.json",
+      "raw_sha256": "d73089104d5de2335314930554d6c27b97b8c49cd2dbfdb19dfc5371351d7f19",
+      "raw_bytes": 2490
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-framework-owner-40055028542/replay.log",
+      "raw_sha256": "f00d4073632b08de81ad415d984f3e1bd12abbfd10f8d1364e017dbb0fa1718c",
+      "raw_bytes": 3665,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-framework-owner-40055028542/replay.log.gz",
+      "compressed_sha256": "49e62cda8104c08baf603929de108885ef3e05d0be47c4233c842e1cdc0a5899"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/acceptance.json",
+      "raw_sha256": "5e4c1d5e548a7818dc0cde3181c42f090dc95bd94760c6b20406cd7e9cd67144",
+      "raw_bytes": 1635
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/actual-update-receipt.json",
+      "raw_sha256": "7996022603eaf8b65a1aeb0d6a33e361a2ef3afecea22c4ba83cfed6777707ff",
+      "raw_bytes": 2163
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/after-imports.json",
+      "raw_sha256": "5ef6408d8994fd962a6da54566b3fea4c95566d674b26439803685711e1f53b7",
+      "raw_bytes": 918
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/after-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/after-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/after-state.json",
+      "raw_sha256": "55d297ecea7435672f8bc011a8d425e5d9dc7968ccd7c7db99756df47110b37f",
+      "raw_bytes": 2003
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/after-state.json.window.json",
+      "raw_sha256": "fbe6a48e7b4ad776ea6eb1be395632571f15c52d0ac62d3671353bfdf60aa402",
+      "raw_bytes": 64143
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/after-state.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/after-state.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/before-imports.json",
+      "raw_sha256": "2b045801732e3cecd201f9539ceb48cfc28e337104141a85a4c5f848e169b011",
+      "raw_bytes": 893
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/before-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/before-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/before-state.json",
+      "raw_sha256": "215e5fdd5aa3af031c6476991639a6e0f122adc1e2eed2e2b456c957ee3b0e21",
+      "raw_bytes": 1939
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/before-state.json.window.json",
+      "raw_sha256": "85cf43a353b504f146f091594bfd22a39d0e78a5523d097babda8de5d609bba3",
+      "raw_bytes": 2075
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/before-state.log",
+      "raw_sha256": "3a13669dcfe99f38f1eeb87c56a62937d5b59a070c5d570000dabe788e28d118",
+      "raw_bytes": 456,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/before-state.log.gz",
+      "compressed_sha256": "c7af52fb8109160aefa6af186267c2f6770f3df9f07c64007993b19ff0f8b8cf"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/begin.json",
+      "raw_sha256": "f5840b24242a05881f4b380e81d3f72f824d17397bc3f6693238748d8e9fcefe",
+      "raw_bytes": 130
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/begin.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/begin.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/chat-pending-origin.json",
+      "raw_sha256": "282cecda7153d850db4540d444fb88d5bac57cde538ca924bff1bb0ca144d9cd",
+      "raw_bytes": 314
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/chat-user-visible-messages.json",
+      "raw_sha256": "22cfefe9a33bfe3cd6715ef5e23cb8beaccf361a81eb81306d6901dc3f3b0c87",
+      "raw_bytes": 16465
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/chat-wire.jsonl",
+      "raw_sha256": "2dc0fc6b5f76b359267301fad4c6bd740b8786f6ba0fc63d780e0328deb0e144",
+      "raw_bytes": 36778
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/clone.log",
+      "raw_sha256": "68356206c326e5f0ec3e9be3c8c89766088d1a1ae3d0d80698aaeb7ad5e73ad6",
+      "raw_bytes": 85,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/clone.log.gz",
+      "compressed_sha256": "b101aad879c6638ed257fe7e9793cee338b93377047cf8374720cc177f7c2c36"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/configure-model.api_mode.log",
+      "raw_sha256": "51fae03f31f2ebc9db009123841bdb72d7a9663ba6db0b252ccb37a0e787e7d1",
+      "raw_bytes": 123,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/configure-model.api_mode.log.gz",
+      "compressed_sha256": "504d5d2c29b30af624dd5a8e9503160b377818448bc6a041418429e1fc8ba66b"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/configure-model.base_url.log",
+      "raw_sha256": "7ccb7478a026177cba09271ff56dfccd140fea40ec85566981207a8732ab32f5",
+      "raw_bytes": 132,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/configure-model.base_url.log.gz",
+      "compressed_sha256": "bd951ad053e5e4a7252b9ad033023902f32ef5ae466d84eafe51a89794373726"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/configure-model.default.log",
+      "raw_sha256": "1b14c3d131e7c9bd9e1b3356a8c935ed13dec3986edbdfd323212ab004dcd76d",
+      "raw_bytes": 120,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/configure-model.default.log.gz",
+      "compressed_sha256": "99e3ca37724942b0d50cf54fb3dc9459469c9764fe492a9dd38d2846227460fb"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/configure-model.provider.log",
+      "raw_sha256": "5b6d3a9ce272b7365b7c8b0ddd9604049fc71f48ef504aa14a8c75ed9fbda4c1",
+      "raw_bytes": 113,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/configure-model.provider.log.gz",
+      "compressed_sha256": "fee329038eb0775193cc3362a54255001e43c4b1fec51e7e3965a839a0c456a7"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/dependencies.log",
+      "raw_sha256": "ca58feb9b99d97f05fc6aa32470b82397e311803cc12f17aacf9eecbcf0a1789",
+      "raw_bytes": 2630,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/dependencies.log.gz",
+      "compressed_sha256": "2deee1fbcf5dd23833bcc49389302990bfb385b5e02cd235945a93b89b6b5500"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/fixture-origin.log",
+      "raw_sha256": "5d50b77a2cd7f5aa2a6a327387afec4f256dcc881d0313ac03b591a00b00892b",
+      "raw_bytes": 1087,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/fixture-origin.log.gz",
+      "compressed_sha256": "12eb038b607ec0df0e7dea61594bf1f303ee0ae021f5736f6006c3dd52db9f80"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/gateway-install.log",
+      "raw_sha256": "3ae1c152b66e9b58e182571589c86b0363ff514374d2a46de8b09ca3e12312ec",
+      "raw_bytes": 239,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/gateway-install.log.gz",
+      "compressed_sha256": "23cdde368562590fa711b8ea64352d9de25007b3c73e32662a1ac514144151d9"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/gateway.error.log",
+      "raw_sha256": "5765c6e813b970ed78a232a9b8c7b655dd2acf4058c28b5f8f4fcfaf66692618",
+      "raw_bytes": 4057,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/gateway.error.log.gz",
+      "compressed_sha256": "d0fe3397255bd46fcaec3965dd26d1999c35fa78e834453edb3b754d4b2c89a1"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/gateway.log",
+      "raw_sha256": "ef04654a545197b57410af652015248db087ad46eeaa14dc8a12c7a5791f7ea3",
+      "raw_bytes": 8718,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/gateway.log.gz",
+      "compressed_sha256": "f177236718a2eeb5c3a03d1bd232b8e165ffbaad163be6da26c626791ca185db"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/live-chat-updater.json",
+      "raw_sha256": "526d7d56ebd724c43f013ed93763dacf4430a30a5ccfcac76ee08a8a20c47b48",
+      "raw_bytes": 487
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/old-checkout.log",
+      "raw_sha256": "459471d422fcaa25fbd78824a9f23d439fa79a9d68637ac9eb4fa51f1c8d785d",
+      "raw_bytes": 97,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/old-checkout.log.gz",
+      "compressed_sha256": "24825e0c354fa6b50bff651b05639f8bd9998ae28d51133e46f40f61345684ba"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/owned-cleanup.log",
+      "raw_sha256": "3741b5a7da6a0a9034c6e5a45a2544b8fbc7dfd51ae1ed711f458581df4875fa",
+      "raw_bytes": 55,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/owned-cleanup.log.gz",
+      "compressed_sha256": "778838bac3bfed54a8c4c5d827eabb850c4a6580ea1c08499964bb2c7d16419d"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/receipt.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/receipt.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/update-receipt.json",
+      "raw_sha256": "7996022603eaf8b65a1aeb0d6a33e361a2ef3afecea22c4ba83cfed6777707ff",
+      "raw_bytes": 2163
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/update.log",
+      "raw_sha256": "aac1705e749eb85a9c7bad9c21c5784c376dc446ee06279ee11fa8dc57fbba7f",
+      "raw_bytes": 10364,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/update.log.gz",
+      "compressed_sha256": "aac8e1692cc90df9ed25126602c4c5ace09826248f270d3f71153b1636dcaed6"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/venv.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-chat-40055028542/venv.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/acceptance.json",
+      "raw_sha256": "6a64d27379a3d8fdabb911b82d485f604f333e14337a8493561ccfc1b9f03312",
+      "raw_bytes": 1742
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/actual-update-receipt.json",
+      "raw_sha256": "30a81f1ab0d253517ae3278fdcba196bbebca39146bca76d40429a92fd64fb06",
+      "raw_bytes": 1672
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/after-imports.json",
+      "raw_sha256": "e23c7ebb55a6d1f32f0ecf221966dc9238c519cac6b9c7a412d1fe8221bd8362",
+      "raw_bytes": 918
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/after-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/after-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/after-state.json",
+      "raw_sha256": "9375081a74c4f74225f0178247735a0ea59db3724b8a00930e4443a3379157f2",
+      "raw_bytes": 2003
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/after-state.json.window.json",
+      "raw_sha256": "f6f51e8e32b026166fa269c9e8f70b92bf763e1c9ee37e1500153d035709515c",
+      "raw_bytes": 66281
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/after-state.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/after-state.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/before-imports.json",
+      "raw_sha256": "2b045801732e3cecd201f9539ceb48cfc28e337104141a85a4c5f848e169b011",
+      "raw_bytes": 893
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/before-imports.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/before-imports.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/before-state.json",
+      "raw_sha256": "9fc608db853875e89e5f178b3c07bfcebf3274d267c8a861d9c70c847847e4b2",
+      "raw_bytes": 1939
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/before-state.json.window.json",
+      "raw_sha256": "ea3fec2af51addb3509c55e40e23b30b68f09db8688e9d2eb5e514a985757364",
+      "raw_bytes": 2075
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/before-state.log",
+      "raw_sha256": "69a783be91316a3f6ed581384aa9978e5edc2a5de5e171f577cf740c24d71465",
+      "raw_bytes": 960,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/before-state.log.gz",
+      "compressed_sha256": "1ab206fd5b0a851fa0eb7572bd3e534d6b22e72f70d396562de1f0dd34cbe4ef"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/begin.json",
+      "raw_sha256": "c3c6405be52b41569ad2c4580b6c5c507822fd4fefdeff373ea01b4e22a68c22",
+      "raw_bytes": 128
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/begin.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/begin.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/chat-pending-origin.json",
+      "raw_sha256": "2f7ea8aff54711bedeecce3a2e3274267d8478e0eeeb42432b2b1b796822f1e4",
+      "raw_bytes": 314
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/chat-user-visible-messages.json",
+      "raw_sha256": "8822f0e8bebac620b393072ce737b897d5abf7f69289e7f571a1cee1b911ba12",
+      "raw_bytes": 7453
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/chat-wire.jsonl",
+      "raw_sha256": "ce26e1fcccc844d1b5a5041590f8066d6cde5ffbffc27f110216c88d054f3257",
+      "raw_bytes": 16030
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/clone.log",
+      "raw_sha256": "68356206c326e5f0ec3e9be3c8c89766088d1a1ae3d0d80698aaeb7ad5e73ad6",
+      "raw_bytes": 85,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/clone.log.gz",
+      "compressed_sha256": "b101aad879c6638ed257fe7e9793cee338b93377047cf8374720cc177f7c2c36"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/configure-model.api_mode.log",
+      "raw_sha256": "51fae03f31f2ebc9db009123841bdb72d7a9663ba6db0b252ccb37a0e787e7d1",
+      "raw_bytes": 123,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/configure-model.api_mode.log.gz",
+      "compressed_sha256": "504d5d2c29b30af624dd5a8e9503160b377818448bc6a041418429e1fc8ba66b"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/configure-model.base_url.log",
+      "raw_sha256": "8e95d270af0b1947210ea5f53e9d9290bfa3ddee3417ffdf9579a2f404381a8f",
+      "raw_bytes": 132,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/configure-model.base_url.log.gz",
+      "compressed_sha256": "ac41af59e7d9cb6b0dafee9a866fe4254ae9293a62d4356254e2ff4bd5e3bf79"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/configure-model.default.log",
+      "raw_sha256": "1b14c3d131e7c9bd9e1b3356a8c935ed13dec3986edbdfd323212ab004dcd76d",
+      "raw_bytes": 120,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/configure-model.default.log.gz",
+      "compressed_sha256": "99e3ca37724942b0d50cf54fb3dc9459469c9764fe492a9dd38d2846227460fb"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/configure-model.provider.log",
+      "raw_sha256": "5b6d3a9ce272b7365b7c8b0ddd9604049fc71f48ef504aa14a8c75ed9fbda4c1",
+      "raw_bytes": 113,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/configure-model.provider.log.gz",
+      "compressed_sha256": "fee329038eb0775193cc3362a54255001e43c4b1fec51e7e3965a839a0c456a7"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/dependencies.log",
+      "raw_sha256": "e8cfc722503bd1ff8cb1194beae45914fe47febcc611a7fe32d7d265f21e70e2",
+      "raw_bytes": 2630,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/dependencies.log.gz",
+      "compressed_sha256": "2c73ddd3b7ebdd9e0fcf735fcb7c0b0970528cf02c7f801b3e0ace75b7d120f7"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/fixture-origin.log",
+      "raw_sha256": "5d50b77a2cd7f5aa2a6a327387afec4f256dcc881d0313ac03b591a00b00892b",
+      "raw_bytes": 1087,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/fixture-origin.log.gz",
+      "compressed_sha256": "12eb038b607ec0df0e7dea61594bf1f303ee0ae021f5736f6006c3dd52db9f80"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/gateway-install.log",
+      "raw_sha256": "3ae1c152b66e9b58e182571589c86b0363ff514374d2a46de8b09ca3e12312ec",
+      "raw_bytes": 239,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/gateway-install.log.gz",
+      "compressed_sha256": "23cdde368562590fa711b8ea64352d9de25007b3c73e32662a1ac514144151d9"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/gateway.error.log",
+      "raw_sha256": "92f888032dd401114e1b3e3c9256a3eb7338f6109df9db8cb99d0d0fd23fc02f",
+      "raw_bytes": 4225,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/gateway.error.log.gz",
+      "compressed_sha256": "ed92dbff8af969470c289e7247d190b200c68b71cdcb0cdd6dd389f0f2ee86ae"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/gateway.log",
+      "raw_sha256": "fb561d199c40903f327af289ba7191d606addd117294090f7b9075aabadd62be",
+      "raw_bytes": 8798,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/gateway.log.gz",
+      "compressed_sha256": "148f7b9225211223584ffc16ce6ea62f76704d8339c8f4a368a229e24fcd3530"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/live-chat-updater.json",
+      "raw_sha256": "7b99c8ae552103878b2e306215d63e449641f176c1c17f084543b082dcbe83dd",
+      "raw_bytes": 487
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/old-checkout.log",
+      "raw_sha256": "459471d422fcaa25fbd78824a9f23d439fa79a9d68637ac9eb4fa51f1c8d785d",
+      "raw_bytes": 97,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/old-checkout.log.gz",
+      "compressed_sha256": "24825e0c354fa6b50bff651b05639f8bd9998ae28d51133e46f40f61345684ba"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/owned-cleanup.log",
+      "raw_sha256": "3741b5a7da6a0a9034c6e5a45a2544b8fbc7dfd51ae1ed711f458581df4875fa",
+      "raw_bytes": 55,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/owned-cleanup.log.gz",
+      "compressed_sha256": "778838bac3bfed54a8c4c5d827eabb850c4a6580ea1c08499964bb2c7d16419d"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/receipt.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/receipt.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/seed-pending.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/seed-pending.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/seeded-pending-marker.txt",
+      "raw_sha256": "7b543daf75e873acc7c880b1c5f3aedc0148fdee897910c32b9dadcc9b52523f",
+      "raw_bytes": 89
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/stage-source.log",
+      "raw_sha256": "791536f8736e050d8fe5a1e5553786515dca5539f31016406bd7ef8173a0bd33",
+      "raw_bytes": 37597,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/stage-source.log.gz",
+      "compressed_sha256": "10190f8db815f509fce4aa0f068395e70353bc2a4ef4655392c9fd486f196c9d"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/update-receipt.json",
+      "raw_sha256": "30a81f1ab0d253517ae3278fdcba196bbebca39146bca76d40429a92fd64fb06",
+      "raw_bytes": 1672
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/update.log",
+      "raw_sha256": "b120f452aca24825f9a6f470f8454f0c2b80cfd74017814a2f1d7657fe581313",
+      "raw_bytes": 9033,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/update.log.gz",
+      "compressed_sha256": "04d8678bfbe99f05d3ba82d159e79eba1edbb10aee8f9a725595b14c6f45dade"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/venv.log",
+      "raw_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "raw_bytes": 0,
+      "compressed_path": "artifacts/suni-ownership/hosted-chat-40055028542/macos-frozen-launchd-update-pending-chat-40055028542/venv.log.gz",
+      "compressed_sha256": "f61f27bd17de546264aa58f40f3aafaac7021e0ef69c17f6b1b4cd7664a037ec"
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/run.json",
+      "raw_sha256": "7f4064b254903f5655da3a33a711871053e45dae41ff4a67e00b7eec503e031f",
+      "raw_bytes": 5042
+    },
+    {
+      "path": "artifacts/suni-ownership/hosted-chat-40055028542/verified-summary.json",
+      "raw_sha256": "1c0e393ec4de0e6e921c1241fa39e8f73af2e20366963d3efa22d1ce40382775",
+      "raw_bytes": 5340
+    }
+  ],
+  "secret_pattern_hits": [],
+  "note": "Original bytes preserved in gzip or ZIP; JSON wire events remain readable."
+}

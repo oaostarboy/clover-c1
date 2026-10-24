@@ -1,0 +1,86 @@
+{
+  "schema": 1,
+  "started_at": "2026-10-24T01:46:35.921615+00:00",
+  "finished_at": "2026-10-24T01:48:06.074265+00:00",
+  "argv": [
+    "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/clover",
+    "update",
+    "--yes",
+    "--gateway"
+  ],
+  "pid": 6516,
+  "outcome": "success",
+  "pre_update": {
+    "sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+    "short_sha": "9535350b",
+    "version": "1.5.6",
+    "source": "git"
+  },
+  "post_update": {
+    "sha": "6ac82c5cb5e56702f6616245140fd5efb227805c",
+    "short_sha": "6ac82c5c",
+    "version": "1.5.9",
+    "source": "git"
+  },
+  "steps": [],
+  "skips": [
+    {
+      "name": "pre_update_backup",
+      "reason": "disabled (updates.pre_update_backup / --no-backup)",
+      "at": "2026-10-24T01:46:35.999018+00:00"
+    }
+  ],
+  "gateway_restart": {
+    "restarted_services": [
+      "ai.clover.gateway"
+    ],
+    "relaunched_profiles": [],
+    "externally_supervised_profiles": [],
+    "killed_pids": [],
+    "failed_units": [],
+    "incomplete": false,
+    "phase_error": ""
+  },
+  "fleet": [
+    {
+      "profile": "default",
+      "pid": 9164,
+      "code_sha": "6ac82c5cb5e56702f6616245140fd5efb227805c",
+      "code_version": "1.5.9",
+      "state": "current",
+      "source": "socket"
+    }
+  ],
+  "plan": {
+    "install_method": "git",
+    "updatable_in_place": true,
+    "update_mechanism": "clover update",
+    "expected_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+    "expected_version": "1.5.6",
+    "profiles": [
+      "default"
+    ],
+    "runtimes": [
+      {
+        "kind": "gateway",
+        "profile": "default",
+        "pid": 6302,
+        "supervisor": "external",
+        "code_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+        "code_version": "1.5.6",
+        "restart_via": "manual",
+        "detail": {}
+      }
+    ]
+  },
+  "pre_pull_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+  "pre_update_snapshot_id": null,
+  "delivery_restart_guard": {
+    "status": "legacy-proceed",
+    "required_capability": "reply-carriers-through-ack-v1",
+    "reasons": [
+      "legacy: default (PID 6302): identified legacy runtime"
+    ]
+  },
+  "runtime_outcomes": []
+}

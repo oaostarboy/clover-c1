@@ -1,0 +1,10 @@
+........
+  ✓ Restarting Windows gateway profile(s): default
+......  ⚠ The relaunched gateway did not come up; starting it directly
+..
+  ✓ Restarting Windows gateway profile(s): default
+.→ Stopping Windows gateway process(es) before updating Clover...
+  ✓ Paused gateway profile(s): default
+  → Force-stopped 1 gateway process(es)
+.....
+22 passed in 2.88s

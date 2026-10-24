@@ -1,0 +1,5 @@
+......................
+✗ Automatic update deferred: the running gateway cannot prove it waits for complete reply delivery. No gateway was stopped or restarted. If source was already pulled, it is staged only; this is NOT a completed upgrade. Do not retry /update or force-stop it. Arrange one-time terminal maintenance: pause all inbound and internal producers, let accepted work and transport delivery finish, and verify their durable acknowledgements. An empty agent count or ledger alone is insufficient. Then run clover gateway stop; clover update --yes; always run clover gateway start even if update fails. Keep unresolved deliveries and the pre-update snapshot for recovery. See docs/user-guide/updating.md#legacy-gateway-maintenance.
+  default (PID 101): delivery-aware restart is not established
+.
+23 passed in 1.34s

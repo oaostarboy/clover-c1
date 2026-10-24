@@ -1,0 +1,21 @@
+hint: Using 'master' as the name for the initial branch. This default branch name
+hint: will change to "main" in Git 3.0. To configure the initial branch name
+hint: to use in all of your new repositories, which will suppress this warning,
+hint: call:
+hint:
+hint: 	git config --global init.defaultBranch <name>
+hint:
+hint: Names commonly chosen instead of 'master' are 'main', 'trunk' and
+hint: 'development'. The just-created branch can be renamed via this command:
+hint:
+hint: 	git branch -m <name>
+hint:
+hint: Disable this message with "git config set advice.defaultBranchName false"
+Initialized empty Git repository in /Users/runner/work/clover-c1/clover-c1/.macos-native-origin.git/
+From /Users/runner/work/clover-c1/clover-c1/.macos-native-install
+ * [new ref]           9195c15e6d40410ada6fd23b125e1e6137ad6547 -> main
+From /Users/runner/work/clover-c1/clover-c1/.macos-native-origin
+ * [new branch]        main       -> origin/main
+From /Users/runner/work/clover-c1/clover-c1/.macos-native-origin
+ * [new branch]        main       -> upstream/main
+Switched to a new branch 'main'

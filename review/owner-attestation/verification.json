@@ -1,0 +1,217 @@
+{
+  "baseline_commit": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+  "baseline": {
+    "source_root": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-295fba45/.test-sandbox/baseline",
+    "files": [
+      {
+        "file": "tests/gateway/test_status_update_owner.py",
+        "exit_code": 1,
+        "tests": 23,
+        "skipped": 0,
+        "failures": [
+          "tests.gateway.test_status_update_owner::test_subordinate_health_preserves_exact_owner_admission",
+          "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields0]",
+          "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields1]",
+          "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields2]",
+          "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields3]",
+          "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields4]",
+          "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields5]",
+          "tests.gateway.test_status_update_owner::test_health_writer_cannot_change_owner_contract[fields6]",
+          "tests.gateway.test_status_update_owner::test_overlapping_health_write_cannot_restore_stale_owner_state",
+          "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[pid]",
+          "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[reused]",
+          "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[unknown-time]",
+          "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[dead]",
+          "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[home]",
+          "tests.gateway.test_status_update_owner::test_unverified_owner_cannot_be_preserved_by_health_writer[kind]",
+          "tests.gateway.test_status_update_owner::test_missing_or_malformed_home_is_not_an_owner_binding[None]",
+          "tests.gateway.test_status_update_owner::test_missing_or_malformed_home_is_not_an_owner_binding[]",
+          "tests.gateway.test_status_update_owner::test_missing_or_malformed_home_is_not_an_owner_binding[   ]",
+          "tests.gateway.test_status_update_owner::test_health_writer_never_repairs_missing_capability",
+          "tests.gateway.test_status_update_owner::test_owner_replacement_during_health_merge_is_not_overwritten",
+          "tests.gateway.test_status_update_owner::test_frozen_158_caller_preserves_pre_pull_boundary[True]"
+        ]
+      },
+      {
+        "file": "tests/clover_cli/test_postpull_missing_owner_guard.py",
+        "exit_code": 0,
+        "tests": 1,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_status.py",
+        "exit_code": 0,
+        "tests": 74,
+        "skipped": 2,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_runtime_status_liveness_reconciliation.py",
+        "exit_code": 0,
+        "tests": 30,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_adapter_connect_classification.py",
+        "exit_code": 0,
+        "tests": 23,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_multiplex_lifecycle.py",
+        "exit_code": 0,
+        "tests": 9,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_restart_reply_delivery.py",
+        "exit_code": 0,
+        "tests": 8,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_update_cron_drain.py",
+        "exit_code": 0,
+        "tests": 1,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_update_delivery_guard.py",
+        "exit_code": 0,
+        "tests": 19,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_update_delivery_guard_wrappers.py",
+        "exit_code": 0,
+        "tests": 24,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_legacy_successor_identity_fences.py",
+        "exit_code": 0,
+        "tests": 18,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_windows_update_single_relaunch.py",
+        "exit_code": 0,
+        "tests": 22,
+        "skipped": 0,
+        "failures": []
+      }
+    ],
+    "tests": 252,
+    "skipped": 2,
+    "failed": 21,
+    "file_errors": 0
+  },
+  "candidate": {
+    "source_root": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-295fba45",
+    "files": [
+      {
+        "file": "tests/gateway/test_status_update_owner.py",
+        "exit_code": 0,
+        "tests": 23,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_postpull_missing_owner_guard.py",
+        "exit_code": 0,
+        "tests": 1,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_status.py",
+        "exit_code": 0,
+        "tests": 74,
+        "skipped": 2,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_runtime_status_liveness_reconciliation.py",
+        "exit_code": 0,
+        "tests": 30,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_adapter_connect_classification.py",
+        "exit_code": 0,
+        "tests": 23,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_multiplex_lifecycle.py",
+        "exit_code": 0,
+        "tests": 9,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_restart_reply_delivery.py",
+        "exit_code": 0,
+        "tests": 8,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/gateway/test_update_cron_drain.py",
+        "exit_code": 0,
+        "tests": 1,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_update_delivery_guard.py",
+        "exit_code": 0,
+        "tests": 19,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_update_delivery_guard_wrappers.py",
+        "exit_code": 0,
+        "tests": 24,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_legacy_successor_identity_fences.py",
+        "exit_code": 0,
+        "tests": 18,
+        "skipped": 0,
+        "failures": []
+      },
+      {
+        "file": "tests/clover_cli/test_windows_update_single_relaunch.py",
+        "exit_code": 0,
+        "tests": 22,
+        "skipped": 0,
+        "failures": []
+      }
+    ],
+    "tests": 252,
+    "skipped": 2,
+    "failed": 0,
+    "file_errors": 0
+  },
+  "passed": 250,
+  "command": "PYTHONDONTWRITEBYTECODE=1 /home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/venv/bin/python review/owner-attestation/run_checks.py",
+  "native_windows": "parent-owned pending",
+  "native_macos": "parent-owned pending",
+  "independent_review": "parent-owned pending",
+  "live_migration": "not performed or authorized"
+}

@@ -1,0 +1,105 @@
+name: macOS framework wrapper ownership proof
+
+on:
+  workflow_dispatch:
+    inputs:
+      product_sha:
+        description: Exact reviewed product commit (40 lowercase hex characters)
+        required: true
+        type: string
+      old_sha:
+        description: Exact immutable old gateway commit
+        required: true
+        default: '9535350bee1d57cf7e466672e6f416403886bec1'
+        type: string
+  # Bootstrap this new branch-defined workflow without changing any existing
+  # workflow or publishing it to main. Only this dedicated branch can do this.
+  push:
+    branches: ['clover-subagent/subagent-sa-0-578b1794']
+    paths: ['.github/workflows/macos-wrapper-owner-proof.yml']
+
+permissions:
+  contents: read
+
+concurrency:
+  group: macos-wrapper-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  framework-owner:
+    runs-on: macos-14
+    timeout-minutes: 15
+    env:
+      PRODUCT_SHA: ${{ inputs.product_sha || github.sha }}
+      OLD_SHA: ${{ inputs.old_sha || '9535350bee1d57cf7e466672e6f416403886bec1' }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify literal source identities
+        run: |
+          python3 -c 'import os,re; assert all(re.fullmatch("[0-9a-f]{40}", os.environ[k]) for k in ("PRODUCT_SHA", "OLD_SHA"))'
+          test "$(git rev-parse "$PRODUCT_SHA^{commit}")" = "$PRODUCT_SHA"
+          git merge-base --is-ancestor "$OLD_SHA" "$PRODUCT_SHA"
+          mkdir -p artifacts/suni-ownership/hosted
+      - name: Private Homebrew framework Python test environment
+        run: |
+          unset VIRTUAL_ENV PYTHONPATH PYTHONHOME
+          if ! test -x "$(brew --prefix)/opt/python@3.12/bin/python3.12"; then brew install python@3.12; fi
+          "$(brew --prefix python@3.12)/bin/python3.12" -m venv .macos-proof-venv
+          .macos-proof-venv/bin/python -m pip install psutil==7.2.2
+      - name: Native RED followed by exact-source GREEN
+        run: |
+          unset VIRTUAL_ENV PYTHONPATH PYTHONHOME
+          set +e
+          .macos-proof-venv/bin/python -B artifacts/suni-ownership/native_owner_case.py --source-ref 3b54f413376eb99f8b83bfd4a0a340d01825014d --evidence artifacts/suni-ownership/hosted/red
+          red=$?
+          set -e
+          test "$red" = 1
+          .macos-proof-venv/bin/python -c 'import json; r=json.load(open("artifacts/suni-ownership/hosted/red/native-owner-case.json")); assert r["framework_alias_exercised"] and not r["owner_admission"] and r["identity_stable"] and r["fixture_label_absent_after_cleanup"]'
+          .macos-proof-venv/bin/python -B artifacts/suni-ownership/native_owner_case.py --source-ref "$PRODUCT_SHA" --evidence artifacts/suni-ownership/hosted/green
+          SUNI_SOURCE_REF="$PRODUCT_SHA" .macos-proof-venv/bin/python -B tests/clover_cli/test_suni_macos_wrapper_acceptance.py > artifacts/suni-ownership/hosted/replay.log 2>&1
+      - name: Upload exact process/source evidence even on failure
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-framework-owner-${{ github.run_id }}
+          path: artifacts/suni-ownership/hosted
+          if-no-files-found: error
+
+  frozen-launchd-update:
+    needs: framework-owner
+    runs-on: macos-14
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        scenario: [chat, pending-chat]
+    env:
+      PRODUCT_SHA: ${{ inputs.product_sha || github.sha }}
+      OLD_SHA: ${{ inputs.old_sha || '9535350bee1d57cf7e466672e6f416403886bec1' }}
+      PYTHONDONTWRITEBYTECODE: '1'
+    steps:
+      - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Framework interpreter and isolated installer tool
+        run: |
+          unset VIRTUAL_ENV PYTHONPATH PYTHONHOME
+          if ! test -x "$(brew --prefix)/opt/python@3.12/bin/python3.12"; then brew install python@3.12; fi
+          "$(brew --prefix python@3.12)/bin/python3.12" -m venv .macos-controller
+          .macos-controller/bin/python -m pip install uv psutil==7.2.2
+      - name: Real IRC update and accepted turn across normal launchd restart
+        run: |
+          unset VIRTUAL_ENV PYTHONPATH PYTHONHOME
+          .macos-controller/bin/python -B .github/native-proof/macos_wrapper_update.py --product-sha "$PRODUCT_SHA" --old-sha "$OLD_SHA" --scenario "${{ matrix.scenario }}" --evidence "artifacts/suni-ownership/hosted-update-${{ matrix.scenario }}"
+      - name: Upload update receipts and explicit coverage boundaries
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: macos-frozen-launchd-update-${{ matrix.scenario }}-${{ github.run_id }}
+          path: artifacts/suni-ownership/hosted-update-${{ matrix.scenario }}
+          if-no-files-found: error

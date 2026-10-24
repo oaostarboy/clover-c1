@@ -1,0 +1,13 @@
+.....→ Restarting gateways left on pre-update code...
+  ✓ No running gateways — nothing to restart.
+.........
+ℹ The running gateway predates restart-safe reply delivery. The update continues: the gateway is restarted when it is idle (waiting up to a couple of minutes; if it stays busy the restart remains pending). An ordinary reply may be delivered once more during the first transition.
+  legacy: default (PID 123): identified legacy runtime
+.
+ℹ The running gateway predates restart-safe reply delivery. The update continues: the gateway is restarted when it is idle (waiting up to a couple of minutes; if it stays busy the restart remains pending). An ordinary reply may be delivered once more during the first transition.
+  legacy: default (PID 123): identified legacy runtime
+..
+✗ Update not completed: Gateway discovery could not establish runtime ownership.
+Source or dependencies may already have changed. Automatic completion remains deferred; pending restart intent and saved state are retained. Resolve the reported condition and retry clover update.
+..
+19 passed in 1.82s

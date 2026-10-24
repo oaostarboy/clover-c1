@@ -1,0 +1,24 @@
+FF.                                                                      [100%]
+=================================== FAILURES ===================================
+_____________ test_new_lock_is_owner_only_in_traversable_home[18] ______________
+tests/gateway/test_status_lock_security.py:33: in test_new_lock_is_owner_only_in_traversable_home
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o600
+E   AssertionError: assert 420 == 384
+E    +  where 420 = <built-in function S_IMODE>(33188)
+E    +    where <built-in function S_IMODE> = stat.S_IMODE
+E    +    and   33188 = os.stat_result(st_mode=33188, st_ino=59248070, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1792804965, st_mtime=1792804965, st_ctime=1792804965).st_mode
+E    +      where os.stat_result(st_mode=33188, st_ino=59248070, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1792804965, st_mtime=1792804965, st_ctime=1792804965) = stat()
+E    +        where stat = PosixPath('/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subage...0-f6608989/.test-sandbox/lock/tmp/pytest-of-starboy/pytest-0/test_new_lock_is_owner_only_in0/owner/gateway_state.lock').stat
+______________ test_new_lock_is_owner_only_in_traversable_home[0] ______________
+tests/gateway/test_status_lock_security.py:33: in test_new_lock_is_owner_only_in_traversable_home
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o600
+E   AssertionError: assert 438 == 384
+E    +  where 438 = <built-in function S_IMODE>(33206)
+E    +    where <built-in function S_IMODE> = stat.S_IMODE
+E    +    and   33206 = os.stat_result(st_mode=33206, st_ino=59248080, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1792804965, st_mtime=1792804965, st_ctime=1792804965).st_mode
+E    +      where os.stat_result(st_mode=33206, st_ino=59248080, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1792804965, st_mtime=1792804965, st_ctime=1792804965) = stat()
+E    +        where stat = PosixPath('/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subage...0-f6608989/.test-sandbox/lock/tmp/pytest-of-starboy/pytest-0/test_new_lock_is_owner_only_in1/owner/gateway_state.lock').stat
+=========================== short test summary info ============================
+FAILED tests/gateway/test_status_lock_security.py::test_new_lock_is_owner_only_in_traversable_home[18]
+FAILED tests/gateway/test_status_lock_security.py::test_new_lock_is_owner_only_in_traversable_home[0]
+2 failed, 1 passed in 0.84s

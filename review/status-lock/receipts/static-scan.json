@@ -1,0 +1,13 @@
+{
+  "scope": "added production lines in gateway/status.py",
+  "findings": {
+    "literal_secret": [],
+    "shell_injection": [],
+    "dynamic_exec": [],
+    "unsafe_deserialization": [],
+    "interpolated_sql": []
+  },
+  "diff_check_exit_code": 0,
+  "independent_review": "parent-owned; no approval claimed",
+  "lint": "ruff not installed in private environment"
+}

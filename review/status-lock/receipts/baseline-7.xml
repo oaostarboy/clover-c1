@@ -1,0 +1,1 @@
+<?xml version="1.0" encoding="utf-8"?><testsuites name="pytest tests"><testsuite name="pytest" errors="0" failures="0" skipped="0" tests="1" time="1.590" timestamp="2026-10-24T01:28:03.701708+00:00" hostname="OctaviaOS"><testcase classname="tests.gateway.test_update_cron_drain" name="test_drain_active_agents_waits_for_in_flight_cron_jobs" time="0.438" /></testsuite></testsuites>

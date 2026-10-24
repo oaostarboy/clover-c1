@@ -1,0 +1,2 @@
+exit_code=0
+{"passed": true, "scope": "LINUX-PORTABLE-FIXTURE-NOT-MACOS-PROOF", "evidence": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-1-77f7fccd/artifacts/suni-ownership/linux-portable/native-owner-case.json"}

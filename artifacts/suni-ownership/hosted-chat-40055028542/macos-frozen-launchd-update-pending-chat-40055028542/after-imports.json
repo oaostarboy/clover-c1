@@ -1,0 +1,18 @@
+{
+  "head": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+  "tree": "22623c567b679fa8ce052dce0caaf982e1bfd9a6",
+  "origins": {
+    "clover_cli": "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/clover_cli/__init__.py",
+    "agent": "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/agent/__init__.py",
+    "cron.notepad": "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/cron/notepad.py",
+    "gateway": "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/gateway/__init__.py"
+  },
+  "direct_url": {
+    "url": "file:///Users/runner/work/clover-c1/clover-c1/.macos-native-install",
+    "dir_info": {
+      "editable": true
+    }
+  },
+  "metadata_path": "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/lib/python3.12/site-packages/clover_c1-1.5.6.dist-info/direct_url.json",
+  "origin": "/Users/runner/work/clover-c1/clover-c1/.macos-native-origin.git"
+}

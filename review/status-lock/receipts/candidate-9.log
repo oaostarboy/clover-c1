@@ -1,0 +1,5 @@
+.
+ℹ The running gateway predates restart-safe reply delivery. The update continues: the gateway is restarted when it is idle (waiting up to a couple of minutes; if it stays busy the restart remains pending). An ordinary reply may be delivered once more during the first transition.
+  legacy: default (PID 11413): identified legacy runtime
+.......................
+24 passed, 2 deselected in 1.20s

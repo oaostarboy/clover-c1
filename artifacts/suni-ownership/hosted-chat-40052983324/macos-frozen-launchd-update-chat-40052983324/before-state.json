@@ -1,0 +1,66 @@
+{
+  "pid": 2302,
+  "kind": "clover-gateway",
+  "argv": [
+    "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/clover_cli/main.py",
+    "gateway",
+    "run",
+    "--external-supervisor"
+  ],
+  "start_time": 179280783636,
+  "clover_home": "/Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover",
+  "gateway_state": "running",
+  "exit_reason": null,
+  "restart_requested": false,
+  "active_agents": 0,
+  "platforms": {
+    "api_server": {
+      "state": "connected",
+      "error_code": null,
+      "error_message": null,
+      "updated_at": "2026-10-24T02:10:40.515321+00:00",
+      "writer_pid": 2302,
+      "writer_start_time": 179280783636
+    },
+    "irc": {
+      "state": "connected",
+      "error_code": null,
+      "error_message": null,
+      "updated_at": "2026-10-24T02:10:40.517172+00:00",
+      "writer_pid": 2302,
+      "writer_start_time": 179280783636
+    }
+  },
+  "session_store": {
+    "status": "ok"
+  },
+  "updated_at": "2026-10-24T02:10:40.523682+00:00",
+  "code_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+  "code_version": "1.5.6",
+  "native_wrapper": {
+    "pid": 2294,
+    "start_time": 179280783560,
+    "argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.stderr_timestamp",
+      "--error-log",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/logs/gateway.error.log",
+      "--",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "worker_argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ]
+  }
+}
