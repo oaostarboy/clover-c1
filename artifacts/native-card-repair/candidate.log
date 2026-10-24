@@ -1,0 +1,281 @@
+FFFFFFF.............................................................F.F. [ 16%]
+....................................................F................... [ 32%]
+........................................................................ [ 48%]
+............................FF.F........................................ [ 64%]
+........................................................................ [ 81%]
+...........................................................FF.FFFF..F..F [ 97%]
+FFFFFFFFFFFF                                                             [100%]
+=================================== FAILURES ===================================
+________ test_native_empty_say_handoffs_join_and_follow_after_160_turns ________
+tests/gateway/test_native_card_grouping.py:192: in test_native_empty_say_handoffs_join_and_follow_after_160_turns
+    first = await native(pubs[0], "deleg_poster", title="designing posters")
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/gateway/test_native_card_grouping.py:165: in launch
+    assert result["status"] == "dispatched", result
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+----------------------------- Captured stderr call -----------------------------
+[33m⚠ Config issues detected in config.yaml:[0m
+  [31m✗[0m Could not load config.yaml
+  [2mRun 'clover doctor' for fix suggestions.[0m
+
+[33m⚠ Config issues detected in config.yaml:[0m
+  [31m✗[0m Could not load config.yaml
+  [2mRun 'clover doctor' for fix suggestions.[0m
+
+____________ test_native_cards_do_not_join_or_follow_another_thread ____________
+tests/gateway/test_native_card_grouping.py:239: in test_native_cards_do_not_join_or_follow_another_thread
+    first = await native(pubs[0], "deleg_thread7", say="checking thread seven")
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/gateway/test_native_card_grouping.py:165: in launch
+    assert result["status"] == "dispatched", result
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+___________ test_native_simultaneous_turn_placement_shares_one_card ____________
+tests/gateway/test_native_card_grouping.py:267: in test_native_simultaneous_turn_placement_shares_one_card
+    await asyncio.gather(native(pubs[0], "deleg_race1", say="first opener"),
+tests/gateway/test_native_card_grouping.py:165: in launch
+    assert result["status"] == "dispatched", result
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+_ test_native_ended_child_leaves_board_and_never_follows_again[completed-None] _
+tests/gateway/test_native_card_grouping.py:287: in test_native_ended_child_leaves_board_and_never_follows_again
+    first = await native(pubs[0], "ending", title="first work")
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/gateway/test_native_card_grouping.py:165: in launch
+    assert result["status"] == "dispatched", result
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+_ test_native_ended_child_leaves_board_and_never_follows_again[completed-report1] _
+tests/gateway/test_native_card_grouping.py:287: in test_native_ended_child_leaves_board_and_never_follows_again
+    first = await native(pubs[0], "ending", title="first work")
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/gateway/test_native_card_grouping.py:165: in launch
+    assert result["status"] == "dispatched", result
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+_ test_native_ended_child_leaves_board_and_never_follows_again[interrupted-None] _
+tests/gateway/test_native_card_grouping.py:287: in test_native_ended_child_leaves_board_and_never_follows_again
+    first = await native(pubs[0], "ending", title="first work")
+            ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+tests/gateway/test_native_card_grouping.py:165: in launch
+    assert result["status"] == "dispatched", result
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+_______ test_native_other_profile_adapter_never_groups_or_deletes_cards ________
+tests/gateway/test_native_card_grouping.py:327: in test_native_other_profile_adapter_never_groups_or_deletes_cards
+    await native(pubs[0], "profile_a", say="first profile")
+tests/gateway/test_native_card_grouping.py:165: in launch
+    assert result["status"] == "dispatched", result
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+_________________ test_board_left_by_previous_gateway_is_swept _________________
+tests/gateway/test_delegation_card_follow.py:397: in test_board_left_by_previous_gateway_is_swept
+    assert da._board_store_load()[da._board_store_key(ad, "chat-A")] == [new]
+E   AssertionError: assert ['101'] == ['102']
+E     
+E     At index 0 diff: '101' != '102'
+E     Use -v to get more diff
+__ test_new_dispatch_joins_and_follows_stranded_release_card_after_turn_churn __
+tests/gateway/test_card_follow_multiturn.py:147: in test_new_dispatch_joins_and_follows_stranded_release_card_after_turn_churn
+    assert record["card"] == {
+E   AssertionError: assert None == {'platform': 'telegram', 'chat_id': '123', 'thread_id': '', 'message_id': '172'}
+______ test_canonical_config_writer_round_trips_through_gateway_resolver _______
+tests/gateway/test_delegation_activity.py:681: in test_canonical_config_writer_round_trips_through_gateway_resolver
+    set_config_value("display.delegation_heartbeat_seconds", "120")
+clover_cli/config.py:5910: in set_config_value
+    atomic_yaml_write(config_path, user_config, sort_keys=False)
+utils.py:542: in atomic_yaml_write
+    real_path = atomic_replace(tmp_path, path)
+                ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+utils.py:230: in atomic_replace
+    os.replace(tmp_str, real_path)
+E   OSError: [Errno 28] No space left on device: '/var/tmp/pytest-of-starboy/pytest-16/test_canonical_config_writer_r0/.clover/.config_g26229i0.tmp' -> '/var/tmp/pytest-of-starboy/pytest-16/test_canonical_config_writer_r0/.clover/config.yaml'
+----------------------------- Captured stdout call -----------------------------
+✓ Set display.platforms.telegram.delegation_activity = False in /var/tmp/pytest-of-starboy/pytest-16/test_canonical_config_writer_r0/.clover/config.yaml
+___________ test_config_helper_card_classic_switches_the_style_back ____________
+tests/agent/test_ack_checklist_unified.py:301: in test_config_helper_card_classic_switches_the_style_back
+    assert ac.card_style() == "classic" and ac.unified() is False
+E   AssertionError: assert ('unified' == 'classic'
+E     
+E     - classic
+E     + unified)
+___________ test_config_switch_takes_effect_after_the_cache_expires ____________
+tests/agent/test_ack_checklist_unified.py:310: in test_config_switch_takes_effect_after_the_cache_expires
+    assert ac.card_style() == "classic"
+E   AssertionError: assert 'unified' == 'classic'
+E     
+E     - classic
+E     + unified
+_____________________ test_style_is_cached_inside_the_ttl ______________________
+tests/agent/test_ack_checklist_unified.py:326: in test_style_is_cached_inside_the_ttl
+    assert ac.card_style() == "classic"
+E   AssertionError: assert 'unified' == 'classic'
+E     
+E     - classic
+E     + unified
+__________________ test_capacity_rejection_never_runs_inline ___________________
+tests/tools/test_delegate_strict_background.py:177: in test_capacity_rejection_never_runs_inline
+    _assert_rejected(parsed, "capacity")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+------------------------------ Captured log call -------------------------------
+INFO     tools.async_delegation:async_delegation.py:2779 Dispatched async delegation batch deleg_bbfd02db (1 task(s), session_key=<cli>)
+__________________ test_capacity_precheck_builds_no_children ___________________
+tests/tools/test_delegate_strict_background.py:190: in test_capacity_precheck_builds_no_children
+    _assert_rejected(parsed, "capacity")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+------------------------------ Captured log call -------------------------------
+INFO     tools.async_delegation:async_delegation.py:2779 Dispatched async delegation batch deleg_465dbc70 (1 task(s), session_key=<cli>)
+_____ test_capacity_race_after_precheck_is_rejected_and_children_released ______
+tests/tools/test_delegate_strict_background.py:216: in test_capacity_race_after_precheck_is_rejected_and_children_released
+    _assert_rejected(parsed, "capacity")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+________________________ test_schedule_failure_rejected ________________________
+tests/tools/test_delegate_strict_background.py:237: in test_schedule_failure_rejected
+    _assert_rejected(parsed, "schedule")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+_________________ test_executor_construction_failure_rejected __________________
+tests/tools/test_delegate_strict_background.py:252: in test_executor_construction_failure_rejected
+    _assert_rejected(parsed, "schedule")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+__________ test_thread_start_failure_leaves_no_runnable_rejected_job ___________
+tests/tools/test_delegate_strict_background.py:309: in test_thread_start_failure_leaves_no_runnable_rejected_job
+    _assert_rejected(parsed, "schedule")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+_____________ test_persistence_failure_rejected_no_phantom_record ______________
+tests/tools/test_delegate_strict_background.py:392: in test_persistence_failure_rejected_no_phantom_record
+    _assert_rejected(parsed, "persistence")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+______________ test_delivery_unsupported_rejected_in_strict_mode _______________
+tests/tools/test_delegate_strict_background.py:443: in test_delivery_unsupported_rejected_in_strict_mode
+    _assert_rejected(parsed, "delivery_unsupported")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+_________ test_delivery_unsupported_still_sync_for_noneligible_caller __________
+tests/tools/test_delegate_strict_background.py:454: in test_delivery_unsupported_still_sync_for_noneligible_caller
+    assert parsed["results"][0]["status"] == "completed"
+           ^^^^^^^^^^^^^^^^^
+E   KeyError: 'results'
+_______________ test_construction_failure_closes_prior_children ________________
+tests/tools/test_delegate_strict_background.py:472: in test_construction_failure_closes_prior_children
+    assert [c.closed for c in harness.built] == [1]
+E   assert [] == [1]
+E     
+E     Right contains one more item: 1
+E     Use -v to get more diff
+_________ test_construction_failure_is_a_rejection_for_strict_callers __________
+tests/tools/test_delegate_strict_background.py:481: in test_construction_failure_is_a_rejection_for_strict_callers
+    _assert_rejected(parsed, "construction")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+____ test_any_construction_failure_is_a_rejection_for_strict_callers[exc0] _____
+tests/tools/test_delegate_strict_background.py:505: in test_any_construction_failure_is_a_rejection_for_strict_callers
+    _assert_rejected(parsed, "construction")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+____ test_any_construction_failure_is_a_rejection_for_strict_callers[exc1] _____
+tests/tools/test_delegate_strict_background.py:505: in test_any_construction_failure_is_a_rejection_for_strict_callers
+    _assert_rejected(parsed, "construction")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+__ test_any_construction_failure_closes_prior_children_for_every_caller[exc0] __
+tests/tools/test_delegate_strict_background.py:530: in test_any_construction_failure_closes_prior_children_for_every_caller
+    with pytest.raises(type(exc)):
+E   Failed: DID NOT RAISE RuntimeError
+__ test_any_construction_failure_closes_prior_children_for_every_caller[exc1] __
+tests/tools/test_delegate_strict_background.py:530: in test_any_construction_failure_closes_prior_children_for_every_caller
+    with pytest.raises(type(exc)):
+E   Failed: DID NOT RAISE OSError
+_______ test_failure_while_wiring_a_built_child_releases_that_child_too ________
+tests/tools/test_delegate_strict_background.py:553: in test_failure_while_wiring_a_built_child_releases_that_child_too
+    _assert_rejected(parsed, "construction")
+tests/tools/test_delegate_strict_background.py:161: in _assert_rejected
+    assert parsed["status"] == "rejected", parsed
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+___________ test_capacity_fallback_unchanged_for_noneligible_caller ____________
+tests/tools/test_delegate_strict_background.py:569: in test_capacity_fallback_unchanged_for_noneligible_caller
+    assert parsed["results"][0]["status"] == "completed"
+           ^^^^^^^^^^^^^^^^^
+E   KeyError: 'results'
+------------------------------ Captured log call -------------------------------
+INFO     tools.async_delegation:async_delegation.py:2779 Dispatched async delegation batch deleg_836eb6dd (1 task(s), session_key=<cli>)
+_________________ test_explicit_synchronous_call_is_unchanged __________________
+tests/tools/test_delegate_strict_background.py:577: in test_explicit_synchronous_call_is_unchanged
+    assert parsed["results"][0]["status"] == "completed"
+           ^^^^^^^^^^^^^^^^^
+E   KeyError: 'results'
+___________ test_accepted_background_dispatch_hands_the_request_off ____________
+tests/tools/test_delegate_strict_background.py:587: in test_accepted_background_dispatch_hands_the_request_off
+    assert parsed["status"] == "dispatched"
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+________ test_monitor_failure_after_submit_still_hands_the_request_off _________
+tests/tools/test_delegate_strict_background.py:614: in test_monitor_failure_after_submit_still_hands_the_request_off
+    assert parsed["status"] == "dispatched"
+           ^^^^^^^^^^^^^^^^
+E   KeyError: 'status'
+=========================== short test summary info ============================
+FAILED tests/gateway/test_native_card_grouping.py::test_native_empty_say_handoffs_join_and_follow_after_160_turns
+FAILED tests/gateway/test_native_card_grouping.py::test_native_cards_do_not_join_or_follow_another_thread
+FAILED tests/gateway/test_native_card_grouping.py::test_native_simultaneous_turn_placement_shares_one_card
+FAILED tests/gateway/test_native_card_grouping.py::test_native_ended_child_leaves_board_and_never_follows_again[completed-None]
+FAILED tests/gateway/test_native_card_grouping.py::test_native_ended_child_leaves_board_and_never_follows_again[completed-report1]
+FAILED tests/gateway/test_native_card_grouping.py::test_native_ended_child_leaves_board_and_never_follows_again[interrupted-None]
+FAILED tests/gateway/test_native_card_grouping.py::test_native_other_profile_adapter_never_groups_or_deletes_cards
+FAILED tests/gateway/test_delegation_card_follow.py::test_board_left_by_previous_gateway_is_swept
+FAILED tests/gateway/test_card_follow_multiturn.py::test_new_dispatch_joins_and_follows_stranded_release_card_after_turn_churn
+FAILED tests/gateway/test_delegation_activity.py::test_canonical_config_writer_round_trips_through_gateway_resolver
+FAILED tests/agent/test_ack_checklist_unified.py::test_config_helper_card_classic_switches_the_style_back
+FAILED tests/agent/test_ack_checklist_unified.py::test_config_switch_takes_effect_after_the_cache_expires
+FAILED tests/agent/test_ack_checklist_unified.py::test_style_is_cached_inside_the_ttl
+FAILED tests/tools/test_delegate_strict_background.py::test_capacity_rejection_never_runs_inline
+FAILED tests/tools/test_delegate_strict_background.py::test_capacity_precheck_builds_no_children
+FAILED tests/tools/test_delegate_strict_background.py::test_capacity_race_after_precheck_is_rejected_and_children_released
+FAILED tests/tools/test_delegate_strict_background.py::test_schedule_failure_rejected
+FAILED tests/tools/test_delegate_strict_background.py::test_executor_construction_failure_rejected
+FAILED tests/tools/test_delegate_strict_background.py::test_thread_start_failure_leaves_no_runnable_rejected_job
+FAILED tests/tools/test_delegate_strict_background.py::test_persistence_failure_rejected_no_phantom_record
+FAILED tests/tools/test_delegate_strict_background.py::test_delivery_unsupported_rejected_in_strict_mode
+FAILED tests/tools/test_delegate_strict_background.py::test_delivery_unsupported_still_sync_for_noneligible_caller
+FAILED tests/tools/test_delegate_strict_background.py::test_construction_failure_closes_prior_children
+FAILED tests/tools/test_delegate_strict_background.py::test_construction_failure_is_a_rejection_for_strict_callers
+FAILED tests/tools/test_delegate_strict_background.py::test_any_construction_failure_is_a_rejection_for_strict_callers[exc0]
+FAILED tests/tools/test_delegate_strict_background.py::test_any_construction_failure_is_a_rejection_for_strict_callers[exc1]
+FAILED tests/tools/test_delegate_strict_background.py::test_any_construction_failure_closes_prior_children_for_every_caller[exc0]
+FAILED tests/tools/test_delegate_strict_background.py::test_any_construction_failure_closes_prior_children_for_every_caller[exc1]
+FAILED tests/tools/test_delegate_strict_background.py::test_failure_while_wiring_a_built_child_releases_that_child_too
+FAILED tests/tools/test_delegate_strict_background.py::test_capacity_fallback_unchanged_for_noneligible_caller
+FAILED tests/tools/test_delegate_strict_background.py::test_explicit_synchronous_call_is_unchanged
+FAILED tests/tools/test_delegate_strict_background.py::test_accepted_background_dispatch_hands_the_request_off
+FAILED tests/tools/test_delegate_strict_background.py::test_monitor_failure_after_submit_still_hands_the_request_off
+33 failed, 411 passed in 202.86s (0:03:22)

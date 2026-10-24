@@ -1,0 +1,30 @@
+{
+  "baseline": {
+    "cases": 444,
+    "unique": 444,
+    "passed": 442,
+    "failures": [
+      "tests.gateway.test_native_card_grouping::test_native_empty_say_handoffs_join_and_follow_after_160_turns",
+      "tests.gateway.test_native_card_grouping::test_native_cards_do_not_join_or_follow_another_thread"
+    ],
+    "errors": 0,
+    "skipped": 0
+  },
+  "candidate": {
+    "cases": 444,
+    "unique": 444,
+    "passed": 444,
+    "failures": [],
+    "errors": 0,
+    "skipped": 0
+  },
+  "baseline_commit": "3b54f413376eb99f8b83bfd4a0a340d01825014d",
+  "test_identity_sets_equal": true,
+  "temporary_filesystem": "TMPDIR=/dev/shm; /var/tmp raw attempts retained separately (Btrfs ENOSPC on atomic replace)",
+  "candidate_sha256": {
+    "gateway/delegation_activity.py": "1eea1d9f3cc45982b472a345ba86e45d72afd86825b1e99253fdb5d60f8228e3",
+    "gateway/platforms/base.py": "fad9f33f93e953bd07f84fd2575928e42bd2ff1c516ee7a6c22a0b3f92913770",
+    "tests/gateway/test_native_card_grouping.py": "d7fcda6575fec1f00eb104718de3232ac5f4361be4f7b602300d5b6e7c0a9c8c"
+  },
+  "baseline_fixture_sha256": "d7fcda6575fec1f00eb104718de3232ac5f4361be4f7b602300d5b6e7c0a9c8c"
+}

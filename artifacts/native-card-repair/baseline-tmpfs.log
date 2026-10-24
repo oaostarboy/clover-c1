@@ -1,0 +1,30 @@
+FF...................................................................... [ 16%]
+........................................................................ [ 32%]
+........................................................................ [ 48%]
+........................................................................ [ 64%]
+........................................................................ [ 81%]
+........................................................................ [ 97%]
+............                                                             [100%]
+=================================== FAILURES ===================================
+________ test_native_empty_say_handoffs_join_and_follow_after_160_turns ________
+tests/gateway/test_native_card_grouping.py:199: in test_native_empty_say_handoffs_join_and_follow_after_160_turns
+    assert len(wire.live()) == 1, "two active native handoffs must share ONE live card"
+E   AssertionError: two active native handoffs must share ONE live card
+E   assert 2 == 1
+E    +  where 2 = len({101: {'chat_id': 123, 'text': '**> 🔀 Sonnet 5\\.5 · 🛠 1 call · ⏱ 4s\n> _tap to watch 🍀_\n> ⠀\n> *designing posters*\n...s\\.txt_\n> ○ verify result||', 'parse_mode': <ParseMode.MARKDOWN_V2: 'MarkdownV2'>, 'reply_to_message_id': None, ...}})
+E    +    where {101: {'chat_id': 123, 'text': '**> 🔀 Sonnet 5\\.5 · 🛠 1 call · ⏱ 4s\n> _tap to watch 🍀_\n> ⠀\n> *designing posters*\n...s\\.txt_\n> ○ verify result||', 'parse_mode': <ParseMode.MARKDOWN_V2: 'MarkdownV2'>, 'reply_to_message_id': None, ...}} = live()
+E    +      where live = <tests.gateway.test_native_card_grouping.Wire object at 0x7f6d78e99590>.live
+____________ test_native_cards_do_not_join_or_follow_another_thread ____________
+tests/gateway/test_native_card_grouping.py:243: in test_native_cards_do_not_join_or_follow_another_thread
+    assert len(wire.live(thread=7)) == len(wire.live(thread=8)) == len(wire.live(chat="456")) == 1
+E   AssertionError: assert 1 == 0
+E    +  where 1 = len({108: {'chat_id': 123, 'text': '**> 🔀 *3 subagents* · 0 of 3 done\n> _tap to watch 🍀_\n> ⠀\n> ■ *checking links*\n> \u...unning · 🛠 3 calls · ⏱ 13s_||', 'parse_mode': <ParseMode.MARKDOWN_V2: 'MarkdownV2'>, 'reply_to_message_id': None, ...}})
+E    +    where {108: {'chat_id': 123, 'text': '**> 🔀 *3 subagents* · 0 of 3 done\n> _tap to watch 🍀_\n> ⠀\n> ■ *checking links*\n> \u...unning · 🛠 3 calls · ⏱ 13s_||', 'parse_mode': <ParseMode.MARKDOWN_V2: 'MarkdownV2'>, 'reply_to_message_id': None, ...}} = live(thread=7)
+E    +      where live = <tests.gateway.test_native_card_grouping.Wire object at 0x7f6d727e58d0>.live
+E    +  and   0 = len({})
+E    +    where {} = live(thread=8)
+E    +      where live = <tests.gateway.test_native_card_grouping.Wire object at 0x7f6d727e58d0>.live
+=========================== short test summary info ============================
+FAILED tests/gateway/test_native_card_grouping.py::test_native_empty_say_handoffs_join_and_follow_after_160_turns
+FAILED tests/gateway/test_native_card_grouping.py::test_native_cards_do_not_join_or_follow_another_thread
+2 failed, 442 passed in 91.45s (0:01:31)

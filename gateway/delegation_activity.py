@@ -109,7 +109,14 @@ def _is_ack_card_text(content: Any) -> bool:
         return False
 
 
-def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None, content: Any = None) -> None:
+def _follow_key(adapter: Any, chat_id: Any, metadata: Any = None) -> Tuple[Any, ...]:
+    # Native Telegram topics are separate conversations, not one shared board.
+    key = _inbox_key(adapter, chat_id)
+    thread = str(metadata.get("thread_id") or "") if isinstance(metadata, dict) else ""
+    return (*key, thread) if thread and _adapter_is_telegram(adapter) and _unified_style() else key
+
+
+def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None, content: Any = None, metadata: Any = None) -> None:
     """Record that the bot just posted a message in this chat. When running
     subagent cards live there, move them below it after a short quiet window
     (coalesces streaming bursts into one move). Never raises.
@@ -119,7 +126,7 @@ def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None, content: A
     try:
         if _CARD_SEND.get() or adapter is None or chat_id in (None, ""):
             return
-        key = _inbox_key(adapter, chat_id)
+        key = _follow_key(adapter, chat_id, metadata)
         if message_id:
             prev = _LAST_OUT.get(key)
             if prev is None or _is_newer(str(message_id), prev):
@@ -139,7 +146,7 @@ def note_outbound(adapter: Any, chat_id: Any, message_id: Any = None, content: A
                 old.cancel()
             _FOLLOW_TIMERS[key] = loop.call_later(
                 FOLLOW_DEBOUNCE_SECONDS,
-                lambda: (_FOLLOW_TIMERS.pop(key, None), loop.create_task(follow_latest_message(adapter, chat_id))),
+                lambda: (_FOLLOW_TIMERS.pop(key, None), loop.create_task(follow_latest_message(adapter, chat_id, metadata))),
             )
         try:
             running = asyncio.get_running_loop()
@@ -165,7 +172,7 @@ def _adapter_can_delete(adapter: Any) -> bool:
         return True
 
 
-async def follow_latest_message(adapter: Any, chat_id: Any) -> int:
+async def follow_latest_message(adapter: Any, chat_id: Any, metadata: Any = None) -> int:
     """Move every live (still running) delegation card in this chat below the
     message just delivered. Returns how many cards were moved.
 
@@ -174,7 +181,7 @@ async def follow_latest_message(adapter: Any, chat_id: Any) -> int:
     """
     if adapter is None or chat_id in (None, "") or not _adapter_can_delete(adapter):
         return 0
-    key = _inbox_key(adapter, chat_id)
+    key = _follow_key(adapter, chat_id, metadata)
     with _LIVE_LOCK:
         pubs = [p for p in _LIVE.get(key, []) if not p._closed]
         if pubs:
@@ -700,8 +707,9 @@ class DelegationActivityPublisher:
             async with self._place_lock:  # one job at a time: the next one finds this card
                 if reuse_message_id and await self._reuse_card_message(card, reuse_message_id):
                     return
-                host = _running_editor_for(self._adapter, self._chat_id, card)
+                host = _running_editor_for(self._adapter, self._chat_id, card, self._metadata)
                 if host is not None and join(host.card, card):
+                    _note_card_location(host.card, self._adapter, self._chat_id, host._message_id, self._metadata)
                     host.notify()
                     return
                 await _send_card_under_opener(card, self._adapter, self._chat_id, self._metadata)
@@ -1764,8 +1772,10 @@ async def settle_completion(
             card = part.card
             stopped = part.checklist.all_stopped
             editor = _ACK_EDITORS.get(id(card)) if card is not None else None
-            if editor is not None and (editor._adapter is not adapter or editor._chat_id != str(chat_id)):
-                continue  # another chat's card
+            if editor is not None and _follow_key(adapter, chat_id, metadata) != _follow_key(
+                editor._adapter, editor._chat_id, editor._metadata,
+            ):
+                continue  # another adapter, chat or topic's card
             is_card = bool(card is not None and card.finished and card.final_part() is part)
             if is_card:
                 part.liner_done = True
@@ -1794,12 +1804,12 @@ async def settle_completion(
         # A card that is still running stays BELOW the finished ones: the
         # newest finished message counts as "something newer" for it.
         try:
-            key = _inbox_key(adapter, chat_id)
+            key = _follow_key(adapter, chat_id, metadata)
             if _is_newer(last_id, _LAST_PLAIN.get(key)):
                 _LAST_PLAIN[key] = last_id
             if _is_newer(last_id, _LAST_OUT.get(key)):
                 _LAST_OUT[key] = last_id
-            await follow_latest_message(adapter, chat_id)
+            await follow_latest_message(adapter, chat_id, metadata)
         except Exception:
             logger.debug("running card follow after settle failed", exc_info=True)
     return moved
@@ -1969,7 +1979,7 @@ class AckCardEditor:
                 return
         except Exception:
             return
-        key = _inbox_key(self._adapter, self._chat_id)
+        key = _follow_key(self._adapter, self._chat_id, self._metadata)
         with _LIVE_LOCK:
             pubs = _LIVE.setdefault(key, [])
             if self not in pubs:
@@ -1982,7 +1992,7 @@ class AckCardEditor:
         if not self._registered:
             return
         self._registered = False
-        key = _inbox_key(self._adapter, self._chat_id)
+        key = _follow_key(self._adapter, self._chat_id, self._metadata)
         with _LIVE_LOCK:
             pubs = _LIVE.get(key)
             if pubs and self in pubs:
@@ -2030,7 +2040,7 @@ class AckCardEditor:
     def _is_newest_running(self) -> bool:
         """Only the newest running card in a chat follows; older ones stay put
         (two cards chasing each other's messages would loop forever)."""
-        key = _inbox_key(self._adapter, self._chat_id)
+        key = _follow_key(self._adapter, self._chat_id, self._metadata)
         with _LIVE_LOCK:
             peers = [p for p in _LIVE.get(key, []) if isinstance(p, AckCardEditor) and not p._closed]
         return all(p._seq <= self._seq for p in peers)
@@ -2086,7 +2096,7 @@ class AckCardEditor:
             if not self._is_newest_running():
                 return 0
         # Only a message that is not a helper card counts as "newer".
-        last_out = _LAST_PLAIN.get(_inbox_key(self._adapter, self._chat_id))
+        last_out = _LAST_PLAIN.get(_follow_key(self._adapter, self._chat_id, self._metadata))
         if not (last_out and _is_newer(last_out, self._message_id)):
             return 0  # already the newest message in the chat
         if not final:
@@ -2129,7 +2139,11 @@ class AckCardEditor:
             if not mid or mid == self._message_id:
                 continue
             try:
-                await _maybe_await(self._adapter.delete_message(self._chat_id, mid))
+                deleted = await _maybe_await(self._adapter.delete_message(self._chat_id, mid))
+                if deleted is False:
+                    if mid not in self._stale:
+                        self._stale.append(mid)
+                    continue
                 if mid in self._stale:
                     self._stale.remove(mid)
             except Exception as exc:
@@ -2211,6 +2225,15 @@ class AckCardEditor:
             self._last_text = text
             self._failures = 0
             self._backoff_until = float("-inf")
+            # A native ack may already have been sent before it joins. Remove
+            # that duplicate only after the shared card contains its section.
+            for mid in list(self._stale):
+                try:
+                    deleted = await _maybe_await(self._adapter.delete_message(self._chat_id, mid))
+                    if deleted is not False:
+                        self._stale.remove(mid)
+                except Exception:
+                    logger.debug("joined ack duplicate delete failed", exc_info=True)
             if self._finished_safe() and not self._logged_final:
                 self._logged_final = True
                 logger.info(
@@ -2269,11 +2292,12 @@ def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadat
                 return None
             # A card is already running in this chat: the new dispatch joins it
             # (one live card per chat); only its opener line is a message.
-            host = _running_editor_for(adapter, chat_id, opener_card)
+            host = _running_editor_for(adapter, chat_id, opener_card, metadata)
             if host is not None:
                 from agent.ack_checklist import join
 
                 if join(host.card, opener_card):
+                    _note_card_location(host.card, adapter, chat_id, host._message_id, metadata)
                     host.notify()
                     return None
             # Claim it now so nothing else binds it while the card is sent.
@@ -2283,16 +2307,43 @@ def bind_ack_card(adapter: Any, chat_id: Any, content: Any, result: Any, metadat
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return None
+        if _unified_style() and not card.say_text():
+            return _bind_sent_unified(card, adapter, chat_id, str(message_id), loop, metadata)
         _attach_editor(card, adapter, chat_id, str(message_id), loop, metadata)
     except Exception:
         logger.debug("ack card bind failed", exc_info=True)
     return None
 
 
-def _running_editor_for(adapter: Any, chat_id: Any, new_card: Any = None) -> Optional["AckCardEditor"]:
+async def _bind_sent_unified(card: Any, adapter: Any, chat_id: Any, message_id: str,
+                             loop: asyncio.AbstractEventLoop, metadata: Any) -> None:
+    """A native handoff with no opener sends its card as the final reply.
+
+    It is still a joinable unified card, not a stationary combined opener.
+    The send already happened; retire it only after its shared section lands.
+    """
+    from agent.ack_checklist import join
+
+    card.split_opener = True
+    host = _running_editor_for(adapter, chat_id, card, metadata)
+    if host is not None and _adapter_can_delete(adapter):
+        if host._edit_lock is None:
+            host._edit_lock = asyncio.Lock()
+        async with host._edit_lock:
+            if join(host.card, card):
+                _note_card_location(host.card, adapter, chat_id, host._message_id, metadata)
+                host._stale.append(message_id)
+                host.notify()  # Keep the normal edit throttle and server backoff.
+                return
+    _attach_editor(card, adapter, chat_id, message_id, loop, metadata)
+
+
+def _running_editor_for(adapter: Any, chat_id: Any, new_card: Any = None, metadata: Any = None) -> Optional["AckCardEditor"]:
     """The editor of the running unified card in this chat (newest first), if any."""
     for editor in reversed(list(_ACK_EDITORS.values())):
         if editor.card is new_card or editor._adapter is not adapter or editor._chat_id != str(chat_id):
+            continue
+        if _follow_key(adapter, chat_id, metadata) != _follow_key(editor._adapter, editor._chat_id, editor._metadata):
             continue
         if editor._closed or not getattr(editor.card, "split_opener", False):
             continue
