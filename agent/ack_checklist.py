@@ -1101,6 +1101,12 @@ _MAX_CARDS = 32
 # whose first events can fire before the receipt opens the part.
 _RESERVED: Dict[str, float] = {}
 _RESERVED_CHECKLISTS: Dict[str, List[List[Dict[str, str]]]] = {}
+# Same reducer state as an accepted helper, never a visible part or raw history.
+# Dispatch/helper cardinality is bounded by reservations and the trusted launch
+# count. hidden_ids retains the live reducer's exact, unbounded legacy semantics.
+_RESERVED_ACTIVITY: Dict[str, Checklist] = {}
+# Only a trusted count/snapshot authorizes rejecting legacy early identities.
+_RESERVED_EXPLICIT: Set[str] = set()
 BIND_WINDOW_SECONDS = 180.0
 
 
@@ -1138,6 +1144,7 @@ def open_part(
         return None
     with _LOCK:
         _RESERVED.pop(did, None)
+        _RESERVED_EXPLICIT.discard(did)
         part = _PARTS.pop(did, None)
         initial = _RESERVED_CHECKLISTS.pop(did, [])
         if part is None:
@@ -1166,6 +1173,7 @@ def open_part(
                     )
                     for i in range(n)
                 ]
+        _handover_activity(_RESERVED_ACTIVITY.pop(did, None), part.checklist)
         _PARTS[did] = part
         while len(_PARTS) > _MAX_PARTS:
             _PARTS.pop(next(iter(_PARTS)))
@@ -1244,19 +1252,35 @@ def open_dispatch_card(
 def abandon(delegation_id: Any) -> None:
     """Drop a part that never got a card, so its events fall back to the 🔀 card."""
     with _LOCK:
-        _PARTS.pop(str(delegation_id or ""), None)
+        did = str(delegation_id or "")
+        _PARTS.pop(did, None)
+        release(did)
 
 
-def reserve(delegation_id: Any, *, checklists: Sequence[Any] = ()) -> bool:
+def reserve(
+    delegation_id: Any, *, checklists: Sequence[Any] = (), expected: Optional[int] = None,
+) -> bool:
     """Claim ``delegation_id`` for the unified card before its helpers start,
     so ``owns_delegation`` is true from their very first event (and the
     gateway never posts a separate 🔀 card).  ``open_part`` fulfils the
-    reservation; ``release`` drops it when the dispatch is not accepted."""
+    reservation; ``release`` drops it when the dispatch is not accepted.
+    Multi-helper callers supply ``expected`` (or authorized ``checklists``);
+    omission stages one provisional helper without limiting legacy early replay.
+    """
     did = str(delegation_id or "").strip()
     if not did:
         return False
     with _LOCK:
         _RESERVED[did] = time.monotonic()
+        if did not in _PARTS and did not in _RESERVED_ACTIVITY:
+            # Count-free legacy reservations stage only one provisional helper.
+            # Trusted counts/snapshots, never event payloads, authorize more.
+            if expected is not None or checklists:
+                _RESERVED_EXPLICIT.add(did)
+            n = max(1, int(expected if expected is not None else len(checklists) or 1))
+            _RESERVED_ACTIVITY[did] = Checklist(
+                header="", kids=[Child(index=i) for i in range(n)] if n > 1 else [],
+            )
         # Only the authorized dispatch passes these one-launch snapshots.
         # Initialize exact identities under the same lock as part creation,
         # before replay/render; never merge label-only s1..sN competitors.
@@ -1265,7 +1289,10 @@ def reserve(delegation_id: Any, *, checklists: Sequence[Any] = ()) -> bool:
         while len(_RESERVED) > _MAX_PARTS:
             expired = next(iter(_RESERVED))
             _RESERVED.pop(expired)
+            _RESERVED_EXPLICIT.discard(expired)
             _RESERVED_CHECKLISTS.pop(expired, None)
+            _RESERVED_ACTIVITY.pop(expired, None)
+            _EARLY.pop(expired, None)
     return True
 
 
@@ -1273,7 +1300,10 @@ def release(delegation_id: Any) -> None:
     did = str(delegation_id or "").strip()
     with _LOCK:
         _RESERVED.pop(did, None)
+        _RESERVED_EXPLICIT.discard(did)
         _RESERVED_CHECKLISTS.pop(did, None)
+        _RESERVED_ACTIVITY.pop(did, None)
+        _EARLY.pop(did, None)
 
 
 def _nth(items: Any, i: int) -> Any:
@@ -1312,6 +1342,29 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
             part = _PARTS.get(did)
             if part is None:
                 if did:
+                    staged = _RESERVED_ACTIVITY.get(did)
+                    explicit = did in _RESERVED_EXPLICIT
+                    if explicit and staged is not None and not staged.kids and not _single_child_event(kw):
+                        return False
+                    # Unknown-count siblings/unresolved IDs belong to legacy
+                    # early replay, not the provisional child-0 activity state.
+                    fence = explicit or (_single_child_event(kw) and
+                                         (kw.get("task_index") == 0 or not kw.get("subagent_id")))
+                    if staged is not None and fence and et == "subagent.complete":
+                        obj = _child_for(staged, kw, ending=True) if staged.kids else staged
+                        if obj is None or obj.state not in (PENDING, RUNNING):
+                            return False
+                        # A fence only, not task-outcome authority. Ordered
+                        # todo/completion replay closes the authorized rows.
+                        obj.state = STOPPED
+                        if isinstance(obj, Child):
+                            # Resolve anonymous completion now, not after later
+                            # sibling activity changes which child is running.
+                            kw = {**kw, "task_index": obj.index}
+                        elif not explicit:
+                            # Freeze anonymous legacy completion on child 0;
+                            # later sibling events cannot retarget its fence.
+                            kw = {**kw, "task_index": 0}
                     early = _EARLY.setdefault(did, [])
                     if et == "subagent.todo":
                         # A completion fences its helper even before the card
@@ -1319,6 +1372,8 @@ def on_child_event(event_type: Any, **kw: Any) -> bool:
                         # late list and then replay it as new running work.
                         def same_child(payload):
                             ti, sid = kw.get("task_index"), kw.get("subagent_id")
+                            if not explicit and ti is None and not sid:
+                                return not payload.get("subagent_id") and _single_child_event(payload)
                             if ti is not None:
                                 return ti == payload.get("task_index")
                             if sid:
@@ -1374,13 +1429,20 @@ def _apply_child_todos(part: Part, kw: Dict[str, Any]) -> bool:
 _ACTIVITY_EVENTS = frozenset({"subagent.start", "subagent.tool", "subagent.tool_done"})
 
 
+def _single_child_event(kw: Dict[str, Any]) -> bool:
+    ti = kw.get("task_index")
+    return ti is None or (isinstance(ti, int) and not isinstance(ti, bool) and ti == 0)
+
+
 def _child_for(cl: Checklist, kw: Dict[str, Any], *, ending: bool = False, bind: bool = True) -> Optional[Child]:
     """The helper an event belongs to: ``task_index``, else ``subagent_id``.
     A completion that names neither closes the first helper still open."""
     kids = cl.kids
     ti = kw.get("task_index")
-    if isinstance(ti, int) and not isinstance(ti, bool) and 0 <= ti < len(kids):
-        if not bind and kids[ti].sid and kw.get("subagent_id") and kids[ti].sid != kw["subagent_id"]:
+    if ti is not None:
+        if not isinstance(ti, int) or isinstance(ti, bool) or not 0 <= ti < len(kids):
+            return None
+        if kids[ti].sid and kw.get("subagent_id") and kids[ti].sid != kw["subagent_id"]:
             return None
         return kids[ti]
     sid = str(kw.get("subagent_id") or "")
@@ -1424,49 +1486,86 @@ def _on_activity(et: str, kw: Dict[str, Any]) -> bool:
     with _LOCK:
         part = _PARTS.get(did)
         if part is None:
-            return False
-        cl = part.checklist
-        if cl.state != RUNNING:
-            return False
-        obj: Any = cl
-        if cl.kids:
-            obj = _child_for(cl, kw)
-            if obj is None or obj.state not in (PENDING, RUNNING):
-                return False
-            _note_identity(obj, kw)
-            obj.state = RUNNING
-        before = _snapshot(obj)
-        if obj.started is None:
-            obj.started = time.monotonic()
-        model = kw.get("model")
-        if model and not obj.model:
-            try:
-                from agent.delegation_activity import pretty_model
-
-                obj.model = _CTX_SIZE_RE.sub("", pretty_model(str(model)) or "")
-            except Exception:
-                obj.model = ""
-        if et == "subagent.tool" and str(kw.get("tool_name") or "") in _HIDDEN_TOOLS:
-            call_id = str(kw.get("tool_call_id") or "")
-            if not call_id or call_id not in obj.hidden_ids:
-                obj.hidden += 1
-                if call_id:
-                    obj.hidden_ids.add(call_id)
-        try:
-            # ``tool_count`` counts every call, the hidden todo ones too.
-            obj.calls = max(obj.calls, int(kw.get("tool_count") or 0) - obj.hidden)
-        except (TypeError, ValueError):
-            pass
-        if et == "subagent.tool":
-            _tool_started(obj, kw)
-        elif et == "subagent.tool_done":
-            _tool_finished(obj, kw)
-        changed = _snapshot(obj) != before
-        if hasattr(obj, "doing"):
-            obj.doing = obj.open[-1][2] if obj.open else ""
+            staged = _RESERVED_ACTIVITY.get(did)
+            if staged is not None:
+                _reduce_activity(staged, et, kw, reserved=True)
+            return False  # reservation is ownership, never visible acceptance
+        changed = _reduce_activity(part.checklist, et, kw)
     if changed and unified():
         part._changed()
     return changed
+
+
+def _reduce_activity(cl: Checklist, et: str, kw: Dict[str, Any], *, reserved: bool = False) -> bool:
+    """The single activity reducer for both reserved and accepted helpers."""
+    if cl.state != RUNNING:
+        return False
+    if reserved and not cl.kids and not _single_child_event(kw):
+        return False
+    obj: Any = cl
+    if cl.kids:
+        obj = _child_for(cl, kw)
+        if obj is None or obj.state not in (PENDING, RUNNING):
+            return False
+        _note_identity(obj, kw)
+        obj.state = RUNNING
+    before = _snapshot(obj)
+    if obj.started is None:
+        obj.started = time.monotonic()
+    model = kw.get("model")
+    if model and not obj.model:
+        try:
+            from agent.delegation_activity import pretty_model
+
+            obj.model = _CTX_SIZE_RE.sub("", pretty_model(str(model)) or "")
+        except Exception:
+            obj.model = ""
+    if et == "subagent.tool" and str(kw.get("tool_name") or "") in _HIDDEN_TOOLS:
+        call_id = str(kw.get("tool_call_id") or "")
+        if not call_id or call_id not in obj.hidden_ids:
+            obj.hidden += 1
+            if call_id:
+                obj.hidden_ids.add(call_id)
+    try:
+        # ``tool_count`` counts every call, the hidden todo ones too.
+        obj.calls = max(obj.calls, int(kw.get("tool_count") or 0) - obj.hidden)
+    except (TypeError, ValueError):
+        pass
+    if et == "subagent.tool":
+        _tool_started(obj, kw)
+    elif et == "subagent.tool_done":
+        _tool_finished(obj, kw)
+    changed = _snapshot(obj) != before
+    if hasattr(obj, "doing"):
+        obj.doing = obj.open[-1][2] if obj.open else ""
+    return changed
+
+
+_ACTIVITY_FIELDS = ("model", "calls", "hidden", "hidden_ids", "open", "recent", "doing", "started")
+
+
+def _handover_activity(staged: Optional[Checklist], accepted: Checklist) -> None:
+    """Move observations, never plans or terminal authority, into authorized rows.
+
+    Container references move unchanged; the pending registry no longer owns
+    them. Completion replay below supplies the terminal outcome and clears open
+    calls exactly as it does after acceptance.
+    """
+    if staged is None or accepted.state != RUNNING:
+        return
+    sources = staged.kids or [staged]
+    targets = accepted.kids or [accepted]
+    if len(sources) != len(targets):
+        return  # an inconsistent receipt cannot reinterpret helper identities
+    for source, target in zip(sources, targets):
+        for name in _ACTIVITY_FIELDS:
+            setattr(target, name, getattr(source, name))
+        if isinstance(source, Child) and isinstance(target, Child):
+            target.sid = source.sid
+            if source.title:
+                target.title, target.titled = source.title, source.titled
+            if source.started is not None:
+                target.state = RUNNING
 
 
 # "GPT-6.1 Sol 900k": the context size is not part of the model's name.
@@ -2126,4 +2225,6 @@ def reset_for_tests() -> None:
         _CARDS.clear()
         _EARLY.clear()
         _RESERVED.clear()
+        _RESERVED_EXPLICIT.clear()
         _RESERVED_CHECKLISTS.clear()
+        _RESERVED_ACTIVITY.clear()

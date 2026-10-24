@@ -414,7 +414,7 @@ def reserve_ack_part(delegation_id: Any, handoff: Any, goals: Any = ()) -> bool:
             return False
         from agent.ack_checklist import reserve
 
-        return reserve(did)
+        return reserve(did, expected=max(1, len(goals or ())))
     except Exception:
         return False
 

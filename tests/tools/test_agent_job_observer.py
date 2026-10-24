@@ -481,6 +481,92 @@ async def test_external_report_reaches_classification_and_finalized_card(parser,
         ac.reset_for_tests()
 
 
+@pytest.mark.unified_card
+@pytest.mark.parametrize("job_count", [2, 3])
+@pytest.mark.parametrize("verified", [False, True])
+def test_registered_jobs_keep_publisher_index_on_independent_cards(job_count, verified):
+    """Real observer output reaches each single-part card, including index 1/2."""
+    import threading
+    from types import SimpleNamespace
+
+    from agent import ack_checklist as ac
+    from agent.delegation_activity import completion_display_state
+
+    class Sink:
+        # DelegationActivityPublisher allocates group-wide indexes but opens
+        # one single-part card per job. Do not rewrite indexes to part-local 0.
+        def __init__(self):
+            self.index = 0
+            self.cards = {}
+            self.events = []
+
+        def external_job_identity(self):
+            index = self.index
+            self.index += 1
+            return "jobs_review", index
+
+        def open_external_job_card(self, card_id, title, lifecycle):
+            card = ac.open_agent_job_part(card_id, title, lifecycle)
+            assert card is not None
+            self.cards[card_id] = card
+            return card_id
+
+        def observe(self, event_type, tool_name=None, preview=None, args=None, **kw):
+            self.events.append((event_type, kw))
+
+    ac.reset_for_tests()
+    ac.set_style_for_tests("unified")
+    sink = Sink()
+    try:
+        for index in range(job_count):
+            session = SimpleNamespace(id=f"proc_{index}", _lock=threading.Lock(),
+                                      output_buffer="", exited=False)
+            result = register_agent_job(session, {"title": f"Public job {index}",
+                "model": "claude-sonnet-5-5", "parser": "claude-stream-json"}, sink=sink)
+            assert result["observed"] is True
+            observer = session.agent_job
+            cl = sink.cards[f"jobs_review.{index}"].parts[0].checklist
+            assert not cl.kids
+            assert cl.model == "Sonnet 5.5" and cl.started is not None
+            observer.feed(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": f"call-{index}", "name": "Read",
+                 "input": {"file_path": "public.txt"}}]}}) + "\n")
+            assert cl.calls == 1 and len(cl.open) == 1
+            assert cl.open[0] == (f"call-{index}", "Read", "read_file public.txt")
+            observer.feed(json.dumps({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": f"call-{index}",
+                 "is_error": False, "content": "private tool output"}]}}) + "\n")
+            assert cl.calls == 1 and cl.open == []
+            assert list(cl.recent) == [("read_file public.txt", True, 1)]
+            text = "Read the file."
+            if verified:
+                text = ('Task outcome: {"status":"done","remaining":[],"owner":"parent",'
+                        '"next_step":"review"}\nResult: done\nPlain summary: Read the file.')
+            observer.feed(json.dumps({"type": "result", "subtype": "success",
+                                     "is_error": False, "result": text}) + "\n")
+            observer.finish(0)
+            completed = [(event, kw) for event, kw in sink.events
+                         if event == "subagent.complete" and kw["task_index"] == index]
+            assert len(completed) == 1
+            payload = completed[0][1]
+            assert payload["status"] == "completed"  # process success is not task proof
+            assert completion_display_state(payload) == ("done" if verified else "unverified")
+            assert cl.state == (ac.DONE if verified else ac.UNVERIFIED)
+            before = (cl.model, cl.calls, list(cl.open), list(cl.recent), cl.started, cl.state)
+            observer.start()  # a late producer start cannot reopen terminal work
+            assert (cl.model, cl.calls, cl.open, list(cl.recent), cl.started, cl.state) == before
+        assert len(sink.cards) == job_count
+        assert len({id(card) for card in sink.cards.values()}) == job_count
+        for index in range(job_count):
+            events = [(event, kw) for event, kw in sink.events if kw["task_index"] == index]
+            assert [event for event, _ in events] == [
+                "subagent.start", "subagent.tool", "subagent.tool_done", "subagent.complete", "subagent.start"]
+            assert all(kw["delegation_id"] == f"jobs_review.{index}" for _, kw in events)
+            assert all(kw["subagent_id"] == f"proc_{index}" for _, kw in events)
+    finally:
+        ac.reset_for_tests()
+
+
 def test_turn_cap_is_unfinished_not_failed():
     """claude -p hitting --max-turns exits 1 with subtype error_max_turns:
     the card shows it as unfinished (⏳), never as a crash."""

@@ -202,6 +202,52 @@ async def test_a_lifecycle_only_job_shows_running_then_unverified():
 
 
 @pytest.mark.asyncio
+async def test_two_jobs_from_one_publisher_follow_one_joined_card():
+    chat = _TgChat()
+    first = _opener_card("native-host", "shipping the card", "ship it", "on it")
+    await _dispatch(chat, first)
+    editor = da._ACK_EDITORS[id(first)]
+    # The split opener is a normal message; the second send is the only card.
+    assert len(chat.sends) == 2 and chat.sends[0]["text"] == "on it"
+    assert chat.sends[1]["text"].startswith("**>")
+    card_id = editor._message_id
+    pub = _make_publisher(chat, chat_id="chat", clock=FakeClock())
+    jobs = []
+    try:
+        for index in range(2):
+            session = _Session()
+            session.id = f"proc_joined_{index}"
+            result = register_agent_job(session, {"title": f"Public job {index}",
+                "model": "claude-sonnet-5-5", "parser": CLAUDE}, sink=pub)
+            assert result["observed"] is True
+            await _settle()
+            job = session.agent_job
+            jobs.append(job)
+            job.feed(_tool_use(f"call-{index}", "Read", file_path=f"public-{index}.txt"))
+            cl = first.parts[index + 1].checklist
+            assert cl.model == "Sonnet 5.5" and cl.calls == 1 and len(cl.open) == 1
+            assert cl.started is not None
+        await _settle()
+        assert [job.index for job in jobs] == [0, 1]
+        assert len(first.parts) == 3 and all(part.card is first for part in first.parts)
+        assert list(da._ACK_EDITORS.values()) == [editor]
+        assert len(chat.sends) == 2 and chat.status_calls == []
+        assert editor._message_id == card_id, "both jobs edit the existing card"
+        assert pub.tracker.group_ids() == []
+        for index in range(2):
+            assert f"read_file public-{index}.txt" in editor._render()
+            jobs[index].feed(_tool_result(f"call-{index}"))
+            cl = first.parts[index + 1].checklist
+            assert not cl.open and list(cl.recent) == [(f"read_file public-{index}.txt", True, 1)]
+        await _settle()
+        assert list(da._ACK_EDITORS.values()) == [editor] and len(chat.sends) == 2
+        assert editor._message_id == card_id, "completion updates do not post another card"
+        assert len(first.parts) == 3 and not first.finished
+    finally:
+        await pub.aclose()
+
+
+@pytest.mark.asyncio
 async def test_a_finished_card_is_not_reopened_by_a_job_it_gets_its_own():
     chat = _TgChat()
     first = _opener_card("dj1", "shipping the card", "ship it", "on it")
