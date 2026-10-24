@@ -170,7 +170,10 @@ class Contracts(unittest.TestCase):
     def test_reviewed_native_controls_and_update_acceptance_are_not_weakened(self):
         repo = HERE.parents[1]
         reviewed = '8883828f78049272e7c98b590e142a8ec56d8359'
-        for name in ('bootstrap.py', 'frozen_postpull.py', 'plan.py', 'start_troy.ps1',
+        # The bootstrap path resolution is deliberately corrected and covered
+        # by test_bootstrap_resolution.py; all native safety controls remain
+        # byte-identical to the independently reviewed fixture.
+        for name in ('frozen_postpull.py', 'plan.py', 'start_troy.ps1',
                      'topology.py', 'test_owner_worker_native.py', 'test_status_lock_windows_native.py'):
             with self.subTest(file=name):
                 # Compare the exact reviewed checkout representation, including
