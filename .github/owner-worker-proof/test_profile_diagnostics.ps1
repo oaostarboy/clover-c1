@@ -129,6 +129,8 @@ foreach ($mode in @('removed','profile-refusal','unknown-process','process-remai
     $description = 'Clover CI portable-owned-tag'; $profile=Join-Path $Evidence 'absent-owned-profile'; $process=$null; $secret=$null
     if ($mode -eq 'owned-profile') { $profile = Join-Path $Evidence 'absent-owned-profile' }
     $passed=$false; $cleanupPassed=$false; $childExit=-1
+    # The extracted cleanup runs with the real optional access-only default.
+    $RequestFile=$null
     . ([scriptblock]::Create($init.Extent.Text))
     if ($mode -eq 'account-query-failure') {
         function Get-LocalUser { param($SID, $ErrorAction) throw 'portable query failure' }
