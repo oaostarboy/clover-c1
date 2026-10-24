@@ -157,8 +157,8 @@ def install(repo, caller, candidate, evidence, scratch, source, home, uv, env, r
                     bootstrap_download_certified=False))
     # Avoid the hosted image's unrelated system Python: let the shipped python
     # stage provision its own requested interpreter using the pinned safe catalog.
+    saved = {key: env.get(key) for key in (*rewrite, 'UV_PYTHON_PREFERENCE')}
     env['UV_PYTHON_PREFERENCE'] = 'only-managed'
-    saved = {key: env.get(key) for key in rewrite}
     env.update(rewrite)
     try:
         run(command(installer, provenance, manifest=True), 'released-installer-manifest', timeout=60)

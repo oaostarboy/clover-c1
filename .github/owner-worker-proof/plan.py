@@ -34,8 +34,8 @@ def plan(pins):
     if scope == 'startup-only':
         # Authorized eight-row Startup proof only; never Task/full acceptance.
         assert pins['mode'] == 'candidate'
-        assert pins['target'] == 'f49296084d8e5914998f18726d24905c566f13fb'
-        assert pins['target_tree'] == '50a2af19f825d782890d9139ad295204ff787cf1'
+        assert pins['target'] == 'b9f051659117d9d78e6e045040a78e9e2f01ad06'
+        assert pins['target_tree'] == 'fc012db1012bc8ae0a7f875c590c39f1ca7bb9b5'
         setups = ['zyra']
     rows = []
     for name, old in {**CALLERS, 'candidate': pins['target']}.items():

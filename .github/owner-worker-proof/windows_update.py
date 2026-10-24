@@ -194,7 +194,7 @@ class LocalIRC:
         self.sock.listen(8)
         threading.Thread(target=self.accept, daemon=True).start()
     def log(self, text):
-        with self.lock, (self.evidence / 'irc.log').open('a') as out:
+        with self.lock, (self.evidence / 'irc.log').open('a', encoding='utf-8') as out:
             out.write(str(time.time()) + ' ' + text + '\n')
     def send(self, client, text):
         client['sock'].sendall((text + '\r\n').encode())
