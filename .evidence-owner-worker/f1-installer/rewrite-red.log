@@ -1,0 +1,14 @@
+test_private_git_rewrites_really_clone_exact_objects_without_network (__main__.Contracts.test_private_git_rewrites_really_clone_exact_objects_without_network) ... FAIL
+
+======================================================================
+FAIL: test_private_git_rewrites_really_clone_exact_objects_without_network (__main__.Contracts.test_private_git_rewrites_really_clone_exact_objects_without_network)
+----------------------------------------------------------------------
+Traceback (most recent call last):
+  File "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-24bba162/.github/owner-worker-proof/test_contract.py", line 128, in test_private_git_rewrites_really_clone_exact_objects_without_network
+    self.assertTrue(hasattr(helper, 'origin_rewrites'), 'private installer Git rewrites need an exercised contract')
+AssertionError: False is not true : private installer Git rewrites need an exercised contract
+
+----------------------------------------------------------------------
+Ran 1 test in 0.003s
+
+FAILED (failures=1)

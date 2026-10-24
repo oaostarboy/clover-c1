@@ -29,6 +29,8 @@ import urllib.request
 
 HELPERS = Path(os.environ["CLOVER_PROOF_HELPERS"]).resolve()
 sys.path.insert(0, str(HELPERS))
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+import released_installer
 import inflight_witness as witness
 import legacy156_checks as legacy
 from macos_external_env import dump, sha, write_state, verify_state, identity
@@ -305,9 +307,11 @@ def child(a):
     elif a.mode == 'service':
         if WINDOWS:
             from clover_cli import gateway_windows as g
-            script=g._write_task_script()
-            path=g._install_startup_entry(script)
-            result=dict(path=str(path), script=str(script), label=g.get_task_name())
+            # Observation only: the public CLI, in a genuine limited token,
+            # must already have registered this Startup entry.
+            path=g.get_startup_entry_path()
+            assert path.is_file(), 'supported gateway install did not create Startup entry'
+            result=dict(path=str(path), label=g.get_task_name())
         else:
             from clover_cli.gateway import get_launchd_plist_path, get_launchd_label
             path=get_launchd_plist_path()
@@ -325,19 +329,19 @@ def main(a):
     bootstrap = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(bootstrap)
     uv = bootstrap.resolve(a.uv)
-    for value in [a.target, a.tree, a.old]:
+    for value in [a.target, a.tree, a.old, a.candidate]:
         assert re.fullmatch('[0-9a-f]{40}', value)
     evidence = Path(a.evidence).resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     scratch = Path.home() / ('owner-worker-' + os.environ['GITHUB_RUN_ID'])
     scratch.mkdir()
-    source, home = scratch / 'source', (Path(os.environ['LOCALAPPDATA']) / 'clover' if WINDOWS else Path.home() / '.clover')
-    live = source / 'venv' if WINDOWS else scratch / 'external environment'
+    home = Path(os.environ['LOCALAPPDATA']) / 'clover'
+    source, live = home / 'clover-c1', home / 'clover-c1' / 'venv'
     assert not home.exists(), 'refuse existing home'
     assert not (Path.home() / 'Library/LaunchAgents/ai.clover.gateway.plist').exists(), 'refuse existing service'
     home.mkdir()
     env = {k: v for k, v in os.environ.items() if k in {
-        'PATH', 'HOME', 'TMPDIR', 'RUNNER_TEMP', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT',
+        'PATH', 'HOME', 'OS', 'PROCESSOR_ARCHITECTURE', 'PROCESSOR_ARCHITEW6432', 'TMPDIR', 'RUNNER_TEMP', 'GITHUB_ACTIONS', 'RUNNER_ENVIRONMENT',
         'GITHUB_RUN_ID', 'GITHUB_RUN_ATTEMPT', 'GITHUB_SHA', 'SSL_CERT_FILE', 'SSL_CERT_DIR', 'SystemRoot', 'SYSTEMROOT', 'WINDIR', 'COMSPEC', 'PATHEXT', 'TEMP', 'TMP', 'USERPROFILE', 'APPDATA', 'LOCALAPPDATA', 'USERDOMAIN', 'USERNAME', 'PROGRAMFILES', 'PROGRAMFILES(X86)', 'PSModuleAnalysisCachePath'}}
     env.update(CLOVER_HOME=str(home), CLOVER_PROOF_HELPERS=str(HELPERS), UV_PYTHON_INSTALL_DIR=str(scratch / 'python'),
         UV_CACHE_DIR=str(scratch / 'cache'), PYTHONUNBUFFERED='1')
@@ -365,9 +369,17 @@ def main(a):
         return read_json(evidence / (name + '.json')) if rc == 0 else None
     def git(*args):
         return subprocess.check_output(['git', '-C', str(source), *args], text=True).strip()
-    run(['git', 'clone', '--no-hardlinks', '--no-checkout', a.source, source], 'clone')
-    assert git('rev-parse', a.target + '^{tree}') == a.tree
-    run(['git', '-C', source, 'checkout', '--detach', a.old], 'old-checkout')
+    assert released_installer.git(a.source, 'rev-parse', a.target + '^{tree}') == a.tree
+    dump(evidence / 'installer-harness-source.json', dict(
+        workflow_sha=os.environ['GITHUB_SHA'],
+        helper_checkout_sha=released_installer.git(Path(script).parents[2], 'rev-parse', 'HEAD'),
+        files={name: sha(Path(script).with_name(name)) for name in
+               ('windows_update.py', 'released_installer.py', 'register_startup.ps1', 'start_troy.ps1')}))
+    released_installer.install(Path(a.source).resolve(), a.old, a.candidate, evidence,
+                               scratch, source, home, uv, env, run)
+    # Fetch candidate objects only AFTER installation, without changing HEAD
+    # or tracked files. The updater still performs the actual source transition.
+    run(['git', '-C', source, 'fetch', a.source, a.target], 'candidate-objects')
     dump(evidence / 'pins.json', dict(workflow_sha=os.environ['GITHUB_SHA'], target=a.target,
         target_tree=a.tree, old=a.old, old_tree=git('rev-parse', 'HEAD^{tree}'), entry=a.entry,
         helper_sha256=sha(script), host=platform.platform()))
@@ -376,13 +388,12 @@ def main(a):
     run([sys.executable, HELPERS / 'proof.py', 'origin', '--repo', source,
         '--mirror', scratch / 'origin.git', '--target', a.target], 'fixture-origin')
     (home / '.skip_upstream_prompt').touch()
-    run([uv, 'python', 'install', '3.12', '--no-config'], 'safe-python')
-    run([uv, 'venv', live, '--python', '3.12', '--managed-python', '--no-config'], 'external-venv')
-    env.update(UV_PROJECT_ENVIRONMENT=str(live), VIRTUAL_ENV=str(live))
-    run([uv, 'sync', '--locked', '--extra', 'all', '--python', python(live)], 'old-install', cwd=source)
-    env.pop('UV_PROJECT_ENVIRONMENT')
-    # VIRTUAL_ENV/PATH are also persisted by the unmodified product installer.
-    env['PATH'] = str(python(live).parent) + os.pathsep + env['PATH']
+    env['VIRTUAL_ENV'] = str(live)
+    # Use the shipped command directory; do not shadow PATH's Python.
+    env['PATH'] = str(home / 'bin') + os.pathsep + env['PATH']
+    run(['powershell.exe', '-NoProfile', '-NonInteractive', '-Command',
+         '& (Get-Command clover -CommandType Application).Source --version; exit $LASTEXITCODE'],
+        'installed-command-launcher', timeout=60)
     call('sqlite', 'sqlite-before')
     run([python(live), HELPERS / 'proof.py', 'identity', '--repo', source,
         '--sha', a.old, '--tree', git('rev-parse', 'HEAD^{tree}'),
@@ -452,6 +463,11 @@ def main(a):
             trace_stop.wait(0.5)
     try:
         if WINDOWS:
+            # Use the supported gateway install CLI, declining UAC in an
+            # actually non-admin token. No private entry-generation helpers.
+            run(['pwsh', '-NoProfile', '-File', Path(script).with_name('register_startup.ps1'),
+                 '-Python', python(live), '-Source', source, '-Evidence', evidence],
+                'gateway-startup-registration', timeout=180)
             service=call('service','service-definition')
             if a.setup == 'troy':
                 run(['pwsh', '-NoProfile', '-File', Path(script).with_name('start_troy.ps1'),
@@ -731,7 +747,7 @@ if __name__ == '__main__':
     p.add_argument('--fixed-base', default='candidate')
     p.add_argument('--setup', choices=['zyra','troy'], default='zyra')
     p.add_argument('--turn-mode', choices=['completed','inflight'], default='completed')
-    for name in ['source', 'target', 'tree', 'old', 'entry', 'evidence', 'output', 'expected', 'label', 'records', 'uv']:
+    for name in ['source', 'target', 'tree', 'old', 'entry', 'evidence', 'output', 'expected', 'label', 'records', 'uv', 'candidate']:
         p.add_argument('--' + name)
     args = p.parse_args()
     try:

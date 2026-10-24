@@ -17,6 +17,174 @@ def load(name):
 
 
 class Contracts(unittest.TestCase):
+    def test_old_environment_is_created_by_released_installer_not_direct_uv(self):
+        import ast
+        text = (HERE / 'windows_update.py').read_text(encoding='utf-8')
+        tree = ast.parse(text)
+        main = next(n for n in tree.body if isinstance(n, ast.FunctionDef) and n.name == 'main')
+        calls = [n for n in ast.walk(main) if isinstance(n, ast.Call)]
+        installs = [n for n in calls if isinstance(n.func, ast.Attribute)
+                    and isinstance(n.func.value, ast.Name)
+                    and n.func.value.id == 'released_installer' and n.func.attr == 'install']
+        self.assertEqual(len(installs), 1, 'F1: exact released install.ps1 must create the old install')
+        identity_line = next(n.lineno for n in ast.walk(main)
+                             if isinstance(n, ast.Constant) and n.value == 'old-source-identity')
+        self.assertLess(installs[0].lineno, identity_line)
+        self.assertNotIn("'old-install'", text)
+        self.assertNotIn("'external-venv'", text)
+        self.assertNotIn('g._write_task_script()', text)
+        self.assertNotIn('g._install_startup_entry(', text)
+
+    def test_released_installer_bytes_and_real_powershell_file_command(self):
+        helper = load('released_installer')
+        repo = HERE.parents[1]
+        candidate = json.loads((HERE / 'pins.json').read_text(encoding='utf-8'))['target']
+        for caller in load('plan').CALLERS.values():
+            with self.subTest(caller=caller), tempfile.TemporaryDirectory(dir=HERE) as tmp:
+                path = Path(tmp) / 'released-install.ps1'
+                proof = helper.materialize(repo, caller, candidate, path)
+                expected = subprocess.check_output(['git', '-C', str(repo), 'show', caller + ':scripts/install.ps1'])
+                self.assertEqual(path.read_bytes(), expected)
+                self.assertEqual(proof['installer_ref'], caller)
+                self.assertEqual(proof['caller_sha'], caller)
+                self.assertEqual(proof['installer_sha256'], helper.INSTALLER_SHA256)
+                argv = helper.command(path, proof)
+                self.assertEqual(argv[0], 'powershell.exe')
+                self.assertEqual(argv[argv.index('-File') + 1], str(path.resolve()))
+                self.assertEqual(argv[argv.index('-Commit') + 1], caller)
+                self.assertIn('-ForceCommit', argv)
+                self.assertIn('-NonInteractive', argv)
+                self.assertIn('-SkipSetup', argv)
+                self.assertNotIn('-Stage', argv)  # full install, not a selected subset
+                self.assertNotIn('-NoVenv', argv)
+                self.assertNotIn('-InstallDir', argv)  # prove the actual default path
+                self.assertNotIn('-CloverHome', argv)
+                self.assertEqual(helper.command(path, proof, manifest=True), argv + ['-Manifest'])
+
+    def test_installer_refuses_missing_changed_bytes_and_unapproved_hash(self):
+        helper = load('released_installer')
+        caller = load('plan').CALLERS['1.5.8']
+        with tempfile.TemporaryDirectory(dir=HERE) as tmp:
+            path = Path(tmp) / 'released-install.ps1'
+            proof = helper.materialize(HERE.parents[1], caller, caller, path)
+            original = path.read_bytes()
+            path.write_bytes(original + b'\r\n# even a comment is forbidden\r\n')
+            with self.assertRaisesRegex(ValueError, 'SHA256 mismatch'):
+                helper.command(path, proof)
+            path.write_bytes(original)
+            proof['installer_sha256'] = '0' * 64
+            with self.assertRaises(ValueError):
+                helper.command(path, proof)
+            path.unlink()
+            with self.assertRaises(FileNotFoundError):
+                helper.command(path, proof)
+            setattr(helper, 'INSTALLER_SHA256', '0' * 64)
+            with self.assertRaisesRegex(ValueError, 'released installer SHA256 mismatch'):
+                helper.materialize(HERE.parents[1], caller, caller, path)
+            self.assertFalse(path.exists())
+
+    def test_installer_rejects_wrong_or_normalized_frozen_caller(self):
+        helper = load('released_installer')
+        candidate = json.loads((HERE / 'pins.json').read_text(encoding='utf-8'))['target']
+        wrong = ['v1.5.6', '32d3e6728c71d1f7c8684b7b41ac1785cb8117a9',
+                 load('plan').CALLERS['1.5.8'].upper(), 'a' * 40]
+        with tempfile.TemporaryDirectory(dir=HERE) as tmp:
+            path = Path(tmp) / 'released-install.ps1'
+            for ref in wrong:
+                with self.subTest(ref=ref), self.assertRaises(ValueError):
+                    helper.materialize(HERE.parents[1], ref, candidate, path)
+                self.assertFalse(path.exists())
+            # Candidate-to-next uses released installer bytes with the candidate
+            # as -Commit, never a modified installer from an unreviewed tree.
+            proof = helper.materialize(HERE.parents[1], candidate, candidate, path)
+            self.assertEqual(proof['installer_ref'], helper.CANDIDATE_INSTALLER_REF)
+            self.assertEqual(helper.command(path, proof)[helper.command(path, proof).index('-Commit') + 1], candidate)
+
+    def test_full_manifest_and_completion_cannot_omit_or_skip_required_stages(self):
+        helper = load('released_installer')
+        definitions = [dict(name=name) for name in helper.STAGES]
+        manifest = dict(protocol_version=1, stages=definitions)
+        self.assertEqual(helper.validate_manifest([manifest]), manifest)
+        stages = [dict(stage=name, ok=True, skipped=False, reason=None) for name in helper.STAGES]
+        completion = dict(ok=True, protocol_version=1)
+        self.assertEqual(helper.validate_completion(stages + [completion]), stages)
+        for values in [[], [manifest, manifest], [dict(manifest, stages=definitions[:-1])]]:
+            with self.assertRaises(ValueError):
+                helper.validate_manifest(values)
+        for values in [[], stages, stages[:-1] + [completion],
+                       [dict(stages[0], skipped=True)] + stages[1:] + [completion],
+                       [dict(stages[0], ok=False)] + stages[1:] + [completion],
+                       list(reversed(stages)) + [completion]]:
+            with self.assertRaises(ValueError):
+                helper.validate_completion(values)
+        with tempfile.TemporaryDirectory(dir=HERE) as tmp:
+            log = Path(tmp) / 'raw.log'
+            log.write_text('human output\n' + json.dumps(stages[0]) + '\n', encoding='utf-8')
+            self.assertEqual(helper.frames(log), stages[:1])
+
+    def test_private_git_rewrites_really_clone_exact_objects_without_network(self):
+        import os
+        helper = load('released_installer')
+        self.assertTrue(hasattr(helper, 'origin_rewrites'), 'private installer Git rewrites need an exercised contract')
+        with tempfile.TemporaryDirectory(dir=HERE) as tmp:
+            root = Path(tmp).resolve()
+            source, mirror = root / 'source', root / 'origin.git'
+            subprocess.run(['git', 'init', '-q', '-b', 'main', source], check=True)
+            helper.git(source, 'config', 'user.name', 'Fixture')
+            helper.git(source, 'config', 'user.email', 'fixture@example.invalid')
+            (source / 'fixture-only').write_bytes(b'synthetic portable Git control, not an install\n')
+            helper.git(source, 'add', '.')
+            helper.git(source, 'commit', '-qm', 'portable origin control')
+            expected = helper.git(source, 'rev-parse', 'HEAD')
+            tree = helper.git(source, 'rev-parse', 'HEAD^{tree}')
+            subprocess.run(['git', 'clone', '-q', '--mirror', source, mirror], check=True)
+            # Refuse every network transport even if a rewrite were broken.
+            env = dict(os.environ, GIT_ALLOW_PROTOCOL='file', **helper.origin_rewrites(mirror))
+            for i, url in enumerate(('git@github.com:oaostarboy/clover-c1.git',
+                                     'https://github.com/oaostarboy/clover-c1.git')):
+                installed = root / ('installed-' + str(i))
+                subprocess.run(['git', 'clone', '-q', '--depth', '1', '--branch', 'main', url, installed],
+                               env=env, check=True)
+                self.assertEqual(helper.git(installed, 'rev-parse', 'HEAD'), expected)
+                self.assertEqual(helper.git(installed, 'rev-parse', 'HEAD^{tree}'), tree)
+
+    def test_installer_side_effect_entry_is_native_hosted_only(self):
+        import sys
+        if sys.platform == 'win32':
+            self.skipTest('portable non-Windows refusal control')
+        with self.assertRaisesRegex(RuntimeError, 'disposable hosted Windows'):
+            load('released_installer').install(*([None] * 10))
+
+    def test_startup_registration_uses_supported_cli_and_real_limited_token(self):
+        text = (HERE / 'register_startup.ps1').read_text(encoding='utf-8')
+        self.assertIn("'clover_cli.main', 'gateway', 'install'", text)
+        self.assertIn("'--no-start-now', '--start-on-login'", text)
+        self.assertIn('IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)', text)
+        self.assertIn('if ($admin) { throw', text)
+        self.assertIn('-LogonType S4U -RunLevel Limited', text)
+        self.assertIn("'n' | & $Python @argv", text)
+        self.assertNotIn('_write_task_script', text)
+        self.assertNotIn('_install_startup_entry', text)
+        self.assertIn('Unregister-ScheduledTask -TaskName $taskName', text)
+
+    def test_reviewed_native_controls_and_update_acceptance_are_not_weakened(self):
+        repo = HERE.parents[1]
+        reviewed = '8883828f78049272e7c98b590e142a8ec56d8359'
+        for name in ('bootstrap.py', 'frozen_postpull.py', 'plan.py', 'start_troy.ps1',
+                     'topology.py', 'test_owner_worker_native.py', 'test_status_lock_windows_native.py'):
+            with self.subTest(file=name):
+                # Compare the exact reviewed checkout representation, including
+                # the repository's existing .ps1 CRLF checkout attribute.
+                original = subprocess.check_output(['git', '-C', str(repo), 'cat-file', '--filters',
+                    reviewed + ':.github/owner-worker-proof/' + name])
+                self.assertEqual((HERE / name).read_bytes(), original)
+        original = subprocess.check_output(['git', '-C', str(repo), 'show',
+            reviewed + ':.github/owner-worker-proof/windows_update.py']).decode('utf-8')
+        current = (HERE / 'windows_update.py').read_text(encoding='utf-8')
+        start, end = '        before = wait_for(initial, 180)', "\n\nif __name__ == '__main__':"
+        self.assertEqual(current.split(start, 1)[1].split(end, 1)[0],
+                         original.split(start, 1)[1].split(end, 1)[0])
+
     def test_exact_released_callers_and_no_duplicate_rows(self):
         p = load('plan')
         pins = json.loads((HERE / 'pins.json').read_text())

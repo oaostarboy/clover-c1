@@ -16,22 +16,21 @@ with an independently verified new SHA/tree for the full matrix. This new
 workflow intentionally is not registered on main.
 Parent review is required before adding `ci-reviewed` or merging the fixture.
 
-**Current pins select `native-safety` only on reviewed correction27f507.** The
-updater matrix is intentionally SKIPPED/NOT EXERCISED in this invocation, and
-the planner cannot label it a full updater gate. Both old-source diagnostic
-runs have terminated; this narrow run exercises the new descriptor/security
-cases without duplicating an active matrix. The explicit historical eight-row
-`troy-verifier-correction` scope is restricted to old bdad7 and cannot clear a
-future source. For the final combined gate, set `mode=candidate`, `scope=full`
-and the parent's exact new commit/tree; require all16 rows from that invocation
-rather than adding passes from different fixtures.
+**Current pins select `candidate` / `full` on the parent-authorized PR150
+head `1a606496182ef48eafd78889eea8878165b829ae`, tree
+`43825538944a3d836e8a28ad509f39b0eca7710e`.** The correction is unpublished and
+held for bounded independent F1 delta review before the final native gate.
+The prior `native-safety` invocation remains historical; it did not exercise
+updates. The explicit historical eight-row `troy-verifier-correction` scope is
+restricted to old bdad7 and cannot clear a future source. Require all16 rows
+from the final invocation rather than adding passes from different fixtures.
 The revised observer copies the proven PS probe's exact installed-image ->
 direct-child -> measured-base-image relationship. It additionally records raw
 process/status evidence, requires the status owner to be that worker, rejects
 extra gateway processes, and retains native birth, listener and source checks.
 No process environment or argv prefix can substitute for those witnesses.
 
-- Candidate received: PR148, `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`.
+- Historical diagnostic candidate: PR148, `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`.
 - Candidate tree: `04630f4788743b5b556e5e4379d998c42394efa3`.
 - This candidate does not contain the separately owned Suni wrapper repair.
   A changed combined product source needs a new exact-source gate.
@@ -66,6 +65,66 @@ their actual native children remain alive. The update driver refuses to proceed
 if its native SCM inventory maps either installation shape to any service, and
 requires the foreign Schedule host PID to remain unchanged through the final
 90-second window. The SCM/unchanged-Schedule additions await the final combined update run.
+
+## F1 correction: released install-to-update path (awaiting native execution)
+
+`released_installer.py` now materializes **binary-exact**
+`<frozen caller>:scripts/install.ps1`, verifies its independently recorded SHA256
+(`53a81a8029ba670aed376ac9bc13906094cf12b63794993bb30fe6b60799c732`), and invokes
+`powershell.exe -File <that file> -Commit <exact caller> -ForceCommit
+-NonInteractive -SkipSetup -SkipComputerUse -Json`. All three released callers
+have the same installer bytes. Candidate-to-next uses that same released1.5.9
+installer with the explicit candidate as `-Commit`, not a modified candidate
+installer. Missing bytes, an unknown/wrong frozen SHA, replacement refs or a hash
+mismatch stop the fixture before any installation.
+
+The driver first records the real `-Manifest`, then executes the **full installer**,
+not selected install stages or a handmade uv environment. It requires every
+manifest stage's successful, non-skipped frame, the final completion frame,
+bootstrap marker/exact caller, installed artifacts, persistent user home/PATH,
+and clean tracked source. Configuration and gateway autostart remain the
+installer's documented non-interactive no-ops; fixture configuration and the
+supported gateway registration follow. Computer-use setup and desktop building
+are deliberately not certified. There is no fixture-owned dependency/recovery
+fallback, source restore, lockfile repair or installer monkeypatch.
+
+Installation uses the shipped default `%LOCALAPPDATA%\clover\clover-c1\venv`,
+not the earlier synthetic source directory. Pinned uv0.13.5 is explicitly
+preinstalled in the fresh home's managed `bin`; its bootstrap download is
+**NOT EXERCISED**. The unmodified Python stage selects/provisions the released
+3.11 default with managed-only discovery, rather than reusing a hosted image's
+unrelated interpreter or forcing the old fixture's3.12 venv. The unchanged
+`sqlite-before` gate still rejects an unsafe installed runtime. An installer or
+SQLite failure remains a failed/unexercised update row, never a reason to bypass
+installation or replace the interpreter.
+
+The installer's two hardcoded GitHub Git URLs use process-local Git `insteadOf`
+rewrites to a disposable bare mirror of the checked-out source. Its `main` is
+the exact old SHA/tree, and all original objects/identifiers are retained.
+`installer-origin-provenance.json` records both rewrites and the checked-out
+source identity. This tests the real installer repository/checkout logic, not
+GitHub authentication/download availability. Candidate objects are fetched only
+after installation; the existing separate update origin still supplies the
+unchanged target. No GitHub/main or released script is edited.
+
+Startup registration uses the **public installed CLI** `gateway install
+--no-start-now --start-on-login`, with a real Limited/S4U token for the current
+runner account and a supported `n` answer to UAC. The helper fails if that token
+is administrative, captures its CLI output/identity/XML/result, and removes its
+temporary registration task. It neither generates the VBS itself nor starts or
+restarts a gateway. Zyra then launches the actual registered Startup entry.
+Troy retains the separately proven legacy native pythonw Scheduled-Task shape;
+that historical shape is **not** mislabeled the installer's default supervisor.
+Existing ownership, SCM/Schedule, native security and completion assertions are
+unchanged, including the90-second stability window.
+
+After an explicit parent steer, a fresh PR150 read-back confirmed
+`1a606496182ef48eafd78889eea8878165b829ae`; the read-only integration checkout
+confirmed tree `43825538944a3d836e8a28ad509f39b0eca7710e`. The final `candidate` /
+`full` pins now select that exact pair, not the earlier combined5bfc identity.
+The old branch-only push trigger remains unchanged. Parent independent delta
+approval still precedes publication and the one final native gate. This
+correction has not been pushed, labeled, dispatched or native-certified.
 
 ## Bounded matrix
 

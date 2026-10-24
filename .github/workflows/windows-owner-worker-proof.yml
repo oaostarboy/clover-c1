@@ -138,10 +138,11 @@ jobs:
           STATUS_LOCK_REPAIR_SHA: 27f507acb4f12c30d237471095f137007952c312
           CALLER: ${{ matrix.caller }}
         run: python helpers/.github/owner-worker-proof/target.py source "$RUNNER_TEMP/evidence"
-      - name: Real installer-shipped Startup VBS or native Scheduled Task; no driver restart
+      - name: Released installer, public Startup registration or legacy native Task; no driver restart
         shell: bash
         env:
           OLD_SHA: ${{ matrix.old }}
+          CANDIDATE_SHA: ${{ needs.plan.outputs.target }}
           ENTRY: ${{ matrix.entry }}
           SETUP: ${{ matrix.setup }}
           TURN_MODE: ${{ matrix.turn_mode }}
@@ -150,7 +151,7 @@ jobs:
         run: |
           set -euo pipefail
           uv run --no-project --with psutil python helpers/.github/owner-worker-proof/windows_update.py \
-            --source "$GITHUB_WORKSPACE/source" --old "$OLD_SHA" --entry "$ENTRY" \
+            --source "$GITHUB_WORKSPACE/source" --old "$OLD_SHA" --entry "$ENTRY" --candidate "$CANDIDATE_SHA" \
             --setup "$SETUP" --turn-mode "$TURN_MODE" --target "$UPDATE_TARGET" --tree "$UPDATE_TREE" \
             --evidence "$RUNNER_TEMP/evidence" --uv "$BOOTSTRAP_UV"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02

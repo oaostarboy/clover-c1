@@ -1,0 +1,21 @@
+....................                                [100%]
+=================================== FAILURES ===================================
+_ Contracts.test_reviewed_native_controls_and_update_acceptance_are_not_weakened (file='start_troy.ps1') _
+
+self = <test_contract.Contracts testMethod=test_reviewed_native_controls_and_update_acceptance_are_not_weakened>
+
+    def test_reviewed_native_controls_and_update_acceptance_are_not_weakened(self):
+        repo = HERE.parents[1]
+        reviewed = '8883828f78049272e7c98b590e142a8ec56d8359'
+        for name in ('bootstrap.py', 'frozen_postpull.py', 'plan.py', 'start_troy.ps1',
+                     'topology.py', 'test_owner_worker_native.py', 'test_status_lock_windows_native.py'):
+            with self.subTest(file=name):
+                original = subprocess.check_output(['git', '-C', str(repo), 'show',
+                    reviewed + ':.github/owner-worker-proof/' + name])
+>               self.assertEqual((HERE / name).read_bytes(), original)
+E               AssertionError: b'par[43 chars]hon,\r\n      [Parameter(Mandatory=$true)][str[1068 chars]\r\n' != b'par[43 chars]hon,\n      [Parameter(Mandatory=$true)][strin[1044 chars]\'\n'
+
+.github/owner-worker-proof/test_contract.py:178: AssertionError
+=========================== short test summary info ============================
+SUBFAILED(file='start_troy.ps1') .github/owner-worker-proof/test_contract.py::Contracts::test_reviewed_native_controls_and_update_acceptance_are_not_weakened
+1 failed, 20 passed, 20 subtests passed in 0.48s
