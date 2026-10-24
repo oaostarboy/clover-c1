@@ -161,12 +161,14 @@ BLOCK
         # Strip the final brace of the outer finally; run its exact body with OS
         # cmdlet stubs. No native account/process API is called on this host.
         block = block.rsplit('}', 1)[0]
+        inventory = text[text.index('$cleanupInventory = '):text.index('$childEvidence = ')]
         for fail in (False, True):
             with tempfile.TemporaryDirectory(dir=HERE) as tmp:
                 body = r"""
 $sid='created-sid'; $name='clv-created'; $description='exact-description'; $profile='/never-created-profile'
 $account=[pscustomobject]@{ SID=$sid }; $process=$null; $secret=$null
 $Evidence='EVIDENCE'; $passed=$true; $cleanupPassed=$false; $childExit=0; $RequestFile=$null
+INVENTORY
 $script:ownedTask=$true; $script:ownedProfile=$true; $script:ownedUser=$true
 $script:events=[Collections.Generic.List[string]]::new()
 $script:failProfile=FAILPROFILE
@@ -205,7 +207,7 @@ $receipt=Get-Content (Join-Path $Evidence 'RESULT.json') -Raw | ConvertFrom-Json
 if ($receipt.cleanup_passed -eq $script:failProfile -or $receipt.passed -eq $script:failProfile) { throw 'cleanup receipt false pass' }
 'PASS'
 """
-                body = body.replace('EVIDENCE', str(tmp).replace("'", "''")).replace('FAILPROFILE', '$true' if fail else '$false').replace('BLOCK', block)
+                body = body.replace('EVIDENCE', str(tmp).replace("'", "''")).replace('FAILPROFILE', '$true' if fail else '$false').replace('INVENTORY', inventory).replace('BLOCK', block)
                 result = self.run_ps(body)
                 with self.subTest(profile_failure=fail):
                     self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
