@@ -207,8 +207,7 @@ try {
     if ($script:childStage.phase -eq 'access_receipt' -and $script:childStage.state -eq 'passed') {
         # Never relabel successful access as a failed access stage.
         try { [IO.File]::WriteAllText((Join-Path $c.evidence 'update-failure.txt'), 'Full Startup update driver failed after verified access') } catch { }
-        exit $exitCode
-    }
+    } else {
     try { Set-AccountChildStage -Phase $script:childStage.phase -State 'failed' -Exception $originalFailure } catch { }
     # Only after the ORIGINAL Startup predicate failed and exit=1 was fixed.
     # Later native returns are observations, never replacement acceptance inputs.
@@ -237,5 +236,6 @@ try {
     try {
         [IO.File]::WriteAllText((Join-Path $c.evidence 'child-failure.txt'), 'Actual account child failed; inspect phase-specific nonsecret receipts')
     } catch { }
+    }
 }
 exit $exitCode
