@@ -1,22 +1,31 @@
-## Scope and source pins
-Stacked on PR #148. Initial immutable base was `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`; this branch now includes reviewed status-lock correction `27f507acb4f12c30d237471095f137007952c312` unchanged. No independently authored status edits, Windows workflow edits, existing workflow pin changes or live gateway operations.
+## Frozen combined product / parent Windows handoff
 
-**Final code / Windows retarget:** `bd8b623942d75e6f786ca9f4ef5267c454f9624f`. **Native-executed combined source:** `6ac82c5cb5e56702f6616245140fd5efb227805c` (tree `202b32c8abfddb187ed45e9e662e186b558c5c0d`). The sole later code change is a Windows skip for the POSIX-path Mac replay; product and native fixture/workflow files are byte-identical. That decorator is a no-op on macOS; no native run of bd8b623 is claimed. Final local218/4 interactions passed at bd8b623. Later evidence-only commits do not change code.
+**Product SHA:** `5bfc4013ae48f6247194d46beec9071bf44f4f6f`
+
+**Tree:** `22623c567b679fa8ce052dce0caaf982e1bfd9a6`
+
+Includes reviewed PR148 correction `27f507acb4f12c30d237471095f137007952c312` unchanged. Initial immutable base was `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`. Product/fixtures are frozen; later commits contain evidence/docs only. `FROZEN-PRODUCT.json` is the committed pin. Parent owns final Windows fixture8883828f review/16-row dispatch and independent Mac guard review. Builder has not self-labelled `ci-reviewed`.
 
 ## Product correction
-- Recognize both framework-Python argv[0] normalization seams only on macOS.
-- Require this updater's **venv bin directory**, live launchd **loaded** program and exact wrapper arguments bound to the wrapper PID, real/effective/saved UID, direct wrapper->worker edge, expected command tail/profile error log, and repeated start fingerprints.
-- Shared base Python inodes and claimed VIRTUAL_ENV alone never establish ownership. Unreadable or conflicting evidence fails closed. Windows/Linux mismatch policy remains rejection.
 
-## Verified results
-- PR148 original replay: two exact positive-contract failures. Expanded RED additionally catches a shared-base false admission in the old lexical-only path. No negative assertion was removed.
-- Combined local status/guard/verifier interactions: **218 passed, 4 skips** (two pinned historical-policy cases; two native Windows-only cases). Canonical JUnit and every unique node ID are committed.
-- Exact combined hosted macOS run **PASS, both jobs**: https://github.com/oaostarboy/clover-c1/actions/runs/40050938504 . Homebrew framework Python, actual Darwin/launchd, private credential-free installation, no production credentials.
-- Native ownership: published RED and repaired GREEN, both argv aliases reproduced; stable PID/start identities; stale/wrong-home/unadmitted negatives rejected; synthetic processes finished naturally and exact labels were verified absent.
-- Actual frozen 1.5.6 CLI updater: normal supported launchd installation, running old gateway -> exact combined target, updater exit0, fresh success receipt, new worker9164/wrapper9150, owned listener and90-second stable window, no stale restart_requested, no failed units or killed_pids. Installed source/import identity passed before/after. Private service cleanup verified label absence.
-- First full-native attempt failed before the updater because the old foreground verifier counted the wrapper and missed normalized worker argv. Its complete failure evidence remains committed. A new **Mac-only** verifier now requires exactly the worker plus its positively proved wrapper; no ancestor blanket exemption or shared-verifier relaxation.
+Fix both macOS framework-Python argv identity seams only with this updater's **venv bin directory**, live loaded-launchd program/exact arguments bound to the wrapper PID, all UID fields, direct admitted-child edge, command tail/profile error log and repeated PID/start proof. Shared base interpreter/claimed environment/ancestor alone never establish ownership. Unknown evidence rejects. Windows/Linux mismatch policy remains strict; no carrier capability is forged. Sole independently edited product file is `clover_cli/update_delivery_guard.py`; status bytes match reviewed27f507 exactly.
 
-## Still not proved / integration hold
-Chat `/update`, one accepted turn with one tool effect and one complete user reply, and staged pending no-pull catchup remain **NOT EXERCISED**. This is real frozen CLI proof, not full chat/update certification or Suni recovery. Parent owns combined-delta/workflow review, `ci-reviewed`, remaining acceptance and Windows retargeting. No merge, tag, release, live restart or approval label was performed by the builder.
+## Verified on exact frozen source
 
-Handoff, exact receipts/source hashes/PID starts, raw archived logs and original RED evidence: `artifacts/suni-ownership/REPAIR-HANDOFF.md`.
+**Hosted run: https://github.com/oaostarboy/clover-c1/actions/runs/40055028542 — all THREE jobs PASS.**
+
+- Real Darwin/Homebrew framework ownership: published RED and repaired GREEN reproduce both argv aliases; strict negative cases reject; synthetic workers finish naturally, private labels absent.
+- Real localhost IRC `/update`, normal running launchd installation, immutable old1.5.6 CLI -> exact frozen source. One accepted turn, one actual file-tool effect, one complete ordinary reply and one fresh final update report. New worker4277/wrapper4276 remains healthy/owned/current for90 seconds.
+- Real IRC staged-source **pending/no-pull catchup**: source already frozen while old1.5.6 worker still runs; real pending marker; fresh success receipt has identical pre/post product SHA. One accepted tool effect/reply, one final report, cleared pending marker, new worker3140/wrapper3139 stable90 seconds. Both guard receipts say `legacy-proceed`, not fabricated capability. The no-pull receipt omits restart detail counters; raw planned-stop/drain logs and actual runtime proof remain preserved.
+- Independent readback verifies both final user messages occur AFTER their fresh producer receipts and report the actual C1.5.9 outcome. Deterministic local model is test input; real gateway/file-tool/transport execution is not mocked. No provider/Telegram credentials.
+- Local final-source regressions: **218 passed,4 skipped**; **14 wire/checkpoint fixture tests passed**. JUnit and unique IDs committed.
+
+## Earlier results and correction provenance
+
+Frozen CLI old2new passed run40050938504 on6ac82c5; product guard/status bytes equal the final frozen source. Initial foreground-verifier refusal and later pending-fixture failures are retained. Pending fixtures first incorrectly waited for a future receipt, then assumed a rollback beacon; final timing control observes the actual unique private updater's live kernel PID/start/argv/UID/home and only releases its held test response. It does not patch busy/ownership state, increase deadlines, authorize a stop or replay work. No product change was needed for those fixture corrections.
+
+## Scope / remaining integration authority
+
+Ready for independent Mac-guard/workflow review and parent-controlled Windows final proof, NOT a public release or live recovery claim. No Windows workflow/CI duplication, existing workflow pin changes, live gateway operations, merge/tag/release or approval label by this worker. Local IRC acceptance is not Telegram phone acceptance.
+
+Raw final/failed run artifacts, exact source hashes/receipts/PIDs/window observations and all test IDs: `artifacts/suni-ownership/REPAIR-HANDOFF.md`.

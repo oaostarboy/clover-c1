@@ -1,105 +1,103 @@
-# macOS framework wrapper repair — native evidence checkpoint
+# macOS wrapper repair: frozen product and completed native acceptance
 
-## Current combined candidate (supersedes initial checkpoint below)
+## Immutable integration pin
 
-- **Windows retarget / final code source: `bd8b623942d75e6f786ca9f4ef5267c454f9624f`**. Native-executed combined source is `6ac82c5cb5e56702f6616245140fd5efb227805c`, tree `202b32c8abfddb187ed45e9e662e186b558c5c0d`. The sole subsequent code delta is a standard unittest Windows skip for this POSIX-path Mac replay (Windows lacks os.getuid and uses different path semantics). Product files and native fixture/workflow bytes are identical; the decorator is a no-op on the hosted Mac. No native run of bd8b623 is claimed. Final local interactions re-passed218/4 at bd8b623; later commits contain evidence only.
-- Includes reviewed PR148 status-lock correction `27f507acb4f12c30d237471095f137007952c312` as an ancestor, merged without conflict or independently authored status edits. `gateway/status.py` is byte-identical to that reviewed commit (SHA256 `fb871b794ea2c6a491dddcb1d2ae25dabcb478ded0e4fd56b3d6e7983ad027ed`). PR148 itself was not rewritten or pushed by this worker.
-- Mac guard is byte-identical to the first hosted PASS (SHA256 `f16befb42735a4336a3ee4e13440d56f8574be24d9787fce5726846050baacd0`).
-- Own new Mac fixture correction: `macos_wrapper_state.py` selects possible gateways by actual profile home/command, then requires **exactly one worker plus its positively proved wrapper**. It retains current PID/start/home binding, loaded launchd/own-venv attestation, strict duplicate/unknown process refusal, owned listener/health/source checks and the90-second stable window. It does not patch the frozen updater or change the existing shared verifier/Windows files.
-- Captured first native failure is the RED for this fixture correction. Six focused local tests cover normalized child selection and reject missing/extra/identical/unproved roles.
-- Combined local interactions: **218 passed, 0 failed, 0 errors, 4 skips**,222 unique JUnit cases. Skips: two pinned historical-policy replays and two native Windows-only cases. `combined-source-tests.json` enumerates every node; `combined-interactions-junit.xml` is canonical.
-- Exact combined native run: https://github.com/oaostarboy/clover-c1/actions/runs/40050938504 . Framework ownership job **PASS** at https://github.com/oaostarboy/clover-c1/actions/runs/40050938504/job/120743238487 : native published RED and repaired GREEN both reproduce both argv aliases, preserve all countercase refusals, and verify natural completion and absent labels.
-- Combined frozen-update job **PASS**: https://github.com/oaostarboy/clover-c1/actions/runs/40050938504/job/120744035310 . The actual immutable old1.5.6 CLI updater exited0, pulled the exact combined target, used normal launchd restart, and produced a fresh success receipt (01:46:35.921615Z–01:48:06.074265Z). Before: wrapper6295 -> worker6302; after: wrapper9150 -> worker9164. Both native argv normalization seams were present. Thirty observations covered the90-second stable window with the exact new source, same new PID/start and wrapper identity, owned listener, running status, and `restart_requested=false`. Restart receipt: `restarted_services=[ai.clover.gateway]`, `killed_pids=[]`, `failed_units=[]`, `incomplete=false`. Before/after outside-checkout installed-source checks passed. Supported cleanup removed the private label, with absence verified. **This passes frozen CLI old2new, not chat/no-pull acceptance.** Raw receipt/process/window/import evidence is in `hosted-update-40050938504/`; original job-log ZIP integrity passed.
-- Branch-defined `workflow_dispatch` was actually accepted after initial dedicated-branch push registration; no default-branch workflow or existing workflow pins were changed.
+- Product SHA: `5bfc4013ae48f6247194d46beec9071bf44f4f6f`
+- Product tree: `22623c567b679fa8ce052dce0caaf982e1bfd9a6`
+- PR: https://github.com/oaostarboy/clover-c1/pull/150
+- Branch: `clover-subagent/subagent-sa-0-578b1794`
+- Initial immutable PR148 base: `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`.
+- Reviewed PR148 status fix `27f507acb4f12c30d237471095f137007952c312` is an ancestor. `gateway/status.py` is unchanged from that commit; SHA256 `fb871b794ea2c6a491dddcb1d2ae25dabcb478ded0e4fd56b3d6e7983ad027ed`.
+- Mac guard SHA256 `f16befb42735a4336a3ee4e13440d56f8574be24d9787fce5726846050baacd0`, unchanged since first hosted GREEN. All continuation corrections are Mac test fixtures, not product changes.
+- `FROZEN-PRODUCT.json` was committed and remotely read back immediately when the parent requested the Windows pin. No further product/fixture edits; subsequent commits add documentation/evidence only. Do not replace the immutable pin with a later evidence-only head when reproducing these native results.
 
+## Product security boundary
 
-## Initial 9195 checkpoint (historical; superseded above)
+Only `clover_cli/update_delivery_guard.py` was independently edited as product code.
+Both macOS framework argv normalization seams now require this updater's actual
+venv **bin directory**, its pyvenv marker, native framework executable, a loaded
+launchd job's exact venv program/wrapper arguments bound to the wrapper PID,
+real/effective/saved UID, direct launchd->wrapper->admitted worker edges, exact
+worker command tail/profile error log, and repeated wrapper/child start identities.
+Environment must be readable and must not conflict. Shared base interpreter
+inodes, claimed VIRTUAL_ENV, disk plist contents or an ancestor relationship alone
+never authorize ownership. Unknown evidence rejects. No carrier capability is
+manufactured; Windows/Linux mismatches remain rejected.
 
-### Ownership and scope
+## RED and local GREEN
 
-- Sole product file: `clover_cli/update_delivery_guard.py`.
-- No `gateway/status.py`, Windows workflow, existing workflow pin, live source, home, database, venv or service was edited.
-- Branch `clover-subagent/subagent-sa-0-578b1794`; stacked PR https://github.com/oaostarboy/clover-c1/pull/150.
-- Immutable PR148 base: `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`.
-- Inherited tests/evidence cherry-picked as `83306449` from `ed4c7efb33685ede48390a0c6596e804d8f8d0b4`.
-- Product/workflow tested source: `9195c15e6d40410ada6fd23b125e1e6137ad6547`, tree `acbd3f9558424190acb7054e74e43d385aa5392f`.
-- Guard SHA256: `f16befb42735a4336a3ee4e13440d56f8574be24d9787fce5726846050baacd0`.
+- Original PR148 replay: 8 pass, 2 exact positive failures, 2 historical-policy skips (`repair-red.log`).
+- Expanded RED: 22 pass, 3 failures, 2 skips (`repair-final-red.log`). The added third failure catches shared-base false admission in the old lexical-only path.
+- Final source regressions: **218 passed, 4 skipped, 0 failures/errors**. `accepted-source-junit.xml` and `accepted-source-tests.json` preserve unique node IDs and source hashes. Skips are two explicit historical-policy replays and two Windows-only tests.
+- **14 local wire/checkpoint tests passed**, enumerated in `accepted-source-tests.json`; canonical raw output is `chat-kernel-checkpoint-tests.log`. These are fixture checks, not Mac certification.
+- Added negative cases cover shared-base foreign venv/symlink aliases, wrong loaded program despite claimed environment, wrong log/tail/parent, unreadable environment, cross-UID, unknown/reused starts and unadmitted children. Assertions were not weakened.
 
-## Security boundary
+## Latest hosted macOS acceptance: all THREE jobs PASS
 
-Interpreter normalization is only admitted on macOS, with all of these proofs:
-this updater's venv **bin directory** (not executable realpath), its pyvenv marker,
-the native framework executable, a loaded launchd job's exact venv program and
-wrapper argument vector bound to that wrapper PID, real/effective/saved UID,
-launchd->wrapper->admitted worker direct edges, exact worker command tail,
-expected profile error log, and repeated child/wrapper start identities.
-Readable environment fields must not conflict with the independently proved venv
-and home. Environment alone, a shared base interpreter, a plist on disk or an
-ancestor relationship is never authority. Unknown/unreadable evidence rejects.
-Windows and Linux mismatches remain rejected; lexically equal non-framework
-controls retain existing policy. No carrier capability is manufactured.
+Run: https://github.com/oaostarboy/clover-c1/actions/runs/40055028542
 
-## RED / GREEN
+Exact execution SHA is the frozen product above. Actual hosted macOS14 uses
+Homebrew framework Python3.12.14 and normal supported launchd installation.
+The private HOME/profile, localhost IRC sink and deterministic localhost model
+need no real messaging/provider credentials. Model responses are test inputs;
+the installed gateway executes its real file tool and sends the real replies.
+No mocked tool result or runtime capability replaces execution.
 
-- Original PR148 replay: 12 cases; 8 pass, 2 exact positive failures, 2 historical-policy skips. `repair-red.log` preserves this run.
-- Expanded final PR148 replay: 27 cases; 22 pass, 3 fail, 2 skips. The added third RED is an actual shared-base-command false admission in the old lexical-only path. `repair-final-red.log` preserves it.
-- Fixed focused regression suite: 72 unique JUnit cases; **70 pass, 0 fail, 0 error, 2 historical-policy skips**. `local-test-nodeids.json` enumerates every node. `repair-junit.xml` is the canonical count source.
-- Native-unit replay uses mocked OS launchd/file attestation in addition to the original process replay. Its positive expectations were not weakened. Actual native process proof below uses real psutil and launchctl, not these mocks.
-- Linux real-process fixture passed, explicitly labelled NOT MACOS PROOF.
-- YAML loads, all five workflow shell blocks pass `bash -n`, and `git diff --check` passed.
+### Framework ownership
 
-## Real hosted macOS proof
+https://github.com/oaostarboy/clover-c1/actions/runs/40055028542/job/120756024968
 
-One bounded branch-push workflow run, no retries:
-https://github.com/oaostarboy/clover-c1/actions/runs/40050040331
+Published native RED and repaired GREEN reproduce BOTH normalized argv seams.
+Stable PID/start binding and stale/wrong-home/unadmitted negatives pass. Synthetic
+workers/wrappers finish naturally and private labels are verified absent.
 
-Framework ownership job: **PASS**
-https://github.com/oaostarboy/clover-c1/actions/runs/40050040331/job/120740479414
+### Real IRC old1.5.6 -> frozen product
 
-- Homebrew framework Python 3.12.14, actual hosted Darwin/launchd.
-- Published native RED `3b54f413376eb99f8b83bfd4a0a340d01825014d`: wrapper3071 -> worker3072; both OS argv[0] framework aliases; guard returns false at original line40; source hash `d16cfaa9a118cdc477134d8cb36db906d5753cdc4dc2e263d07ac4ef6b2cc509`.
-- Exact repaired native GREEN `9195c15e6d40410ada6fd23b125e1e6137ad6547`: wrapper3089 -> worker3090; both framework aliases reproduced; loaded launchd program identifies the private venv; owner admitted.
-- GREEN wrapper start179280544285, worker start179280544301, stable during proof; stale-worker, wrong-home and unadmitted-worker cases rejected.
-- Both private synthetic workers/wrappers finished naturally and both exact fixture labels were removed and verified absent. No forced kill or replay.
-- Raw job log and downloaded JSON/replay artifacts are under `hosted-40050040331/`.
+https://github.com/oaostarboy/clover-c1/actions/runs/40055028542/job/120756145262
 
-Frozen normal launchd CLI updater job: **FAIL — prerequisite verifier refusal, updater NOT EXERCISED**
-https://github.com/oaostarboy/clover-c1/actions/runs/40050040331/job/120740754790
+- Actual old gateway accepts an ordinary turn, executes one real `write_file` effect and waits at the local model response. A genuine second human `/update` starts its immutable old CLI updater.
+- Release follows a read-only, exact private updater kernel PID/start/UID/argv/home checkpoint, never a future completion receipt. No busy state or guard is patched.
+- Exactly one file-tool request/effect, one complete ordinary reply, one final update report. No replay is injected.
+- Fresh actual receipt succeeds: pre SHA `9535350bee1d57cf7e466672e6f416403886bec1`, post SHA `5bfc4013ae48f6247194d46beec9071bf44f4f6f`, 02:40:29.539675Z–02:41:49.306495Z.
+- Worker2280 -> worker4277/wrapper4276. Thirty observations hold current source, same PID/start, proved wrapper, owned listener/health/running status and `restart_requested=false` for90 seconds.
+- Guard records `legacy-proceed`, not a fabricated modern carrier capability. Restart receipt lists `ai.clover.gateway`, no killed PIDs/failed units/incomplete phase. Supported cleanup verifies label absence.
 
-The old 1.5.6 private editable installation and outside-checkout import/source
-identity passed. The supported `gateway install` route loaded launchd and the
-actual old gateway connected its localhost API listener. However, the reused
-foreground-oriented `proof.py:observe_gateway` requires the checkout path in
-each candidate's argv. In the native framework shape the worker argv contains
-only the framework executable and module tail; only its wrapper carries the
-venv/checkout path. The verifier therefore repeatedly reported
-`gateway process count/ownership mismatch: [1981]`. The gateway's own shutdown
-context identifies 1981 as its parent, confirming the counted process was the
-wrapper rather than the worker. The test never ran the updater and produced no
-update receipt or 90-second post-update evidence. This is a native verifier
-coverage failure, NOT evidence that the product repair failed or passed update.
+### Staged-source pending/no-pull catchup with accepted work
 
-The owned private service stopped cleanly through the supported command; logs
-show a 0.11-second graceful shutdown with no active work, and the exact launchd
-label was verified absent. No retry or additional proof dispatch was made.
-`hosted-update-40050040331/` retains the acceptance report, install/identity
-outputs and complete gateway/verifier logs. `hosted-40050040331/logs.zip` retains
-the original workflow log archive; ZIP integrity was checked successfully.
+https://github.com/oaostarboy/clover-c1/actions/runs/40055028542/job/120756145223
 
-Parent must review a narrow **new macOS verifier** that counts exactly one
-worker plus its positively proved wrapper (not an ancestor exemption), then
-approve/dispatch the additional full native acceptance. Existing shared verifier
-and Windows files remain untouched. The current workflow deliberately retains
-this failed gate rather than relaxing its process count or declaring success.
+- A real old1.5.6 worker accepts the turn/tool before files change. While it waits, tracked source advances to the frozen product and a real private marker producer creates fresh pending restart intent. The old worker PID/source identity remains unchanged; no runtime state/capability is forged.
+- A genuine human `/update` invokes the current CLI against already-current files. Actual receipt pre/post SHA both equal the frozen product; old running worker source was still9535350.
+- Exactly one file-tool request/effect, one complete ordinary reply and one fresh final update report, with accepted work retained. Pending marker clears.
+- Fresh success receipt: 02:40:14.272128Z–02:41:01.271228Z. Worker1582 -> worker3140/wrapper3139. Thirty-one observations hold the same new identities, current source, owned listener/health/running status and no restart request for90 seconds. Cleanup verifies label absence.
+- Guard is `legacy-proceed`. This path's actual receipt has `gateway_restart={}`; do NOT infer nonexistent detailed counters from that omission. Raw gateway logs show planned SIGTERM and drain `timed_out=False`. The fixture never sends forced PID kills.
 
-## Explicit unresolved acceptance / parent ownership
+Both actual final user messages arrive AFTER their fresh receipt finishes and
+report C1.5.9 updated from the real old1.5.6 runtime. This is not an inherited old
+receipt or a generic healthy-process-only pass. Raw wire events preserve timing,
+origin messages and exact completion text.
 
-- The current fixture does not exercise a genuine accepted chat turn with one
-  tool effect and one complete reply, chat `/update`, or pending no-pull catchup.
-  These remain **NOT EXERCISED**, never inferred from a healthy gateway.
-- No full macOS update certification, merge readiness, release clearance, Suni
-  recovery, idle/delivery proof or live activation is claimed.
-- Parent reviews the new workflow and combined PR148+150 delta before adding
-  `ci-reviewed`, coordinates the Windows owner's separate retargeting and owns
-  any separately authorized recovery. Builder adds no approval label, merge,
-  tag, release, rollout or additional proof dispatch.
+## Preserved earlier native results and fixture corrections
+
+- Run40050040331: framework ownership passes; foreground-only updater prerequisite verifier refuses before updater execution. Corrected with the new Mac-only wrapper-aware verifier; no shared verifier/Windows files relaxed.
+- Run40050938504: combined source6ac82c5cb5e56702f6616245140fd5efb227805c passes framework and actual frozen CLI old2new. Product guard/status bytes are identical to frozen5bfc4013. See `REPAIR-HANDOFF-historical.md` and original `hosted-*` artifacts for exact receipts.
+- Run40052983324 sourcef9fbec83: real IRC old2new PASS. Pending test FAILS because the fixture withholds the accepted turn until a receipt that this no-pull path persists only after its busy wait. The product correctly refuses busy restart; not a product fix or a pass.
+- Run40054144491 source0b50ba3d: real IRC old2new PASS. Pending test cannot establish the assumed live rollback-beacon checkpoint. Do not relabel this as product clearance.
+- Final source5bfc4013 uses an actual unique kernel updater actor when the optional beacon is absent, retaining exact console path/UID/home, new start time and a fresh second PID/start/argv probe. Both final cases actually observe `beacon_exists=false`. This phase-timing control only releases the test model response; it never stops or authorizes any process. New local negative tests reject ambiguous/reused/foreign actors. All final native gates pass without changing product code, increasing deadlines or weakening ownership/idle checks.
+
+## Artifact map and integration ownership
+
+- `FROZEN-PRODUCT.json`: immutable combined product pin and parent Windows handoff.
+- `hosted-chat-40055028542/`: final raw artifacts, complete log ZIP, API job readback and independently parsed `verified-summary.json`.
+- `hosted-chat-40052983324/`, `hosted-chat-40054144491/`: original failed fixture runs retained, never counted as green pending acceptance.
+- `accepted-source-{junit.xml,pytest.log,tests.json}`: latest regression ledger.
+- `raw-evidence-manifest.json`: raw-file and compressed-log hashes; compression preserves exact bytes.
+
+Mac repair/native acceptance is complete. Independent Mac-guard/workflow review
+and `ci-reviewed` remain PARENT controlled; builder did not self-approve. Parent
+owns review of Windows fixture8883828f78049272e7c98b590e142a8ec56d8359 and final16-row
+Windows execution against the frozen product. Historical Windows rows onbdad7
+and63 native tests on27f507 are not final combined updater clearance. No Windows
+CI was dispatched by this worker. This proves local IRC, not Telegram/phone UI,
+and not live Suni recovery. No live gateways, other-agent configs/venvs/DBs,
+existing workflow pins, merge, tag or release were changed.

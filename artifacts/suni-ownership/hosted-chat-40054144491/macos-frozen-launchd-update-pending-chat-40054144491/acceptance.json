@@ -1,0 +1,48 @@
+{
+  "product_sha": "0b50ba3dfc1b406ba2fcd394e479a6730a11722c",
+  "old_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+  "scope": "native-framework-launchd-frozen-cli-old2new",
+  "passed": false,
+  "chat_update": "NOT EXERCISED",
+  "accepted_turn_tool_effect_reply": "NOT EXERCISED",
+  "pending_no_pull_catchup": "NOT EXERCISED",
+  "live_hosts_touched": false,
+  "scenario": "pending-chat",
+  "before_process": {
+    "worker_pid": 2542,
+    "wrapper_pid": 2537,
+    "worker_start": 1792808852.812898,
+    "wrapper_start": 1792808851.922029,
+    "worker_argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "wrapper_argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.stderr_timestamp",
+      "--error-log",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/logs/gateway.error.log",
+      "--",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "launchd_selected": [
+      "\tprogram = /Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/python",
+      "\tpid = 2537"
+    ]
+  },
+  "pending_seed_worker": {
+    "pid": 2542,
+    "code_sha": "9535350bee1d57cf7e466672e6f416403886bec1"
+  },
+  "error": "TimeoutError: chat updater did not establish a live PID/start/repo checkpoint"
+}
