@@ -1,0 +1,64 @@
+...FFF.FFFF...F                                                          [100%]
+=================================== FAILURES ===================================
+________ test_existing_lock_tightened_without_replacing_inode[420-384] _________
+tests/gateway/test_status_lock_security.py:45: in test_existing_lock_tightened_without_replacing_inode
+    assert stat.S_IMODE(lock.stat().st_mode) == expected
+E   AssertionError: assert 420 == 384
+E    +  where 420 = <built-in function S_IMODE>(33188)
+E    +    where <built-in function S_IMODE> = stat.S_IMODE
+E    +    and   33188 = os.stat_result(st_mode=33188, st_ino=59248529, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=18, st_atime=1792805031, st_mtime=1792805031, st_ctime=1792805031).st_mode
+E    +      where os.stat_result(st_mode=33188, st_ino=59248529, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=18, st_atime=1792805031, st_mtime=1792805031, st_ctime=1792805031) = stat()
+E    +        where stat = PosixPath('/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subage...0-f6608989/.test-sandbox/lock/tmp/pytest-of-starboy/pytest-3/test_existing_lock_tightened_w0/owner/gateway_state.lock').stat
+________ test_existing_lock_tightened_without_replacing_inode[438-384] _________
+tests/gateway/test_status_lock_security.py:45: in test_existing_lock_tightened_without_replacing_inode
+    assert stat.S_IMODE(lock.stat().st_mode) == expected
+E   AssertionError: assert 438 == 384
+E    +  where 438 = <built-in function S_IMODE>(33206)
+E    +    where <built-in function S_IMODE> = stat.S_IMODE
+E    +    and   33206 = os.stat_result(st_mode=33206, st_ino=59248539, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=18, st_atime=1792805031, st_mtime=1792805031, st_ctime=1792805031).st_mode
+E    +      where os.stat_result(st_mode=33206, st_ino=59248539, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=18, st_atime=1792805031, st_mtime=1792805031, st_ctime=1792805031) = stat()
+E    +        where stat = PosixPath('/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subage...0-f6608989/.test-sandbox/lock/tmp/pytest-of-starboy/pytest-3/test_existing_lock_tightened_w1/owner/gateway_state.lock').stat
+________ test_existing_lock_tightened_without_replacing_inode[448-384] _________
+tests/gateway/test_status_lock_security.py:45: in test_existing_lock_tightened_without_replacing_inode
+    assert stat.S_IMODE(lock.stat().st_mode) == expected
+E   AssertionError: assert 448 == 384
+E    +  where 448 = <built-in function S_IMODE>(33216)
+E    +    where <built-in function S_IMODE> = stat.S_IMODE
+E    +    and   33216 = os.stat_result(st_mode=33216, st_ino=59248549, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=18, st_atime=1792805031, st_mtime=1792805031, st_ctime=1792805031).st_mode
+E    +      where os.stat_result(st_mode=33216, st_ino=59248549, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=18, st_atime=1792805031, st_mtime=1792805031, st_ctime=1792805031) = stat()
+E    +        where stat = PosixPath('/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subage...0-f6608989/.test-sandbox/lock/tmp/pytest-of-starboy/pytest-3/test_existing_lock_tightened_w2/owner/gateway_state.lock').stat
+____________ test_lock_symlink_is_rejected_without_touching_target _____________
+tests/gateway/test_status_lock_security.py:57: in test_lock_symlink_is_rejected_without_touching_target
+    with pytest.raises(OSError):
+         ^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE OSError
+__________ test_lock_hardlink_is_rejected_without_chmod_of_other_path __________
+tests/gateway/test_status_lock_security.py:72: in test_lock_hardlink_is_rejected_without_chmod_of_other_path
+    with pytest.raises(OSError):
+         ^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE OSError
+______________ test_foreign_owned_lock_fails_closed_before_chmod _______________
+tests/gateway/test_status_lock_security.py:86: in test_foreign_owned_lock_fails_closed_before_chmod
+    with pytest.raises(PermissionError):
+         ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE PermissionError
+__________ test_changed_inode_during_open_fails_closed_without_chmod ___________
+tests/gateway/test_status_lock_security.py:109: in test_changed_inode_during_open_fails_closed_without_chmod
+    with pytest.raises(OSError):
+         ^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE OSError
+___________ test_replaced_inode_while_waiting_cannot_publish_status ____________
+tests/gateway/test_status_lock_security.py:144: in test_replaced_inode_while_waiting_cannot_publish_status
+    with pytest.raises(OSError):
+         ^^^^^^^^^^^^^^^^^^^^^^
+E   Failed: DID NOT RAISE OSError
+=========================== short test summary info ============================
+FAILED tests/gateway/test_status_lock_security.py::test_existing_lock_tightened_without_replacing_inode[420-384]
+FAILED tests/gateway/test_status_lock_security.py::test_existing_lock_tightened_without_replacing_inode[438-384]
+FAILED tests/gateway/test_status_lock_security.py::test_existing_lock_tightened_without_replacing_inode[448-384]
+FAILED tests/gateway/test_status_lock_security.py::test_lock_symlink_is_rejected_without_touching_target
+FAILED tests/gateway/test_status_lock_security.py::test_lock_hardlink_is_rejected_without_chmod_of_other_path
+FAILED tests/gateway/test_status_lock_security.py::test_foreign_owned_lock_fails_closed_before_chmod
+FAILED tests/gateway/test_status_lock_security.py::test_changed_inode_during_open_fails_closed_without_chmod
+FAILED tests/gateway/test_status_lock_security.py::test_replaced_inode_while_waiting_cannot_publish_status
+8 failed, 7 passed in 0.98s

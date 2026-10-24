@@ -19,6 +19,7 @@ import os
 import re
 import shlex
 import signal
+import stat
 import subprocess
 import sys
 import threading
@@ -1096,6 +1097,57 @@ def write_pid_file() -> None:
         raise
 
 
+def _validate_runtime_status_lock(metadata) -> None:
+    if (not stat.S_ISREG(metadata.st_mode) or metadata.st_nlink != 1
+            or getattr(metadata, "st_file_attributes", 0)
+            & getattr(stat, "FILE_ATTRIBUTE_REPARSE_POINT", 0)):
+        raise OSError("runtime status lock must be a single regular file")
+    if not _IS_WINDOWS and metadata.st_uid != os.geteuid():
+        raise PermissionError("runtime status lock belongs to another user")
+
+
+def _check_runtime_status_lock_path(fd: int, path: Path):
+    opened = os.fstat(fd)
+    named = path.lstat()
+    _validate_runtime_status_lock(opened)
+    _validate_runtime_status_lock(named)
+    if not os.path.samestat(opened, named):
+        raise OSError("runtime status lock changed while opening or waiting")
+    return opened
+
+
+def _open_runtime_status_lock(path: Path):
+    """Open one stable lock inode, tightening only our own POSIX permissions.
+
+    Windows uses the existing byte-range lock; POSIX mode bits do not secure
+    Windows ACLs. Its home must already have appropriate inherited ACLs.
+    Never unlink: a prior read-only holder cannot be evicted by chmod, and a
+    replacement inode would let writers enter different critical sections.
+    """
+    flags = (os.O_RDWR | getattr(os, "O_CLOEXEC", 0)
+             | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0))
+    previous = None
+    try:
+        fd = os.open(path, flags | os.O_CREAT | os.O_EXCL, 0o600)
+    except FileExistsError:
+        previous = path.lstat()
+        _validate_runtime_status_lock(previous)
+        fd = os.open(path, flags)
+    try:
+        opened = _check_runtime_status_lock_path(fd, path)
+        if previous is not None and not os.path.samestat(previous, opened):
+            raise OSError("runtime status lock changed before opening")
+        if not _IS_WINDOWS:
+            restricted = stat.S_IMODE(opened.st_mode) & 0o600
+            if stat.S_IMODE(opened.st_mode) != restricted:
+                os.fchmod(fd, restricted)
+            _check_runtime_status_lock_path(fd, path)
+        return os.fdopen(fd, "r+", encoding="utf-8")
+    except BaseException:
+        os.close(fd)
+        raise
+
+
 def _serialize_runtime_status(write):
     """Serialize the entire merge, not just atomic replacement of its result."""
     @wraps(write)
@@ -1104,13 +1156,14 @@ def _serialize_runtime_status(write):
         path.parent.mkdir(parents=True, exist_ok=True)
         # Separate from gateway.lock: status reporters must never acquire or
         # release the lifetime ownership lock. Never unlink this lock file.
-        with open(path, "a+", encoding="utf-8") as handle:
+        with _open_runtime_status_lock(path) as handle:
             deadline = time.monotonic() + 1.0
             while not _try_acquire_file_lock(handle):
                 if time.monotonic() >= deadline:
                     raise TimeoutError("runtime status writer is busy")
                 time.sleep(0.01)
             try:
+                _check_runtime_status_lock_path(handle.fileno(), path)
                 return write(*args, **kwargs)
             finally:
                 _release_file_lock(handle)
