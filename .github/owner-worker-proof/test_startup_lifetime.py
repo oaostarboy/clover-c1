@@ -104,7 +104,8 @@ def test_staging_is_private_exact_git_bundles_and_tool_bytes(tmp_path, monkeypat
     if extensionless_uv:
         monkeypatch.setattr(m.sys, 'platform', 'win32')
     uv_input = uv.with_suffix('') if extensionless_uv else uv
-    r = dict(request(), source=str(repo), helpers=str(helpers), uv=str(uv_input), old=head, candidate=head, target=head)
+    r = dict(request(), source=str(repo), helpers=str(helpers), uv=str(uv_input), old=head, candidate=head, target=head,
+             tree=subprocess.check_output(['git', '-C', str(repo), 'rev-parse', 'HEAD^{tree}'], text=True).strip())
     path = tmp_path / 'request.json'
     path.write_text(json.dumps(r))
     config = m.prepare(path, profile, HERE.parents[1])

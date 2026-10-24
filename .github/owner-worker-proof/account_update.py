@@ -12,6 +12,19 @@ import shutil
 import subprocess
 import sys
 import time
+import tempfile
+
+
+def require_complete(repo, refs):
+    """Never turn a shallow boundary into an apparently self-contained bundle."""
+    def git(*args):
+        return subprocess.run(['git', '--no-replace-objects', '-C', str(repo), *args],
+                              check=True, capture_output=True, text=True).stdout.strip()
+    if git('rev-parse', '--is-shallow-repository') != 'false':
+        raise ValueError('Refuse shallow packaging input; full checkout required before account creation')
+    # Traverse all refs exactly as bundle --all does, including requested history.
+    # Missing parents/objects must fail here, not in a newly created account.
+    git('rev-list', '--objects', '--all', *refs, '--missing=error')
 
 FIELDS = {'source', 'helpers', 'uv', 'setup', 'old', 'candidate', 'target', 'tree', 'entry', 'turn_mode'}
 
@@ -35,8 +48,67 @@ def digest(path):
     return hashlib.sha256(Path(path).read_bytes()).hexdigest()
 
 
+def clone_bundles(inputs, profile, command):
+    """The same bundle transport used by the account child and preflight."""
+    source, fixture = Path(profile) / 'source', Path(profile) / 'fixture'
+    for key, dest in [('source_bundle', source), ('fixture_bundle', fixture)]:
+        command(['git', 'clone', '--no-hardlinks', inputs[key], str(dest)])
+    return source, fixture
+
+
+def repo_identity(repo, refs) -> dict:
+    def git(*args):
+        return subprocess.run(['git', '--no-replace-objects', '-C', str(repo), *args],
+                              check=True, capture_output=True).stdout
+    def rev(ref):
+        return git('rev-parse', '--verify', ref).decode().strip()
+    files = git('ls-tree', '-rz', 'HEAD')
+    blobs = {}
+    for item in files.split(b'\0'):
+        if not item:
+            continue
+        metadata, name = item.split(b'\t', 1)
+        name = name.decode('utf-8')
+        if name.startswith(('.github/owner-worker-proof/', '.github/native-proof/')):
+            oid = metadata.decode().split()[2]
+            blobs[name] = dict(oid=oid, sha256=hashlib.sha256(git('cat-file', 'blob', oid)).hexdigest())
+    return dict(head=rev('HEAD'), tree=rev('HEAD^{tree}'),
+                refs={ref: dict(commit=rev(ref + '^{commit}'), tree=rev(ref + '^{tree}')) for ref in refs},
+                files_sha256=hashlib.sha256(files).hexdigest(), fixture_blobs=blobs)
+
+
+def verify_packaging(config, fixture, stage):
+    request = config['request']
+    refs = [request[k] for k in ('old', 'candidate', 'target')]
+    originals = dict(source_bundle=repo_identity(request['source'], refs),
+                     fixture_bundle=repo_identity(fixture, ['HEAD']))
+    if originals['source_bundle']['refs'][request['target']]['tree'] != request['tree']:
+        raise ValueError('Requested target tree differs from source')
+    with tempfile.TemporaryDirectory(prefix='clone-control-', dir=stage) as control:
+        def command(argv):
+            subprocess.run(argv, check=True, capture_output=True)
+        # bundle verify alone accepts the demonstrated shallow bundle: clone it.
+        for key in originals:
+            command(['git', '-C', str(request['source']), 'bundle', 'verify', config[key]])
+        source, cloned_fixture = clone_bundles(config, control, command)
+        for key, clone, required in [('source_bundle', source, refs),
+                                     ('fixture_bundle', cloned_fixture, ['HEAD'])]:
+            require_complete(clone, required)
+            if repo_identity(clone, required) != originals[key]:
+                raise ValueError('Bundle clone identity or fixture blob mismatch')
+    return originals
+
+
+def preflight(request_file, fixture, control_root):
+    """Exercise actual staging/clone in a private disposable parent namespace."""
+    with tempfile.TemporaryDirectory(prefix='clover-packaging-', dir=control_root) as profile:
+        return prepare(request_file, profile, fixture)['packaging']
+
+
 def prepare(request_file, profile, fixture):
     request = validate_request(json.loads(Path(request_file).read_text(encoding='utf-8-sig')))
+    require_complete(request['source'], [request[k] for k in ('old', 'candidate', 'target')])
+    require_complete(fixture, ['HEAD'])
     stage = Path(profile) / 'update-inputs'
     stage.mkdir()  # Fresh private account profile only; never overwrite inputs.
     config: dict = dict(request=request)
@@ -61,6 +133,7 @@ def prepare(request_file, profile, fixture):
     resolve = runpy.run_path(str(Path(__file__).with_name('bootstrap.py')))['resolve']
     shutil.copyfile(resolve(request['uv']), config['uv'])
     config['uv_sha256'] = digest(config['uv'])
+    config['packaging'] = verify_packaging(config, fixture, stage)
     return config
 
 
@@ -115,9 +188,7 @@ def run(config):
         def command(argv):
             subprocess.run(list(map(str, argv)), cwd=profile, env=env, check=True,
                            stdout=log, stderr=subprocess.STDOUT, timeout=max(1, min(600, deadline - time.monotonic())))
-        source, fixture = profile / 'source', profile / 'fixture'
-        for key, dest in [('source_bundle', source), ('fixture_bundle', fixture)]:
-            command(['git', 'clone', '--no-hardlinks', inputs[key], dest])
+        source, fixture = clone_bundles(inputs, profile, command)
         tools = profile / 'driver-tools'
         command([inputs['uv'], 'venv', '--python', config['python'], tools])
         python = tools / 'Scripts/python.exe'
@@ -136,13 +207,20 @@ def run(config):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser()
-    parser.add_argument('mode', choices=['prepare', 'run'])
+    parser.add_argument('mode', choices=['preflight', 'prepare', 'run'])
+    parser.add_argument('--control-root')
     parser.add_argument('--config')
     parser.add_argument('--request')
     parser.add_argument('--profile')
     parser.add_argument('--output')
     args = parser.parse_args()
-    if args.mode == 'prepare':
+    if args.mode == 'preflight':
+        value = preflight(args.request, Path(__file__).resolve().parents[2], args.control_root)
+        if args.output:
+            Path(args.output).write_text(json.dumps(value), encoding='utf-8')
+        else:
+            print(json.dumps(value))
+    elif args.mode == 'prepare':
         value = prepare(args.request, args.profile, Path(__file__).resolve().parents[2])
         Path(args.output).write_text(json.dumps(value), encoding='utf-8')
     else:

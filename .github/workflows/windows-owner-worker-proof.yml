@@ -113,6 +113,7 @@ jobs:
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
           path: helpers
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
@@ -160,6 +161,10 @@ jobs:
             target=$env:UPDATE_TARGET; tree=$env:UPDATE_TREE; entry=$env:ENTRY; turn_mode=$env:TURN_MODE }
           $requestPath = "$env:RUNNER_TEMP/startup-update-request.json"
           $request | ConvertTo-Json | Set-Content -LiteralPath $requestPath -Encoding utf8
+          & $python -I helpers/.github/owner-worker-proof/account_update.py 'preflight' `
+            --request $requestPath --control-root $env:RUNNER_TEMP `
+            --output "$env:RUNNER_TEMP/evidence/packaging-preflight.json"
+          if ($LASTEXITCODE -ne 0) { throw 'Packaging preflight failed; no account created' }
           & helpers/.github/owner-worker-proof/disposable_account.ps1 -Python $python `
             -Evidence "$env:RUNNER_TEMP/evidence/account" -RequestFile $requestPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

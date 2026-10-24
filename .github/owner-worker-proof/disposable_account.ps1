@@ -17,6 +17,11 @@ if (-not [IO.Path]::IsPathFullyQualified($Python) -or -not (Test-Path -LiteralPa
     throw 'One absolute existing Python interpreter required'
 }
 if (Test-Path -LiteralPath $Evidence) { throw 'Refuse existing account evidence root' }
+# Mandatory even when invoked without the workflow; no account or secret yet.
+if ($RequestFile) {
+    & $Python -I (Join-Path $PSScriptRoot 'account_update.py') 'preflight' --request $RequestFile --control-root ([IO.Path]::GetTempPath()) | Out-Null
+    if ($LASTEXITCODE -ne 0) { throw 'Packaging preflight failed; no account created' }
+}
 $null = New-Item -ItemType Directory -Path $Evidence
 $Evidence = (Resolve-Path -LiteralPath $Evidence).Path
 $hostExe = (Get-Process -Id $PID).Path
