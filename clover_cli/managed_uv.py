@@ -104,6 +104,10 @@ def managed_python_env(
         "UV_NO_MANAGED_PYTHON",
         "UV_PYTHON",
         "UV_PYTHON_DOWNLOADS",
+        # The legacy preference env maps to --python-preference, which uv
+        # rejects alongside our UV_MANAGED_PYTHON pin (even only-managed).
+        # Supersede it only in this private child env, not the user's process.
+        "UV_PYTHON_PREFERENCE",
         "UV_SYSTEM_PYTHON",
         "VIRTUAL_ENV",
         "PYTHONHOME",
