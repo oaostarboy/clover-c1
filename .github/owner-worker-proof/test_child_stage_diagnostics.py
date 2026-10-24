@@ -65,7 +65,9 @@ class ChildStageDiagnostics(unittest.TestCase):
                     'home_write': '$owned=$env:CLOVER_HOME',
                     'home_read': "[IO.File]::WriteAllText($owned,'wrong')",
                     'startup_location': '$null=$null',
-                    'startup_create': "$startup=Join-Path $c.evidence 'file'; [IO.File]::WriteAllText($startup,'not a directory')",
+                    # -Force can silently return $null for file collisions; use an
+                    # invalid filesystem path so the real directory creation fails.
+                    'startup_create': "$startup=$c.evidence+[IO.Path]::DirectorySeparatorChar+'invalid'+[char]0+'directory'",
                     'startup_write': '$null=New-Item -ItemType Directory -Path $readiness',
                     'startup_read': "[IO.File]::WriteAllText($readiness,'wrong')",
                     'startup_remove': 'Remove-Item -LiteralPath $readiness',
