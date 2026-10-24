@@ -1,5 +1,6 @@
 {
   "mode": "candidate",
+  "scope": "troy-verifier-correction",
   "target": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
   "target_tree": "04630f4788743b5b556e5e4379d998c42394efa3",
   "historical_helpers": "93cf13e9f66be56428993402c1e80422d9005d85",

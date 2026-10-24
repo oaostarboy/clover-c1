@@ -229,7 +229,7 @@ class LocalIRC:
         self.send(c, ':ant!ant@localhost PRIVMSG ' + c['nick'] + ' :/update')
 
 
-def observe(home, source, expected, live):
+def observe(home, source, expected, live, diagnostic=None):
     import psutil
     state = read_json(home / 'gateway_state.json')
     assert state['code_sha'] == expected, state
@@ -245,34 +245,29 @@ def observe(home, source, expected, live):
         assert Path(p.environ()['CLOVER_HOME']).resolve() == home.resolve()
     if 'VIRTUAL_ENV' in p.environ():
         assert Path(p.environ()['VIRTUAL_ENV']).resolve() == live.resolve()
-    owned=[]
-    for q in psutil.process_iter(['cmdline']):
-        argv=q.info['cmdline'] or []
+    measured = []
+    for q in psutil.process_iter(['cmdline', 'exe', 'pid', 'ppid']):
+        argv = q.info['cmdline'] or []
         if 'clover_cli.main' in argv and 'gateway' in argv and 'run' in argv and '--' not in argv:
-            try:
-                claimed_home = q.environ().get('CLOVER_HOME')
-                if claimed_home == str(home) or (claimed_home is None and
-                        Path(argv[0]).parent.resolve() == python(live).parent.resolve()):
-                    owned.append(q)
-            except psutil.NoSuchProcess: pass
-    # Native Windows venv has one launcher and one base-interpreter child.
-    if WINDOWS:
-        assert len(owned) in [1,2], [q.pid for q in owned]
-        assert p.pid in [q.pid for q in owned]
-        if len(owned)==2:
-            assert any(q.ppid()==other.pid for q in owned for other in owned if q.pid!=other.pid)
-        allowed_launchers = {str(python(live)).lower(), str(python(live).with_name('pythonw.exe')).lower()}
-        assert allowed_launchers.intersection(q.cmdline()[0].lower() for q in owned)
-        schedule = psutil.win_service_get('Schedule').as_dict()
-        assert schedule['status'] == 'running'
-        supervisor = dict(schedule_pid=schedule['pid'], schedule_status=schedule['status'],
-                          ancestors=[dict(pid=q.pid, name=q.name()) for q in p.parents()])
-    else:
-        assert [q.pid for q in owned] == [p.pid], dict(state=state,actual=p.cmdline(),owned=[dict(pid=q.pid,argv=q.cmdline()) for q in owned])
-        from clover_cli.gateway import get_launchd_label, _locate_launchd_gateway_service
-        domain, manager = _locate_launchd_gateway_service(get_launchd_label())
-        assert domain and manager in [p.pid,*[q.pid for q in p.parents()]]
-        supervisor={'domain':domain,'manager_pid':manager,'label':get_launchd_label()}
+            measured.append(dict(pid=q.pid, ppid=q.info['ppid'], exe=q.info['exe'], argv=argv))
+    base_image = str(Path(sys._base_executable).resolve(strict=True))
+    if diagnostic is not None:
+        dump(diagnostic, dict(state=state, processes=measured,
+             installed_python=str(python(live).resolve(strict=True)), measured_base=base_image))
+    # Match the native roles from the already exercised Read-ExactGateway PS
+    # probe: exact installed image -> direct child -> exact measured base image.
+    # In particular, do not require a Scheduled Task's fresh environment or the
+    # worker's argv[0] to name the driver's venv. Those are not owner witnesses.
+    sys.path.insert(0, str(Path(__file__).resolve().parent))
+    import topology
+    members = topology.pair(measured, str(python(live).resolve(strict=True)), base_image)
+    assert len(measured) == len(members), dict(reason='unexpected extra gateway processes', measured=measured, members=members)
+    owned = [psutil.Process(row['pid']) for row in members]
+    assert p.pid == members[-1]['pid'], dict(state=state, actual_members=members)
+    schedule = psutil.win_service_get('Schedule').as_dict()
+    assert schedule['status'] == 'running'
+    supervisor = dict(schedule_pid=schedule['pid'], schedule_status=schedule['status'],
+                      ancestors=[dict(pid=q.pid, name=q.name()) for q in p.parents()])
     assert any(c.status==psutil.CONN_LISTEN and c.laddr.port==18791 for c in p.net_connections(kind='inet'))
     assert request('/health')['status']=='ok'
     return dict(state=state, argv=p.cmdline(), executable=p.exe(), create_time=p.create_time(),
@@ -283,7 +278,7 @@ def child(a):
     native_guard()
     home, source, live = Path(os.environ['CLOVER_HOME']), Path(a.source), Path(sys.prefix)
     if a.mode == 'observe':
-        result = observe(home, source, a.expected, live)
+        result = observe(home, source, a.expected, live, Path(a.output).with_suffix('.raw.json'))
     elif a.mode == 'state':
         result = write_state(a.label)
     elif a.mode == 'verify':
@@ -544,7 +539,8 @@ def main(a):
             matches = [line for line in text.splitlines() if any(s in line.lower() for s in [
                 'draining in-flight', 'in-flight turn(s)', '/update refused by pre-check',
                 'deferring stop() until they finish', 'restart deferred: waiting on',
-                'update blocked', 'refusing to update', 'automatic update deferred'])]
+                'update blocked', 'refusing to update', 'automatic update deferred',
+                'update not completed:'])]
             if matches:
                 dump(evidence / 'actual-drain-or-refusal.json', dict(time=time.time(), lines=matches))
                 return True

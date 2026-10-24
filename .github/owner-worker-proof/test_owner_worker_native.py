@@ -47,6 +47,17 @@ def test_native_venv_launcher_and_worker_have_distinct_owner_witnesses(real_chil
     assert measured[0]['created_unix'] == worker.create_time()
     assert _get_process_start_time(launcher.pid) == int(round(launcher.create_time() * 100))
     assert _get_process_start_time(worker.pid) == int(round(worker.create_time() * 100))
+    # Exercise the exact fixture topology function with genuine native images
+    # and ancestry, not only portable dictionary controls.
+    import importlib.util
+    spec = importlib.util.spec_from_file_location('native_fixture_topology', Path(__file__).with_name('topology.py'))
+    assert spec is not None and spec.loader is not None
+    topology = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(topology)
+    members = topology.pair([dict(pid=q.pid, ppid=q.ppid(), exe=q.exe(), argv=q.cmdline())
+                             for q in [launcher, worker]],
+                            sys.executable, str(Path(sys._base_executable).resolve(strict=True)))
+    assert [q['pid'] for q in members] == [launcher.pid, worker.pid]
     record_property('launcher_pid', launcher.pid)
     record_property('worker_pid', worker.pid)
     record_property('worker_birth', worker.create_time())

@@ -20,6 +20,7 @@ class Contracts(unittest.TestCase):
     def test_exact_released_callers_and_no_duplicate_rows(self):
         p = load('plan')
         pins = json.loads((HERE / 'pins.json').read_text())
+        pins['scope'] = 'full'
         result = p.plan(pins)
         rows = result['matrix']['include']
         self.assertEqual(len(rows), 16)
@@ -38,11 +39,46 @@ class Contracts(unittest.TestCase):
     def test_candidate_needs_immutable_tree_and_nonrelease_identity(self):
         p = load('plan')
         pins = json.loads((HERE / 'pins.json').read_text())
-        pins.update(mode='candidate', target='a' * 40, target_tree='b' * 40)
+        pins.update(mode='candidate', scope='full', target='a' * 40, target_tree='b' * 40)
         self.assertEqual(p.plan(pins)['mode'], 'candidate')
         pins['target'] = p.CALLERS['1.5.9']
         with self.assertRaises(AssertionError):
             p.plan(pins)
+
+    def test_task_correction_is_explicit_partial_and_cannot_clear_future_source(self):
+        p = load('plan')
+        pins = json.loads((HERE / 'pins.json').read_text())
+        pins.update(scope='troy-verifier-correction')
+        result = p.plan(pins)
+        self.assertFalse(result['full_matrix'])
+        self.assertEqual(len(result['matrix']['include']), 8)
+        self.assertEqual({r['setup'] for r in result['matrix']['include']}, {'troy'})
+        pins['target'] = 'a' * 40
+        with self.assertRaises(AssertionError):
+            p.plan(pins)
+
+    def test_native_topology_accepts_measured_base_argv_not_only_venv_prefix(self):
+        t = load('topology')
+        installed = r'C:\fixture\venv\Scripts\python.exe'
+        base = r'C:\fixture\python\python.exe'
+        rows = [dict(pid=10, ppid=1, exe=installed, argv=[installed]),
+                dict(pid=11, ppid=10, exe=base, argv=[base])]
+        self.assertEqual([r['pid'] for r in t.pair(rows, installed, base)], [10, 11])
+        rows[1]['exe'] = r'C:\foreign\python.exe'
+        with self.assertRaises(AssertionError):
+            t.pair(rows, installed, base)
+        rows[1]['exe'] = base
+        rows.append(dict(pid=12, ppid=10, exe=base, argv=[base]))
+        with self.assertRaises(AssertionError):
+            t.pair(rows, installed, base)
+
+    def test_native_topology_does_not_admit_a_second_installed_launcher(self):
+        t = load('topology')
+        installed = r'C:\fixture\venv\Scripts\python.exe'
+        base = r'C:\fixture\python\python.exe'
+        with self.assertRaises(AssertionError):
+            t.pair([dict(pid=10, ppid=1, exe=installed),
+                    dict(pid=12, ppid=2, exe=installed)], installed, base)
 
     def test_candidate_next_is_exact_parent_plus_marker_only(self):
         with tempfile.TemporaryDirectory(dir=HERE) as tmp:

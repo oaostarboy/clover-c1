@@ -23,15 +23,24 @@ def plan(pins):
     if pins['mode'] == 'candidate':
         assert SHA.fullmatch(pins['target_tree'])
         assert pins['target'] not in CALLERS.values(), 'released baseline is not a repaired candidate'
+    scope = pins.get('scope', 'full')
+    assert scope in ['full', 'troy-verifier-correction']
+    setups = ['zyra', 'troy']
+    if scope == 'troy-verifier-correction':
+        # Do not duplicate still-running Startup chat rows. This is the failed
+        # task cohort only, NEVER a full or future-combined-source clearance.
+        assert pins['target'] == 'bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e'
+        setups = ['troy']
     rows = []
     for name, old in {**CALLERS, 'candidate': pins['target']}.items():
-        for setup in ['zyra', 'troy']:
+        for setup in setups:
             for entry in ['terminal', 'gateway']:
                 rows.append(dict(caller=name, old=old, setup=setup, entry=entry,
                     turn_mode='inflight' if name == 'candidate' else 'completed'))
-    assert len(rows) == 16
-    assert len({(r['caller'], r['setup'], r['entry']) for r in rows}) == 16
-    return dict(mode=pins['mode'], target=pins['target'],
+    expected = 4 * len(setups) * 2
+    assert len(rows) == expected
+    assert len({(r['caller'], r['setup'], r['entry']) for r in rows}) == expected
+    return dict(mode=pins['mode'], scope=scope, full_matrix=scope == 'full', target=pins['target'],
                 target_tree=pins.get('target_tree', ''),
                 historical_helpers=HELPERS, matrix={'include': rows},
                 not_certified=['live Telegram', 'busy frozen Windows first stop',

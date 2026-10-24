@@ -13,6 +13,19 @@ safety run; set `mode=candidate` with an independently verified new SHA/tree for
 the full matrix. This new workflow intentionally is not registered on main.
 Parent review is required before adding `ci-reviewed` or merging the fixture.
 
+**Current pins select the explicit eight-row `troy-verifier-correction` cohort**
+for unchanged PR148 only. All eight earlier Troy rows had already terminated in
+an observer failure; this does not duplicate the four still-running Startup
+chat rows from run40049740582. It is NOT a full acceptance gate. The planner
+rejects carrying this partial scope to a different candidate. For the future
+combined-source gate, set `scope=full` and the exact new commit/tree; require all
+16 rows from that invocation rather than adding passes from different fixtures.
+The revised observer copies the proven PS probe's exact installed-image ->
+direct-child -> measured-base-image relationship. It additionally records raw
+process/status evidence, requires the status owner to be that worker, rejects
+extra gateway processes, and retains native birth, listener and source checks.
+No process environment or argv prefix can substitute for those witnesses.
+
 - Candidate received: PR148, `bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e`.
 - Candidate tree: `04630f4788743b5b556e5e4379d998c42394efa3`.
 - This candidate does not contain the separately owned Suni wrapper repair.
