@@ -37,6 +37,24 @@ No process environment or argv prefix can substitute for those witnesses.
   rows used Startup VBS and old `32d3e6728c71d1f7c8684b7b41ac1785cb8117a9`,
   not Suni's exact caller and not Troy's task shape. It is not current proof.
 
+## Pending final combined-source gate
+
+Parent requires the final source to include status-lock correction
+`27f507acb4f12c30d237471095f137007952c312`; old-bdad7 checks are diagnostic only.
+The next workflow refuses target preparation unless that exact repair is an
+ancestor. Do not dispatch this staged successor with the old diagnostic pins.
+Wait for the parent's exact combined SHA/tree, set `scope=full`, and run once.
+No extra broad CI is started while the old diagnostics are still running.
+
+`test_status_lock_windows_native.py` adds real Windows `os.fdopen(...,'r+')`
+read/write/lock behavior on new and existing files, another process blocked by
+the held native byte range, successful same-inode use after release/process exit,
+and native hardlink/file-reparse/directory rejection with unchanged targets.
+These staged tests are **NOT NATIVE-EXECUTED YET**. They do not prove Windows ACL
+isolation or the Linux cross-UID result. They do not change ACLs, Developer Mode,
+privileges or security policy; inability to create a required native object is
+an unexercised/failed gate, not an automatic pass.
+
 ## Bounded matrix
 
 All update rows use real `windows-2025` hosted runners, a real product venv and

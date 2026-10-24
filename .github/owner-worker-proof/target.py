@@ -7,13 +7,17 @@ import subprocess
 import sys
 
 
-def prepare(repo, candidate, tree, caller, evidence):
+def prepare(repo, candidate, tree, caller, evidence, required_ancestor=None):
     assert re.fullmatch('[0-9a-f]{40}', candidate)
     assert re.fullmatch('[0-9a-f]{40}', tree)
     def git(*args, input=None, env=None):
         return subprocess.check_output(['git', '-C', str(repo), *args],
             input=input, text=True, env=env).strip()
     assert git('rev-parse', candidate + '^{tree}') == tree
+    if required_ancestor is not None:
+        assert re.fullmatch('[0-9a-f]{40}', required_ancestor)
+        subprocess.run(['git', '-C', str(repo), 'merge-base', '--is-ancestor',
+                        required_ancestor, candidate], check=True)
     assert not git('replace', '-l'), 'replacement refs are forbidden'
     assert not git('status', '--porcelain'), 'candidate source must be pristine'
     target, target_tree = candidate, tree
@@ -46,7 +50,8 @@ if __name__ == '__main__':
     evidence = Path(sys.argv[2]).resolve()
     evidence.mkdir(parents=True, exist_ok=True)
     result = prepare(Path(sys.argv[1]).resolve(), os.environ['CANDIDATE_SHA'],
-                     os.environ['CANDIDATE_TREE'], os.environ['CALLER'], evidence)
+                     os.environ['CANDIDATE_TREE'], os.environ['CALLER'], evidence,
+                     required_ancestor=os.environ.get('STATUS_LOCK_REPAIR_SHA'))
     with open(os.environ['GITHUB_ENV'], 'a') as out:
         print('UPDATE_TARGET=' + result['target'], file=out)
         print('UPDATE_TREE=' + result['target_tree'], file=out)

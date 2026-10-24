@@ -95,7 +95,9 @@ class Contracts(unittest.TestCase):
             git('add', 'retained')
             git('commit', '-qm', 'fixture base')
             base, tree = git('rev-parse', 'HEAD'), git('rev-parse', 'HEAD^{tree}')
-            result = load('target').prepare(repo, base, tree, 'candidate', evidence)
+            result = load('target').prepare(repo, base, tree, 'candidate', evidence, required_ancestor=base)
+            with self.assertRaises(subprocess.CalledProcessError):
+                load('target').prepare(repo, base, tree, '1.5.9', evidence, required_ancestor=result['target'])
             self.assertEqual(git('rev-parse', result['target'] + '^'), base)
             self.assertEqual(git('diff', '--name-only', base, result['target']), '.native-owner-worker-next')
             self.assertEqual(git('status', '--porcelain'), '')

@@ -53,7 +53,11 @@ jobs:
         with:
           path: source
           ref: ${{ needs.plan.outputs.target }}
+          fetch-depth: 0
           persist-credentials: false
+      - name: Require status-lock repair ancestry before native acceptance
+        shell: bash
+        run: git -C source merge-base --is-ancestor 27f507acb4f12c30d237471095f137007952c312 HEAD
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
           version: '0.9.28'
@@ -78,6 +82,7 @@ jobs:
             tests/clover_cli/test_update_delivery_guard.py `
             tests/clover_cli/test_update_delivery_guard_wrappers.py `
             ../helpers/.github/owner-worker-proof/test_owner_worker_native.py `
+            ../helpers/.github/owner-worker-proof/test_status_lock_windows_native.py `
             --junitxml="$env:RUNNER_TEMP/evidence/native-safety.xml"
           exit $LASTEXITCODE
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
@@ -129,6 +134,7 @@ jobs:
         env:
           CANDIDATE_SHA: ${{ needs.plan.outputs.target }}
           CANDIDATE_TREE: ${{ needs.plan.outputs.target_tree }}
+          STATUS_LOCK_REPAIR_SHA: 27f507acb4f12c30d237471095f137007952c312
           CALLER: ${{ matrix.caller }}
         run: python helpers/.github/owner-worker-proof/target.py source "$RUNNER_TEMP/evidence"
       - name: Real installer-shipped Startup VBS or native Scheduled Task; no driver restart
