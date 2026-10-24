@@ -201,17 +201,44 @@ def test_watcher_relaunches_once_the_relaunch_claim_expires(home, monkeypatch):
 
 
 def test_fresh_gateway_detection_uses_the_relaunch_claim(home):
-    urw.write_relaunch_marker(["default"])
-    time.sleep(0.05)
-    child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"])
+    import psutil
+
+    # PID 1 may be a brand-new sandbox init, not an old gateway. Own both
+    # processes and prove the stale one predates the real two-second slack.
+    old = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"])
+    child = None
     try:
+        old_birth = psutil.Process(old.pid).create_time()
+        time.sleep(3)
+        urw.write_relaunch_marker(["default"])
+        claim = urw.recent_relaunch()
+        assert claim is not None
+        assert old_birth < claim["at"] - 2.0, "stale-process setup must precede rounding slack"
+        time.sleep(0.05)
+        child = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(20)"])
         assert urw.is_fresh_post_update_gateway(child.pid) is True
-        # A process that predates the claim is the pre-update gateway shape.
-        if os.name != "nt":
-            assert urw.is_fresh_post_update_gateway(1) is False
+        assert urw.is_fresh_post_update_gateway(old.pid) is False
     finally:
-        child.kill()
-        child.wait()
+        for process in (child, old):
+            if process is not None:
+                process.kill()
+                process.wait()
+
+
+@pytest.mark.parametrize("age, expected", [(2.01, False), (1.99, True), (0.0, True)])
+def test_fresh_gateway_claim_keeps_its_create_time_rounding_boundary(home, monkeypatch, age, expected):
+    import psutil
+
+    urw.write_relaunch_marker(["default"])
+    claim = urw.recent_relaunch()
+    assert claim is not None
+
+    class ObservedProcess:
+        def create_time(self):
+            return claim["at"] - age
+
+    monkeypatch.setattr(psutil, "Process", lambda pid: ObservedProcess())
+    assert urw.is_fresh_post_update_gateway(12345) is expected
 
 
 def test_resume_writes_the_relaunch_claim(home, monkeypatch):
