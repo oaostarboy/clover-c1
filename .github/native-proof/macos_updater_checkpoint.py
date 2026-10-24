@@ -5,7 +5,7 @@ from pathlib import Path
 
 def live_updater(beacon: Path, install: Path, home: Path, uid: int, process_factory):
     try:
-        row = json.loads(beacon.read_text())
+        row = json.loads(beacon.read_text(encoding='utf-8'))
         if (type(row.get('updater_pid')) is not int or row['updater_pid'] <= 0
                 or row.get('updater_create_time') is None):
             return None

@@ -88,7 +88,7 @@ def main():
     assert spec is not None and spec.loader is not None
     proof = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(proof)
-    previous = json.loads(Path(args.previous).read_text()) if args.previous else None
+    previous = json.loads(Path(args.previous).read_text(encoding='utf-8')) if args.previous else None
     deadline = time.monotonic() + 180
     while True:
         try:
@@ -109,8 +109,8 @@ def main():
             raise ValueError('worker/wrapper identity changed in stability window')
         observations.append(current)
         time.sleep(min(3, max(0, end - time.monotonic())))
-    Path(args.output).write_text(json.dumps(first, indent=2) + '\n')
-    Path(args.output + '.window.json').write_text(json.dumps(observations, indent=2) + '\n')
+    Path(args.output).write_text(json.dumps(first, indent=2) + '\n', encoding='utf-8')
+    Path(args.output + '.window.json').write_text(json.dumps(observations, indent=2) + '\n', encoding='utf-8')
 
 
 if __name__ == '__main__':

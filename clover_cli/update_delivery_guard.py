@@ -46,7 +46,7 @@ def _macos_framework_wrapper(wrapper, child, argv: list[str], command: list[str]
                 or argv[0] not in (command[0], str(base))
                 or child.cmdline()[0] not in (command[0], str(base))):
             return False
-        uid = os.getuid()
+        uid = os.getuid()  # windows-footgun: ok — guarded by the darwin-only return above
         if (wrapper.ppid() != 1 or tuple(wrapper.uids()) != (uid, uid, uid)
                 or tuple(child.uids()) != (uid, uid, uid)):
             return False
