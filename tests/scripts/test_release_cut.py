@@ -55,15 +55,26 @@ def _next(version: str, kind: str = "patch") -> str:
     return rc.bump(version, kind)
 
 
-@pytest.fixture()
-def repo(tmp_path):
-    """A temp git repo holding copies of the four release files + a tag for the current version."""
+def _make_repo(tmp_path, current_override=None):
+    """Build an offline release fixture, optionally using another valid current version."""
     root = tmp_path / "repo"
+    root.mkdir(parents=True, exist_ok=True)
     for rel in FILES:
         dest = root / rel
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes((REPO_ROOT / rel).read_bytes())
-    current = rc.read_versions(root)["init"]
+    live_current = rc.read_versions(root)["init"]
+    current = current_override or live_current
+    if current != live_current:
+        init = root / "clover_cli/__init__.py"
+        init_text = init.read_text(encoding="utf-8")
+        release_date = re.search(r'^__release_date__ = "([^"]+)"', init_text, re.MULTILINE)
+        assert release_date is not None
+        init.write_text(rc.edit_init(init_text, current, release_date.group(1)), encoding="utf-8")
+        pyproject = root / "pyproject.toml"
+        pyproject.write_text(rc.edit_pyproject(pyproject.read_text(encoding="utf-8"), current), encoding="utf-8")
+        lock = root / "uv.lock"
+        lock.write_text(rc.edit_lock(lock.read_text(encoding="utf-8"), "clover-c1", current), encoding="utf-8")
     (root / "RELEASE_NOTES.md").write_text(
         "# Release notes fixture\n\n"
         f"## {current} | Clover C{current} | 2000-01-01\n"
@@ -75,6 +86,12 @@ def repo(tmp_path):
     _git(root, "commit", "-q", "-m", "base")
     _git(root, "tag", "-a", f"v{current}", "-m", "current")
     return root
+
+
+@pytest.fixture()
+def repo(tmp_path):
+    """Use the checked-out package metadata, including its frozen release version."""
+    return _make_repo(tmp_path)
 
 
 def _write_entry(root: Path, version: str, *, name=None, date="2026-10-08", bullets=None, draft=False, todo=False):
@@ -134,7 +151,7 @@ def test_patch_bump_edits_exactly_the_shape_of_a_hand_made_release(repo, capsys)
 
 def test_minor_bump_resets_patch(repo):
     cur = _cur(repo)
-    major, minor, _ = rc.parse_strict(cur)
+    major, minor = rc.parse_strict(cur)[:2]
     new = f"{major}.{minor + 1}.0"
     _write_entry(repo, new, name=f"Clover C{major}.{minor + 1}")
     assert _run(repo, "minor") == 0
@@ -160,9 +177,43 @@ def test_bump_helpers():
     assert rc.bump("1.1.3", "patch") == "1.1.4"
     assert rc.bump("1.1.3", "minor") == "1.2.0"
     assert rc.bump("1.9.9", "patch") == "1.9.10"
+    assert rc.bump("1.5.9.1", "patch") == "1.5.9.2"
+    assert rc.bump("1.5.9.1", "minor") == "1.6.0"
     assert rc.release_date_string(__import__("datetime").date(2026, 10, 8)) == "2026.10.8"
     with pytest.raises(rc.Refusal):
         rc.bump("1.1.3", "major")
+
+
+def test_four_part_maintenance_release_sorts_between_patch_and_next_patch(repo):
+    """The next maintenance identifier stays inside the current three-part series."""
+    current = rc.parse_strict(_cur(repo))
+    major, minor, patch = current[:3]
+    target = f"{major}.{minor}.{patch}.{1 if len(current) == 3 else current[3] + 1}"
+    next_patch = f"{major}.{minor}.{patch + 1}"
+    assert rc.parse_strict(f"{major}.{minor}.{patch}") < rc.parse_strict(target) < rc.parse_strict(next_patch)
+    _write_entry(repo, target)
+    assert _run(repo, target) == 0
+    assert rc.read_versions(repo) == {"init": target, "pyproject": target, "lock": target}
+
+
+@pytest.mark.parametrize("current,target", [("1.5.9", "1.5.9.1"), ("1.5.9.1", "1.5.9.2")])
+def test_three_and_four_part_current_versions_allow_only_a_greater_maintenance_release(tmp_path, current, target, capsys):
+    """Both supported current shapes reject equality and accept their next maintenance release."""
+    assert rc.parse_strict("1.5.9") < rc.parse_strict("1.5.9.1") < rc.parse_strict("1.5.9.2") < rc.parse_strict("1.5.10")
+    assert rc._norm(rc.parse_strict("1.5.9")) == rc._norm(rc.parse_strict("1.5.9.0"))
+    repo = _make_repo(tmp_path, current)
+    assert _run(repo, current) == rc.EXIT_REFUSED
+    assert "not greater than the current version" in capsys.readouterr().err
+    _write_entry(repo, target)
+    assert _run(repo, target) == 0
+    assert rc.read_versions(repo) == {"init": target, "pyproject": target, "lock": target}
+
+
+@pytest.mark.parametrize("bad", ["1.5.9.1.1", "1.5.9.x", "1.5.9-rc1", "1..9.1", "1.5.9."])
+def test_maintenance_version_rejects_malformed_four_part_tokens(repo, bad):
+    with pytest.raises(rc.Refusal):
+        rc.parse_strict(bad)
+    assert _run(repo, bad) == rc.EXIT_REFUSED
 
 
 # ---------------------------------------------------------------------------
@@ -295,7 +346,7 @@ def test_existing_remote_tag_is_refused_even_if_not_fetched_locally(repo, tmp_pa
 @pytest.mark.parametrize("pick", ["same", "lower"])
 def test_version_not_greater_than_current_is_refused(repo, capsys, pick):
     cur = _cur(repo)
-    major, minor, patch = rc.parse_strict(cur)
+    major, minor, patch = rc.parse_strict(cur)[:3]
     bad = cur if pick == "same" else f"{major}.{minor}.{max(patch - 1, 0)}" if patch else f"{max(major - 1, 0)}.9.9"
     if bad == cur and pick == "lower":
         pytest.skip("cannot form a lower version here")
@@ -305,7 +356,7 @@ def test_version_not_greater_than_current_is_refused(repo, capsys, pick):
 
 def test_version_below_the_newest_tag_is_refused(repo, capsys):
     cur = _cur(repo)
-    major, minor, patch = rc.parse_strict(cur)
+    major, minor, patch = rc.parse_strict(cur)[:3]
     ahead = f"{major}.{minor}.{patch + 5}"
     _git(repo, "tag", f"v{ahead}")  # a tag ahead of the files, e.g. a half-finished release
     target = _next(cur)
@@ -314,7 +365,7 @@ def test_version_below_the_newest_tag_is_refused(repo, capsys):
     assert "not greater than the newest existing tag" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("bad", ["1.1", "1.1.x", "v", "1.1.4-rc1", "banana"])
+@pytest.mark.parametrize("bad", ["1.1", "1.1.x", "v", "1.1.4-rc1", "1.5.9.1.1", "banana"])
 def test_malformed_versions_are_refused(repo, bad):
     assert _run(repo, bad) == rc.EXIT_REFUSED
 

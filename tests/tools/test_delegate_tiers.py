@@ -312,6 +312,9 @@ class TestChildKeepsSkillsToolset:
         parent.enabled_toolsets = ["terminal", "file", "web", "skills"]
         parent.disabled_toolsets = []
         parent._delegate_depth = 0
+        # This builder test mocks AIAgent with no persisted parent store.
+        # MagicMock otherwise fabricates a truthy _session_db/db_path chain.
+        parent._session_db = None
 
         with patch("run_agent.AIAgent") as MockAgent:
             MockAgent.return_value = MagicMock()

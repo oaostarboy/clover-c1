@@ -220,6 +220,51 @@ def test_interim_assistant_is_durable_before_ui_projection_on_abnormal_exit(tmp_
     assert len(_durable_messages(db_path, session_id)) == 2
 
 
+def test_unknown_required_assistant_persist_blocks_ui_projection_and_tool_side_effects(tmp_path):
+    agent = _make_agent()
+    db = _attach_real_session_db(
+        agent, tmp_path / "state.db", "unknown-required-flush"
+    )
+    tool_call = _mock_tool_call(call_id="unknown-must-not-run")
+    scripted_response = _mock_response(
+        content="",
+        finish_reason="tool_calls",
+        tool_calls=[tool_call],
+    )
+    agent._interruptible_api_call = MagicMock(
+        side_effect=[scripted_response, _mock_response(content="done")]
+    )
+    # If the broken gate admits None, keep the scripted loop valid so the
+    # regression fails on the observed pre-tool projection, not a malformed
+    # tool transcript or a second provider call.
+    def _scripted_dispatch(_assistant_message, messages, *_args):
+        messages.append(make_tool_result_message("web_search", "controlled", tool_call.id))
+
+    agent._flush_messages_to_session_db = MagicMock(return_value=None)
+    agent._interim_assistant_visible_text = lambda assistant_msg: ""
+    agent._emit_interim_assistant_message = MagicMock()
+    agent._execute_tool_calls = MagicMock(side_effect=_scripted_dispatch)
+
+    try:
+        with (
+            patch("tools.delegate_tool._load_config", return_value={}),
+            patch.object(agent, "_persist_session"),
+            patch.object(agent, "_save_trajectory"),
+            patch.object(agent, "_cleanup_task_resources"),
+        ):
+            result = agent.run_conversation("inspect the repository")
+    finally:
+        db.close()
+
+    agent._emit_interim_assistant_message.assert_not_called()
+    agent._execute_tool_calls.assert_not_called()
+    assert agent._interruptible_api_call.call_count == 1
+    assert result["failed"] is True
+    assert result["completed"] is False
+    assert result["turn_exit_reason"] == "session_persistence_failed"
+    assert result["failure_reason"] == "session_persistence_failed:unknown"
+
+
 def test_failed_assistant_persist_blocks_ui_projection_and_tool_side_effects():
     agent = _make_agent()
     tool_call = _mock_tool_call(call_id="must-not-run")

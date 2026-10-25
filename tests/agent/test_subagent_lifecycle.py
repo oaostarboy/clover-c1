@@ -27,6 +27,10 @@ class FakeChild:
         self.interrupt_kind = None
         self.interrupt_message = None
         self.tool_reason = None
+        self.closed = False
+
+    def close(self):
+        self.closed = True
 
     def interrupt(self, _reason):
         self.interrupted = True
@@ -178,3 +182,281 @@ def test_agent_turn_binds_and_clears_lifecycle_parent(monkeypatch):
     assert agent.run_conversation("hello") == {"final_response": "ok"}
     assert observed == [agent]
     assert get_active_subagent_parent() is None
+
+
+def test_same_correlation_is_reserved_before_child_construction(monkeypatch):
+    import threading
+    from concurrent.futures import Future
+
+    import agent.subagent_lifecycle as lifecycle_module
+
+    parent = SimpleNamespace(session_id="parent-race", enabled_toolsets=[])
+    builder_started = threading.Event()
+    release_builder = threading.Event()
+    builds = []
+    submissions = []
+
+    build_lock = threading.Lock()
+    launch_barrier = threading.Barrier(3)
+    one_launch_done = threading.Event()
+
+    def build(**_kwargs):
+        with build_lock:
+            builds.append(object())
+            build_number = len(builds)
+        if build_number == 1:
+            builder_started.set()
+            assert release_builder.wait(timeout=2), "builder was not released"
+        return FakeChild(f"sa-race-{build_number}")
+
+    class NoDispatchExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+            return Future()
+
+    monkeypatch.setattr("tools.delegate_tool._build_child_preserving_parent_tools", build)
+    monkeypatch.setattr(lifecycle_module, "_EXECUTOR", NoDispatchExecutor())
+    monkeypatch.setattr(lifecycle_module, "_REGISTRY", lifecycle_module._Registry())
+    service = SubagentLifecycleService(lambda: parent)
+    request = SubagentLaunchRequest(goal="race", correlation_id="same-request")
+    accepted = []
+    errors = []
+
+    def launch():
+        try:
+            launch_barrier.wait(timeout=2)
+            accepted.append(service.launch(request))
+        except Exception as exc:  # surface worker errors in the main test thread
+            errors.append(exc)
+        finally:
+            one_launch_done.set()
+
+    workers = [threading.Thread(target=launch, daemon=True) for _ in range(2)]
+    for worker in workers:
+        worker.start()
+    try:
+        launch_barrier.wait(timeout=2)
+        assert builder_started.wait(timeout=2), "no caller reached the child builder"
+        assert one_launch_done.wait(timeout=2), "second caller stayed inside the builder"
+    finally:
+        release_builder.set()
+    for worker in workers:
+        worker.join(timeout=2)
+        assert not worker.is_alive(), "launch worker leaked"
+    assert len(accepted) == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], SubagentLifecycleError)
+    assert "Duplicate correlation_id" in str(errors[0])
+    assert len(builds) == 1
+    assert len(submissions) == 1
+    with pytest.raises(SubagentLifecycleError, match="Duplicate correlation_id"):
+        service.launch(request)
+    assert len(builds) == 1
+    assert len(submissions) == 1
+
+
+def test_builder_failure_releases_only_its_correlation_reservation(monkeypatch):
+    from concurrent.futures import Future
+
+    import agent.subagent_lifecycle as lifecycle_module
+
+    parent = SimpleNamespace(session_id="parent-build-fail", enabled_toolsets=[])
+    submissions = []
+    builds = []
+
+    def build(**_kwargs):
+        builds.append(None)
+        if len(builds) == 1:
+            raise RuntimeError("synthetic construction failure")
+        return FakeChild("sa-build-retry")
+
+    class NoDispatchExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+            return Future()
+
+    monkeypatch.setattr("tools.delegate_tool._build_child_preserving_parent_tools", build)
+    monkeypatch.setattr(lifecycle_module, "_EXECUTOR", NoDispatchExecutor())
+    monkeypatch.setattr(lifecycle_module, "_REGISTRY", lifecycle_module._Registry())
+    service = SubagentLifecycleService(lambda: parent)
+    request = SubagentLaunchRequest(goal="retry build", correlation_id="owned-key")
+
+    with pytest.raises(RuntimeError, match="synthetic construction failure"):
+        service.launch(request)
+    handle = service.launch(request)
+
+    assert handle.subagent_id == "sa-build-retry"
+    assert len(builds) == 2
+    assert len(submissions) == 1
+
+
+def test_executor_submission_failure_removes_record_and_reservation(monkeypatch):
+    from concurrent.futures import Future
+
+    import agent.subagent_lifecycle as lifecycle_module
+
+    parent = SimpleNamespace(session_id="parent-submit-fail", enabled_toolsets=[])
+    builds = []
+    submissions = []
+    children = []
+
+    def build(**_kwargs):
+        builds.append(None)
+        child = FakeChild(f"sa-submit-{len(builds)}")
+        children.append(child)
+        return child
+
+    class FailOnceExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+            if len(submissions) == 1:
+                raise RuntimeError("synthetic submit failure")
+            return Future()
+
+    registry = lifecycle_module._Registry()
+    monkeypatch.setattr("tools.delegate_tool._build_child_preserving_parent_tools", build)
+    monkeypatch.setattr(lifecycle_module, "_EXECUTOR", FailOnceExecutor())
+    monkeypatch.setattr(lifecycle_module, "_REGISTRY", registry)
+    service = SubagentLifecycleService(lambda: parent)
+    request = SubagentLaunchRequest(goal="retry submit", correlation_id="owned-key")
+
+    with pytest.raises(RuntimeError, match="synthetic submit failure"):
+        service.launch(request)
+    assert registry.records == {}
+    assert registry.correlations == {}
+    assert children[0].closed
+    handle = service.launch(request)
+
+    assert handle.subagent_id == "sa-submit-2"
+    assert len(builds) == 2
+    assert len(submissions) == 2
+    assert not children[1].closed
+    assert list(registry.records) == [handle.subagent_id]
+
+
+def test_distinct_correlation_progresses_while_other_builder_is_slow(monkeypatch):
+    import threading
+    from concurrent.futures import Future
+
+    import agent.subagent_lifecycle as lifecycle_module
+
+    parent = SimpleNamespace(session_id="parent-distinct", enabled_toolsets=[])
+    slow_started = threading.Event()
+    release_slow = threading.Event()
+    fast_done = threading.Event()
+    submissions = []
+
+    def build(**kwargs):
+        if kwargs["goal"] == "slow":
+            slow_started.set()
+            assert release_slow.wait(timeout=2), "slow builder was not released"
+        return FakeChild(f"sa-{kwargs['goal']}")
+
+    class NoDispatchExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+            return Future()
+
+    monkeypatch.setattr("tools.delegate_tool._build_child_preserving_parent_tools", build)
+    monkeypatch.setattr(lifecycle_module, "_EXECUTOR", NoDispatchExecutor())
+    monkeypatch.setattr(lifecycle_module, "_REGISTRY", lifecycle_module._Registry())
+    service = SubagentLifecycleService(lambda: parent)
+    errors = []
+
+    def launch_slow():
+        try:
+            service.launch(SubagentLaunchRequest(goal="slow", correlation_id="slow-key"))
+        except Exception as exc:
+            errors.append(exc)
+
+    def launch_fast():
+        try:
+            service.launch(SubagentLaunchRequest(goal="fast", correlation_id="fast-key"))
+        except Exception as exc:
+            errors.append(exc)
+        finally:
+            fast_done.set()
+
+    slow_worker = threading.Thread(target=launch_slow, daemon=True)
+    fast_worker = threading.Thread(target=launch_fast, daemon=True)
+    slow_worker.start()
+    try:
+        assert slow_started.wait(timeout=2), "slow caller never reached builder"
+        fast_worker.start()
+        assert fast_done.wait(timeout=2), "distinct-key launch waited on slow builder"
+    finally:
+        release_slow.set()
+    slow_worker.join(timeout=2)
+    fast_worker.join(timeout=2)
+    assert not slow_worker.is_alive(), "slow launch worker leaked"
+    assert not fast_worker.is_alive(), "fast launch worker leaked"
+    assert errors == []
+    assert len(submissions) == 2
+
+
+@pytest.mark.parametrize("revocation", ["stop", "epoch"])
+def test_stop_during_construction_prevents_late_submission(monkeypatch, revocation):
+    import threading
+    from concurrent.futures import Future
+
+    import agent.subagent_lifecycle as lifecycle_module
+    from tools.async_delegation import _records_lock
+
+    parent = SimpleNamespace(
+        session_id=f"parent-{revocation}",
+        enabled_toolsets=[],
+        _interrupt_requested=False,
+        _orchestration_stop_epoch=7,
+    )
+    builder_started = threading.Event()
+    release_builder = threading.Event()
+    submissions = []
+    registry = lifecycle_module._Registry()
+    children = []
+
+    def build(**_kwargs):
+        builder_started.set()
+        assert release_builder.wait(timeout=2), "builder was not released"
+        child = FakeChild(f"sa-{revocation}")
+        children.append(child)
+        return child
+
+    class NoDispatchExecutor:
+        def submit(self, *args):
+            submissions.append(args)
+            return Future()
+
+    monkeypatch.setattr("tools.delegate_tool._build_child_preserving_parent_tools", build)
+    monkeypatch.setattr(lifecycle_module, "_EXECUTOR", NoDispatchExecutor())
+    monkeypatch.setattr(lifecycle_module, "_REGISTRY", registry)
+    service = SubagentLifecycleService(lambda: parent)
+    request = SubagentLaunchRequest(goal="stopped", correlation_id="stop-key")
+    errors = []
+
+    def launch():
+        try:
+            service.launch(request)
+        except Exception as exc:
+            errors.append(exc)
+
+    worker = threading.Thread(target=launch, daemon=True)
+    worker.start()
+    try:
+        assert builder_started.wait(timeout=2), "caller never reached builder"
+        with _records_lock:
+            if revocation == "stop":
+                parent._interrupt_requested = True
+            else:
+                parent._orchestration_stop_epoch += 1
+    finally:
+        release_builder.set()
+    worker.join(timeout=2)
+
+    assert not worker.is_alive(), "launch worker leaked"
+    assert len(errors) == 1
+    assert isinstance(errors[0], SubagentLifecycleError)
+    assert "stopped during child construction" in str(errors[0])
+    assert submissions == []
+    assert registry.records == {}
+    assert registry.correlations == {}
+    assert children[0].closed

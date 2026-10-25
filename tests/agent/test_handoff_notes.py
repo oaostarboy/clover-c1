@@ -313,10 +313,10 @@ class TestVoiceLineFallback:
     def test_an_unusable_or_leaky_line_is_dropped(self, text):
         assert hn._clean_opener(text) == ''
 
-    def test_a_good_line_is_cleaned_and_capped(self):
+    def test_a_good_line_is_cleaned_without_clipping(self):
         assert hn._clean_opener('"handing this to a subagent, it is digging into the fuse now"') == (
             'handing this to a subagent, it is digging into the fuse now')
-        assert len(hn._clean_opener('word ' * 100)) <= hn.OPENER_CHARS + 1
+        assert hn._clean_opener('word ' * 100) == ('word ' * 100).strip()
 
 
 class TestSettledMessages:

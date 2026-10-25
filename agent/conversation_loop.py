@@ -7611,11 +7611,16 @@ def run_conversation(
                         exc,
                     )
 
-                if _tool_turn_persisted is False:
-                    # The canonical append failed. Do not project the row or
-                    # run side-effecting tools from state that exists only in
-                    # this process. Breaking also avoids retrying the same
-                    # unpersisted turn until the iteration budget is exhausted.
+                persistence_required = (
+                    not getattr(agent, "_persist_disabled", False)
+                    and getattr(agent, "_session_db", None) is not None
+                )
+                if _tool_turn_persisted is False or (
+                    persistence_required and _tool_turn_persisted is not True
+                ):
+                    # A required canonical append must be affirmatively
+                    # confirmed before projection or tool side effects. A
+                    # deliberately storeless/isolated agent may return None.
                     # The flush may have classified the cause internally; if
                     # nothing was recorded, the cause is genuinely unknown.
                     if getattr(agent, "_last_persistence_error_cause", None) is None:
@@ -7666,7 +7671,16 @@ def run_conversation(
                     # called: the detached job owns the rest, and finalize_turn
                     # still persists and learns as usual.
                     _turn_exit_reason = _directive.reason
-                    final_response = _directive.text
+                    # A deterministic checkpoint acknowledgment must not erase
+                    # direct, user-facing text already produced in this turn.
+                    # Reuse router ownership/dedup rules; do not reconstruct or
+                    # replay content from prior turns or already streamed text.
+                    from agent.router_backstop import _pending_handoff_text
+                    _pending = _pending_handoff_text(agent, messages, _directive.text)
+                    final_response = (
+                        f"{_pending}\n\n{_directive.text}"
+                        if _pending else _directive.text
+                    )
                     append_message(messages, {"role": "assistant", "content": final_response})
                     agent._safe_print(f"\n{final_response}\n")
                     if agent.stream_delta_callback:

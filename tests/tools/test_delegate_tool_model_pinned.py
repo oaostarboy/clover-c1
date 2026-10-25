@@ -27,6 +27,9 @@ def _make_mock_parent():
     parent = MagicMock()
     parent._delegate_depth = 0
     parent.model = "parent-default-model"
+    # These builder tests mock AIAgent and model a storeless parent. Avoid
+    # MagicMock's fabricated truthy _session_db/db_path attributes.
+    parent._session_db = None
     return parent
 
 

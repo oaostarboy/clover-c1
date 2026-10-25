@@ -2318,12 +2318,17 @@ def _build_child_agent(
                 if _parent_db_path is not None
                 else SessionDB()
             )
-        except Exception:
-            logger.debug(
-                "subagent: failed to open dedicated SessionDB; child persistence disabled",
+        except Exception as exc:
+            # A persisted parent makes child persistence a required admission
+            # condition. Do not silently authorize a storeless child: fail
+            # before AIAgent construction/provider/tool activity.
+            logger.warning(
+                "subagent: failed to open required dedicated SessionDB",
                 exc_info=True,
             )
-            child_session_db = None
+            raise ValueError(
+                f"required child persistence unavailable: {exc}"
+            ) from exc
 
     from agent.delegation_context import delegated_child_context
 
@@ -6659,7 +6664,7 @@ DELEGATE_TASK_SCHEMA = {
                     "estimated_minutes_min": {"type": "number", "exclusiveMinimum": 0},
                     "estimated_minutes_max": {"type": "number", "exclusiveMinimum": 0},
                     "steps": {"type": "array", "maxItems": 6, "items": {"type": "string", "maxLength": 60}, "description": "Single task only: 1-6 short steps the user watches tick off."},
-                    "say": {"type": "string", "maxLength": 320, "description": "One or two casual sentences in your own voice, shown first. Answer anything else the user asked here too."},
+                    "say": {"type": "string", "description": "Your complete user-facing handoff in your own voice, shown first. Answer anything else the user asked here too. Preserved in full; long messages are split by the platform."},
                 },
                 "required": ["work", "outcome"],
             },

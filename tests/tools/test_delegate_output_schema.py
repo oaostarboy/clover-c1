@@ -76,6 +76,58 @@ class TestValidateOutput:
         assert ok is False
         assert errors
 
+    def test_fenced_json_wins_over_protocol_report_json(self):
+        text = (
+            'Task outcome: {"status":"done","remaining":[],"owner":"parent"}\n'
+            'Result: done\n```json\n{"status":"done"}\n```\n'
+        )
+        ok, errors = validate_output(text, {"type": "object", "required": ["status"]})
+        assert ok is True, errors
+
+    def test_ambiguous_or_invalid_fenced_candidates_are_rejected(self):
+        schema = {"type": "object", "required": ["status"]}
+        for text in (
+            '```json\n{"status":"done"}\n```\n```json\n{"status":"done"}\n```',
+            '```json\n{"not_status":"done"}\n```',
+            '```json\nnot json\n```',
+        ):
+            ok, errors = validate_output(text, schema)
+            assert ok is False, text
+            assert errors, text
+
+    def test_unclosed_competing_json_fence_invalidates_closed_payload(self):
+        text = (
+            '```json\n{"status":"done"}\n```\n'
+            '```json\n{"status":"blocked"}'
+        )
+        ok, errors = validate_output(text, {"type": "object", "required": ["status"]})
+        assert ok is False
+        assert errors
+
+    def test_closed_tilde_json_fence_remains_supported(self):
+        ok, errors = validate_output(
+            '~~~json\n{"status":"done"}\n~~~',
+            {"type": "object", "required": ["status"]},
+        )
+        assert ok is True, errors
+
+    def test_unclosed_nonpayload_code_fence_does_not_hide_json(self):
+        text = '```json\n{"status":"done"}\n```\n```python\nprint(1)'
+        ok, errors = validate_output(text, {"type": "object", "required": ["status"]})
+        assert ok is True, errors
+
+    def test_unclosed_json_only_fence_is_rejected(self):
+        ok, errors = validate_output(
+            '```json\n{"status":"done"}',
+            {"type": "object", "required": ["status"]},
+        )
+        assert ok is False
+        assert errors
+
+    def test_unfenced_plain_json_fallback_remains_supported(self):
+        ok, errors = validate_output('prose {"city":"Lima"} outro', ADDRESS_SCHEMA)
+        assert ok is True, errors
+
 
 class TestCoerceOutputSchema:
     def test_valid_schema_passes(self):
@@ -218,6 +270,26 @@ class TestRunSingleChildSchemaValidation:
         assert "rejected" in child.calls[1] or "JSON" in child.calls[1]
         # final summary is the retried (valid) answer
         assert json.loads(entry["summary"])["city"] == "Oslo"
+
+    def test_unclosed_competing_fence_consumed_as_invalid_child_output(self):
+        child = _StubChild(
+            [
+                '```json\n{"status":"done"}\n```\n'
+                '```json\n{"status":"blocked"}',
+                '{"status":"done"}',
+            ]
+        )
+        child._delegate_output_schema = {
+            "type": "object",
+            "properties": {"status": {"type": "string", "enum": ["done"]}},
+            "required": ["status"],
+        }
+
+        entry = _run(child)
+
+        assert entry["schema_valid"] is True
+        assert entry["schema_retries"] == 1
+        assert len(child.calls) == 2
 
     def test_invalid_twice_surfaces_errors_and_stops(self):
         child = _StubChild(["nope", "still nope"])

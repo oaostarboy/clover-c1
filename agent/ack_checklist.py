@@ -39,7 +39,7 @@ from typing import Any, Deque, Dict, List, Optional, Sequence, Set, Tuple
 
 MAX_STEPS = 6
 MAX_STEP_CHARS = 60
-MAX_SAY_CHARS = 320
+
 
 # ``display.helper_card``: ``unified`` (default) puts the helpers' live
 # activity -- recent tool calls, model, tool count, time and, when done, the
@@ -157,18 +157,16 @@ def _step_icon(status: str, *, unified_step: bool = False) -> str:
 
 
 def clean_say(value: Any) -> str:
-    """The root's one-or-two-sentence opener, or ``""``."""
+    """The root's user-facing text, not a card preview; keep its full body.
+
+    Platform adapters own transport splitting. Never apply card-label budgets
+    or flatten Markdown/newlines to this narrative.
+    """
     if not isinstance(value, str):
         return ""
-    text = " ".join(value.split())
+    text = value.strip()
     if not any(ch.isalnum() for ch in text):
         return ""
-    if len(text) > MAX_SAY_CHARS:
-        cut = text[: MAX_SAY_CHARS - 1]
-        space = cut.rfind(" ")
-        if space >= MAX_SAY_CHARS // 2:
-            cut = cut[:space]
-        text = cut.rstrip(" ,;:-") + "\u2026"
     return text
 
 

@@ -4495,6 +4495,10 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
     _WRITE_RETRY_SLOW_AFTER_S = 2.0
     _WRITE_RETRY_SLOW_MIN_S = 0.250  # 250ms
     _WRITE_RETRY_SLOW_MAX_S = 1.000  # 1s
+    # Temporary SQLite busy-handler budget for a DELETE-mode COMMIT only.
+    # Kept inside the existing write lock so SQLite can retain PENDING while
+    # existing readers drain; never extends the caller's overall patience.
+    _COMMIT_BUSY_TIMEOUT_CAP_MS = 5_000
     # Attempt a WAL checkpoint every N successful writes (PASSIVE mode).
     _CHECKPOINT_EVERY_N_WRITES = 50
     # Retain the existing coarse 1000-write maintenance cadence, but replace
@@ -5401,7 +5405,32 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                             phase = operation["phase"] = "body"
                             result = fn(self._conn)
                             phase = operation["phase"] = "commit"
-                            self._conn.commit()
+                            if self._wal_active:
+                                self._conn.commit()
+                            else:
+                                # In DELETE mode, a reader can make COMMIT fail
+                                # after the body ran. Let SQLite retain PENDING
+                                # briefly so existing readers drain instead of
+                                # rolling back and replaying the transaction body.
+                                # Preserve this connection's exact prior policy.
+                                previous_timeout = int(
+                                    self._conn.execute("PRAGMA busy_timeout").fetchone()[0]
+                                )
+                                remaining_ms = max(
+                                    0, int((deadline - time.monotonic()) * 1000)
+                                )
+                                commit_timeout = min(
+                                    remaining_ms, self._COMMIT_BUSY_TIMEOUT_CAP_MS
+                                )
+                                try:
+                                    self._conn.execute(
+                                        f"PRAGMA busy_timeout={commit_timeout}"
+                                    )
+                                    self._conn.commit()
+                                finally:
+                                    self._conn.execute(
+                                        f"PRAGMA busy_timeout={previous_timeout}"
+                                    )
                         except BaseException:
                             operation["phase"] = "rollback"
                             try:

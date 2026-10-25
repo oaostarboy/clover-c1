@@ -153,7 +153,7 @@ class _Registry:
     def __init__(self) -> None:
         self.lock = threading.RLock()
         self.records: dict[str, _Record] = {}
-        self.correlations: dict[tuple[Optional[str], str], str] = {}
+        self.correlations: dict[tuple[Optional[str], str], Any] = {}
 
 
 _REGISTRY = _Registry()
@@ -208,56 +208,113 @@ class SubagentLifecycleService:
                 "parent_session_id does not match the active session."
             )
         correlation_key = (parent_session_id, request.correlation_id or "")
+        reservation = object() if request.correlation_id else None
+        stop_epoch = int(getattr(parent, "_orchestration_stop_epoch", 0))
         with _REGISTRY.lock:
             self._cleanup_locked()
             if request.correlation_id and correlation_key in _REGISTRY.correlations:
                 raise SubagentLifecycleError(
                     "Duplicate correlation_id for this parent session."
                 )
+            if reservation is not None:
+                _REGISTRY.correlations[correlation_key] = reservation
 
-        # Delegate construction remains internal so plugin code never imports
-        # private delegation helpers or manipulates the active-child registry.
-        from tools.delegate_tool import (
-            _build_child_preserving_parent_tools,
-            DEFAULT_MAX_ITERATIONS,
-        )
+        child = None
+        submitted = False
+        try:
+            # Delegate construction remains internal so plugin code never imports
+            # private delegation helpers or manipulates the active-child registry.
+            from tools.delegate_tool import (
+                _build_child_preserving_parent_tools,
+                DEFAULT_MAX_ITERATIONS,
+            )
 
-        child = _build_child_preserving_parent_tools(
-            task_index=0,
-            goal=request.goal,
-            context=request.context,
-            toolsets=list(request.allowed_toolsets)
-            if request.allowed_toolsets
-            else None,
-            model=request.model,
-            max_iterations=DEFAULT_MAX_ITERATIONS,
-            task_count=1,
-            parent_agent=parent,
-            role=request.role,
-        )
-        subagent_id = str(getattr(child, "_subagent_id", "") or "")
-        if not subagent_id:
-            raise SubagentLifecycleError("Clover failed to assign a child identity.")
-        created = time.time()
-        handle = SubagentHandle(
-            PUBLIC_CONTRACT_VERSION,
-            subagent_id,
-            parent_session_id,
-            request.correlation_id,
-            created,
-            getattr(child, "provider", None),
-            getattr(child, "model", None),
-            getattr(child, "_delegate_role", request.role),
-            int(getattr(child, "_delegate_depth", 1) or 1),
-            self._capability(subagent_id, parent_session_id, created),
-        )
-        record = _Record(handle, SubagentState.PENDING, created, agent=child)
-        with _REGISTRY.lock:
-            _REGISTRY.records[subagent_id] = record
-            if request.correlation_id:
-                _REGISTRY.correlations[correlation_key] = subagent_id
-        record.future = _EXECUTOR.submit(self._run, record, request.goal, parent)
-        return handle
+            child = _build_child_preserving_parent_tools(
+                task_index=0,
+                goal=request.goal,
+                context=request.context,
+                toolsets=list(request.allowed_toolsets)
+                if request.allowed_toolsets
+                else None,
+                model=request.model,
+                max_iterations=DEFAULT_MAX_ITERATIONS,
+                task_count=1,
+                parent_agent=parent,
+                role=request.role,
+            )
+            subagent_id = str(getattr(child, "_subagent_id", "") or "")
+            if not subagent_id:
+                raise SubagentLifecycleError("Clover failed to assign a child identity.")
+            created = time.time()
+            handle = SubagentHandle(
+                PUBLIC_CONTRACT_VERSION,
+                subagent_id,
+                parent_session_id,
+                request.correlation_id,
+                created,
+                getattr(child, "provider", None),
+                getattr(child, "model", None),
+                getattr(child, "_delegate_role", request.role),
+                int(getattr(child, "_delegate_depth", 1) or 1),
+                self._capability(subagent_id, parent_session_id, created),
+            )
+            record = _Record(handle, SubagentState.PENDING, created, agent=child)
+            # Stop advances this epoch while holding the same acceptance lock.
+            # Keep construction outside both locks; serialize only the final
+            # revocation check and executor admission with Stop.
+            from tools.async_delegation import _records_lock as _stop_lock
+
+            with _stop_lock:
+                if (
+                    getattr(parent, "_interrupt_requested", False) is True
+                    or int(getattr(parent, "_orchestration_stop_epoch", 0)) != stop_epoch
+                ):
+                    raise SubagentLifecycleError(
+                        "Parent was stopped during child construction; no child was started."
+                    )
+                with _REGISTRY.lock:
+                    if reservation is not None and _REGISTRY.correlations.get(
+                        correlation_key
+                    ) is not reservation:
+                        raise SubagentLifecycleError(
+                            "Child correlation reservation is no longer owned by this launch."
+                        )
+                    _REGISTRY.records[subagent_id] = record
+                try:
+                    record.future = _EXECUTOR.submit(
+                        self._run, record, request.goal, parent
+                    )
+                    submitted = True
+                except BaseException:
+                    with _REGISTRY.lock:
+                        if _REGISTRY.records.get(subagent_id) is record:
+                            _REGISTRY.records.pop(subagent_id, None)
+                    raise
+                with _REGISTRY.lock:
+                    if reservation is not None and _REGISTRY.correlations.get(
+                        correlation_key
+                    ) is reservation:
+                        _REGISTRY.correlations[correlation_key] = subagent_id
+            return handle
+        except BaseException:
+            if child is not None and not submitted:
+                try:
+                    from tools.delegate_tool import _release_child_resources
+
+                    _release_child_resources(child, parent)
+                except Exception:
+                    try:
+                        close = getattr(child, "close", None)
+                        if callable(close):
+                            close()
+                    except Exception:
+                        pass
+            with _REGISTRY.lock:
+                if reservation is not None and _REGISTRY.correlations.get(
+                    correlation_key
+                ) is reservation:
+                    _REGISTRY.correlations.pop(correlation_key, None)
+            raise
 
     def status(self, handle: SubagentHandle) -> SubagentStatus:
         record = self._record(handle)

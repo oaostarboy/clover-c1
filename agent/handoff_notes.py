@@ -79,7 +79,7 @@ VOICE_TIMEOUT_SECONDS = 30.0
 # drops the user's question, so the cap sits above the slow model's tail.
 MODEL_DISPATCH_VOICE_TIMEOUT_SECONDS = 15.0
 OPENER_MAX_TOKENS = 120
-OPENER_CHARS = 320
+
 SUMMARY_TASK = "delegation_router"  # shares the router's small fast model
 
 _HISTORY_SCAN = 60  # messages looked at (tool rows included) to find the text turns
@@ -853,16 +853,12 @@ FALLBACK_LINE = "on it"
 
 
 def _clean_opener(text: str) -> str:
-    text = " ".join(str(text or "").split()).strip().strip("\"'“”")
+    text = str(text or "").strip().strip("\"'“”")
     lowered = text.lower()
     if len(text.split()) < 3 or not any(ch.isalpha() for ch in text):
         return ""  # a bare "DONE" / "ok" is not an opener
     if any(w in lowered for w in ("safety net", "time limit", "timeout", "timed out", "backstop")):
         return ""
-    if len(text) > OPENER_CHARS:
-        cut = text[:OPENER_CHARS]
-        space = cut.rfind(" ")
-        text = (cut[:space] if space > OPENER_CHARS // 2 else cut).rstrip(" ,;:-") + "…"
     return text
 
 

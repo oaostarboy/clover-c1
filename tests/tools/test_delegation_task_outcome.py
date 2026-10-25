@@ -97,6 +97,80 @@ def test_json_report_survives_callback_and_unified_card_without_completing_steps
         ac.set_style_for_tests(None)
 
 
+@pytest.mark.unified_card
+def test_fenced_deliverable_survives_real_child_assembly_and_unified_card():
+    """The child owner validates the deliverable without retrying its report."""
+    import json
+    from agent import ack_checklist as ac
+    from agent.foreground_time_limit import DispatchReceipt
+    from tools.delegation_output_schema import validate_output
+
+    payload = {"status": "done", "deployment_id": "preview-42"}
+    report = {"status": "done", "remaining": [], "owner": "worker",
+              "next_step": "Return the preview identifier"}
+    response = (
+        "Task outcome: " + json.dumps(report) + "\nResult: done\n"
+        "```json\n" + json.dumps(payload) + "\n```\n"
+        "Plain summary: Preview identifier returned."
+    )
+    schema = {"type": "object", "required": ["status", "deployment_id"]}
+
+    class ScriptedChild:
+        _credential_pool = None
+        _delegate_saved_tool_names = []
+        _delegate_task_id = None
+        _delegate_output_schema = schema
+        _subagent_id = None
+        _delegate_depth = 1
+        _parent_subagent_id = None
+        tool_progress_callback = None
+        _interrupt_requested = False
+        _hard_interrupt_requested = None
+        session_prompt_tokens = 0
+        session_completion_tokens = 0
+        session_estimated_cost_usd = 0.0
+        session_reasoning_tokens = 0
+        model = "scripted-test-model"
+
+        def __init__(self):
+            self.calls = []
+            self.events = []
+            self.tool_progress_callback = lambda name, **kw: self.events.append((name, kw))
+
+        def get_activity_summary(self):
+            return {"api_call_count": 1, "max_iterations": 5, "current_tool": None}
+
+        def run_conversation(self, user_message, task_id=None, **_kwargs):
+            self.calls.append(user_message)
+            return {"final_response": response, "completed": True, "api_calls": 1}
+
+        def close(self):
+            pass
+
+    child = ScriptedChild()
+    entry = _run_single_child(0, "Return JSON", child=child)
+    assert validate_output(response, schema) == (True, [])
+    assert len(child.calls) == 1
+    assert entry["schema_valid"] is True
+    assert entry["task_outcome"]["status"] == "done"
+    event = next(kw for name, kw in child.events if name == "subagent.complete")
+
+    ac.reset_for_tests()
+    ac.set_style_for_tests(ac.STYLE_UNIFIED)
+    try:
+        receipt = DispatchReceipt(delegation_id="fenced-card", seq=1,
+                                  goals=("preview task",), summary="Preview task",
+                                  steps=("collect id",))
+        card = ac.card_for([receipt])
+        ac.on_child_event("subagent.complete", delegation_id="fenced-card", **event)
+        assert card is not None and card.finished
+        assert "done" in card.render()
+        assert "preview-42" in entry["summary"]
+    finally:
+        ac.reset_for_tests()
+        ac.set_style_for_tests(None)
+
+
 @pytest.mark.parametrize('raw', [
     {'status': 'done', 'remaining': ['not finished'], 'owner': 'owner', 'next_step': 'review'},
     {'status': 'blocked', 'remaining': [], 'owner': 'owner', 'next_step': 'review'},

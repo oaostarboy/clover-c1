@@ -62,7 +62,7 @@ _DRAFT_RE = re.compile(r"<!--\s*draft\s*-->", re.IGNORECASE)
 _HEADER_RE = re.compile(r"^##\s+(?P<version>[^|\s]+)\s*\|\s*(?P<name>[^|]*?)\s*\|\s*(?P<date>.*?)\s*$")
 _BULLET_RE = re.compile(r"^\s*[-*]\s+(?P<text>\S.*?)\s*$")
 _CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
-_VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*)")
+_VERSION_RE = re.compile(r"^v?(\d+(?:\.\d+)*)$")
 
 
 @dataclass(frozen=True)

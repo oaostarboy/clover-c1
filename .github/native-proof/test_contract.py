@@ -45,6 +45,16 @@ class ExactTarget(unittest.TestCase):
             plan = module.plan(repo, 'v1.5.5', target, tree, 'ci/native-next/fixture')
             self.assertEqual(plan['old_sha'], old)
             self.assertEqual(plan['next_sha'], next_sha)
+            # Both supported release-tag shapes resolve through the same exact pinned ancestry.
+            git('tag', 'v1.5.9.1', old)
+            for old_ref in ['v1.5.5', 'v1.5.9.1']:
+                with self.subTest(old_ref=old_ref):
+                    self.assertEqual(module.plan(repo, old_ref, target, tree,
+                                                 'ci/native-next/fixture')['old_sha'], old)
+            for old_ref in ['xv1.5.9.1', 'v1.5.9.1-suffix', 'v1.5.9.1/extra',
+                            'v1.5.9.1' + chr(10), 'v1.5.9.1.0']:
+                with self.subTest(old_ref=old_ref), self.assertRaises(ValueError):
+                    module.plan(repo, old_ref, target, tree, 'ci/native-next/fixture')
             with self.assertRaises(ValueError):
                 module.plan(repo, 'v1.5.5', target, '0' * 40, 'ci/native-next/fixture')
             with self.assertRaises(ValueError):

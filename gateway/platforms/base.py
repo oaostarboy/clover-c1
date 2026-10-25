@@ -8263,8 +8263,9 @@ class BasePlatformAdapter(ABC):
             in_code = state is not None
             lang = state[4] if state is not None else ""
 
-            # Whitespace inside code is data, not a paragraph separator.
-            remaining = tail if in_code else tail.lstrip()
+            # Whitespace at every chunk boundary is source text too. Keep it
+            # byte-for-byte; dropping it changes the user's message.
+            remaining = tail
             if in_code:
                 # Close the orphaned fence so the chunk is valid on its own
                 full_chunk += FENCE_CLOSE

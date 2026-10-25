@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -77,18 +78,79 @@ def append_output_contract(context: Optional[str], schema: Dict[str, Any]) -> st
     return f"{base}\n\n{block}" if base else block
 
 
-def extract_json_candidate(text: str) -> str:
-    """Best-effort extraction of a JSON payload from model output.
+def _has_unclosed_payload_fence(text: str) -> bool:
+    """Return True when a trailing Markdown fence can contain JSON payload.
 
-    Strips markdown code fences and leading/trailing prose around the
-    outermost ``{...}`` / ``[...]`` span. Returns the (possibly unchanged)
-    candidate string; parsing errors are reported by validate_output.
+    Only the unmatched-fence edge is needed here; closed-fence extraction
+    remains in ``extract_json_candidate``. Non-payload code fences are ignored.
+    """
+    lines = text.splitlines()
+    opener_re = re.compile(r"^ {0,3}(`{3,}|~{3,})([^`~]*)$")
+    close_re_cache: Dict[Tuple[str, int], re.Pattern[str]] = {}
+    index = 0
+    while index < len(lines):
+        match = opener_re.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        fence, info = match.groups()
+        marker = fence[0]
+        close_re = close_re_cache.setdefault(
+            (marker, len(fence)),
+            re.compile(
+                "^ {0,3}"
+                + re.escape(marker)
+                + "{" + str(len(fence)) + ",}"
+                + r"[ \t]*$"
+            ),
+        )
+        close_index = next(
+            (i for i in range(index + 1, len(lines)) if close_re.match(lines[i])),
+            None,
+        )
+        if close_index is not None:
+            index = close_index + 1
+            continue
+        label = (info or "").strip().lower().split(maxsplit=1)[0:1]
+        body = "\n".join(lines[index + 1 :]).lstrip()
+        if label == ["json"] or body.startswith(("{", "[")):
+            return True
+        # An unmatched non-payload fence owns the rest of the response as
+        # code; do not reinterpret fence-looking lines inside its body.
+        return False
+    return False
+
+
+def extract_json_candidate(text: str) -> str:
+    """Extract one unambiguous JSON payload, preferring a caller fence.
+
+    A response may contain protocol prose with JSON of its own (for example,
+    a ``Task outcome`` report) followed by the actual fenced deliverable. A
+    brace-span across the whole response conflates those objects. Prefer the
+    one fenced JSON-looking block; reject competing fenced payloads by
+    returning the full response so JSON parsing fails closed. With no payload
+    fence, retain the legacy plain-JSON-in-prose fallback.
     """
     raw = (text or "").strip()
+    if _has_unclosed_payload_fence(raw):
+        return raw
+    fences = list(re.finditer(r"```([^\n`]*)\n?(.*?)```", raw, re.DOTALL))
+    payloads: List[str] = []
+    for match in fences:
+        label = (match.group(1) or "").strip().lower()
+        body = (match.group(2) or "").strip()
+        if label == "json" or body.startswith(("{", "[")):
+            payloads.append(body)
+    if len(payloads) == 1:
+        return payloads[0]
+    if len(payloads) > 1:
+        return raw
+
+    # No caller payload fence: retain existing plain-JSON fallback behavior.
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1]
         if raw.rstrip().endswith("```"):
-            raw = raw.rstrip()[: -3]
+            raw = raw.rstrip()[:-3]
         raw = raw.strip()
         if raw.lower().startswith("json\n"):
             raw = raw.split("\n", 1)[1]
