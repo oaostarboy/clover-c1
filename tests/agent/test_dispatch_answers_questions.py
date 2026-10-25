@@ -84,8 +84,9 @@ def test_the_delegate_task_say_field_asks_for_the_answer_too():
 
     say = DELEGATE_TASK_SCHEMA["parameters"]["properties"]["handoff"]["properties"]["say"]
     assert "Answer anything else the user asked" in say["description"]
-    from agent.ack_checklist import MAX_SAY_CHARS
-    assert say["maxLength"] == MAX_SAY_CHARS
+    assert "maxLength" not in say
+    assert "Preserved in full" in say["description"]
+    assert "split by the platform" in say["description"]
 
 
 def test_the_opener_turn_note_asks_for_the_answer_and_keeps_its_bounds(monkeypatch):
