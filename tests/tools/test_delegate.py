@@ -449,6 +449,54 @@ class TestDelegateTask(unittest.TestCase):
                     child_db.close()
                 parent_db.close()
 
+    def test_required_child_store_open_failure_rejects_before_agent_construction(self):
+        """A persisted parent must not silently admit a storeless child."""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _make_mock_parent(depth=0)
+            parent_db = SessionDB(db_path=Path(tmp) / "parent.db")
+            parent._session_db = parent_db
+            try:
+                with patch("clover_state.SessionDB", side_effect=OSError("locked db")):
+                    with patch("run_agent.AIAgent") as MockAgent:
+                        with self.assertRaisesRegex(ValueError, "required child persistence"):
+                            _build_child_agent(
+                                task_index=0, goal="test", context=None,
+                                toolsets=None, model="test-model", max_iterations=5,
+                                parent_agent=parent, task_count=1,
+                            )
+                        MockAgent.assert_not_called()
+            finally:
+                parent_db.close()
+
+    def test_real_sessiondb_unopenable_path_rejects_child_admission(self):
+        """Exercise SessionDB's real SQLite open failure, not only a stub."""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmp:
+            parent = _make_mock_parent(depth=0)
+            parent_db = SessionDB(db_path=Path(tmp) / "parent.db")
+            parent._session_db = parent_db
+            blocked_path = Path(tmp) / "is-a-directory"
+            blocked_path.mkdir()
+            # The real parent handle remains healthy; only the dedicated child
+            # open targets an invalid SQLite file path.
+            parent_db.db_path = blocked_path
+            try:
+                with patch("run_agent.AIAgent") as MockAgent:
+                    with self.assertRaisesRegex(ValueError, "required child persistence"):
+                        _build_child_agent(
+                            task_index=0, goal="test", context=None,
+                            toolsets=None, model="test-model", max_iterations=5,
+                            parent_agent=parent, task_count=1,
+                        )
+                    MockAgent.assert_not_called()
+            finally:
+                parent_db.close()
+
 class TestToolNamePreservation(unittest.TestCase):
     """Verify _last_resolved_tool_names is restored after subagent runs."""
 

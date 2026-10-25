@@ -2318,12 +2318,17 @@ def _build_child_agent(
                 if _parent_db_path is not None
                 else SessionDB()
             )
-        except Exception:
-            logger.debug(
-                "subagent: failed to open dedicated SessionDB; child persistence disabled",
+        except Exception as exc:
+            # A persisted parent makes child persistence a required admission
+            # condition. Do not silently authorize a storeless child: fail
+            # before AIAgent construction/provider/tool activity.
+            logger.warning(
+                "subagent: failed to open required dedicated SessionDB",
                 exc_info=True,
             )
-            child_session_db = None
+            raise ValueError(
+                f"required child persistence unavailable: {exc}"
+            ) from exc
 
     from agent.delegation_context import delegated_child_context
 

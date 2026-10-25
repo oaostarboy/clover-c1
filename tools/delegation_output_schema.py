@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -78,17 +79,33 @@ def append_output_contract(context: Optional[str], schema: Dict[str, Any]) -> st
 
 
 def extract_json_candidate(text: str) -> str:
-    """Best-effort extraction of a JSON payload from model output.
+    """Extract one unambiguous JSON payload, preferring a caller fence.
 
-    Strips markdown code fences and leading/trailing prose around the
-    outermost ``{...}`` / ``[...]`` span. Returns the (possibly unchanged)
-    candidate string; parsing errors are reported by validate_output.
+    A response may contain protocol prose with JSON of its own (for example,
+    a ``Task outcome`` report) followed by the actual fenced deliverable. A
+    brace-span across the whole response conflates those objects. Prefer the
+    one fenced JSON-looking block; reject competing fenced payloads by
+    returning the full response so JSON parsing fails closed. With no payload
+    fence, retain the legacy plain-JSON-in-prose fallback.
     """
     raw = (text or "").strip()
+    fences = list(re.finditer(r"```([^\n`]*)\n?(.*?)```", raw, re.DOTALL))
+    payloads: List[str] = []
+    for match in fences:
+        label = (match.group(1) or "").strip().lower()
+        body = (match.group(2) or "").strip()
+        if label == "json" or body.startswith(("{", "[")):
+            payloads.append(body)
+    if len(payloads) == 1:
+        return payloads[0]
+    if len(payloads) > 1:
+        return raw
+
+    # No caller payload fence: retain existing plain-JSON fallback behavior.
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1]
         if raw.rstrip().endswith("```"):
-            raw = raw.rstrip()[: -3]
+            raw = raw.rstrip()[:-3]
         raw = raw.strip()
         if raw.lower().startswith("json\n"):
             raw = raw.split("\n", 1)[1]

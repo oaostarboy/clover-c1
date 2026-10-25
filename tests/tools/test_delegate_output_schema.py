@@ -76,6 +76,29 @@ class TestValidateOutput:
         assert ok is False
         assert errors
 
+    def test_fenced_json_wins_over_protocol_report_json(self):
+        text = (
+            'Task outcome: {"status":"done","remaining":[],"owner":"parent"}\n'
+            'Result: done\n```json\n{"status":"done"}\n```\n'
+        )
+        ok, errors = validate_output(text, {"type": "object", "required": ["status"]})
+        assert ok is True, errors
+
+    def test_ambiguous_or_invalid_fenced_candidates_are_rejected(self):
+        schema = {"type": "object", "required": ["status"]}
+        for text in (
+            '```json\n{"status":"done"}\n```\n```json\n{"status":"done"}\n```',
+            '```json\n{"not_status":"done"}\n```',
+            '```json\nnot json\n```',
+        ):
+            ok, errors = validate_output(text, schema)
+            assert ok is False, text
+            assert errors, text
+
+    def test_unfenced_plain_json_fallback_remains_supported(self):
+        ok, errors = validate_output('prose {"city":"Lima"} outro', ADDRESS_SCHEMA)
+        assert ok is True, errors
+
 
 class TestCoerceOutputSchema:
     def test_valid_schema_passes(self):
