@@ -169,6 +169,9 @@ class TestMissedSteerRetention:
         parent._delegate_depth = 0
         parent.model = "test-model"
         parent.interactive_mode = False
+        # These tests model a storeless parent. A MagicMock's implicit truthy
+        # _session_db/db_path chain would trigger persistence admission first.
+        parent._session_db = None
 
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = MagicMock()
@@ -206,6 +209,9 @@ class TestMissedSteerRetention:
         parent._delegate_depth = 0
         parent.model = "test-model"
         parent.interactive_mode = False
+        # These tests model a storeless parent. A MagicMock's implicit truthy
+        # _session_db/db_path chain would trigger persistence admission first.
+        parent._session_db = None
 
         with patch("run_agent.AIAgent") as MockAgent:
             mock_child = MagicMock()
