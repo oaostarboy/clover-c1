@@ -1,0 +1,651 @@
+{
+  "baseline": "bdad7a7b6b6698f347e06fd305a2bc6c3dc9055e",
+  "review_object": "9264b3989e515cadddaf73323680bd60399e14e6",
+  "python": "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+  "python_version": "3.12.12 (main, Jan 15 2026, 05:11:12) [GCC 15.2.1 20260103]",
+  "isolation": "bwrap read-only host, writable own worktree, unshare-net; credential-free private HOME; socket deny plugin",
+  "source_sha256": {
+    "baseline": "a6ebe7d61b95af907ef4d9b90363db7d96cf244508b75296e1fbdd0f02f9894e",
+    "candidate": "fb871b794ea2c6a491dddcb1d2ae25dabcb478ded0e4fd56b3d6e7983ad027ed"
+  },
+  "runs": [
+    {
+      "source": "baseline",
+      "file": "tests/gateway/test_status_update_owner.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_status_update_owner.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-0/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-0.xml"
+      ],
+      "exit_code": 0,
+      "tests": 23,
+      "passed": 23,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/clover_cli/test_postpull_missing_owner_guard.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_postpull_missing_owner_guard.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-1/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-1.xml"
+      ],
+      "exit_code": 0,
+      "tests": 1,
+      "passed": 1,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/gateway/test_status.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_status.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-2/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-2.xml"
+      ],
+      "exit_code": 0,
+      "tests": 74,
+      "passed": 72,
+      "skipped": [
+        "tests.gateway.test_status.TestTerminatePid::test_force_uses_taskkill_on_windows",
+        "tests.gateway.test_status.TestScopedLocks::test_windows_file_lock_uses_high_offset"
+      ],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/gateway/test_runtime_status_liveness_reconciliation.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_runtime_status_liveness_reconciliation.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-3/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-3.xml"
+      ],
+      "exit_code": 0,
+      "tests": 30,
+      "passed": 30,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/gateway/test_adapter_connect_classification.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_adapter_connect_classification.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-4/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-4.xml"
+      ],
+      "exit_code": 0,
+      "tests": 23,
+      "passed": 23,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/gateway/test_multiplex_lifecycle.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_multiplex_lifecycle.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-5/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-5.xml"
+      ],
+      "exit_code": 0,
+      "tests": 9,
+      "passed": 9,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/gateway/test_restart_reply_delivery.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_restart_reply_delivery.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-6/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-6.xml"
+      ],
+      "exit_code": 0,
+      "tests": 8,
+      "passed": 8,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/gateway/test_update_cron_drain.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_update_cron_drain.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-7/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-7.xml"
+      ],
+      "exit_code": 0,
+      "tests": 1,
+      "passed": 1,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/clover_cli/test_update_delivery_guard.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_update_delivery_guard.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-8/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-8.xml"
+      ],
+      "exit_code": 0,
+      "tests": 19,
+      "passed": 19,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/clover_cli/test_update_delivery_guard_wrappers.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_update_delivery_guard_wrappers.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-9/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-9.xml",
+        "-k",
+        "not test_real_stderr_wrapper_and_direct_worker_identity"
+      ],
+      "exit_code": 0,
+      "tests": 24,
+      "passed": 24,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/clover_cli/test_legacy_successor_identity_fences.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_legacy_successor_identity_fences.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-10/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-10.xml"
+      ],
+      "exit_code": 0,
+      "tests": 18,
+      "passed": 18,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/clover_cli/test_windows_update_single_relaunch.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_windows_update_single_relaunch.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-11/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-11.xml"
+      ],
+      "exit_code": 0,
+      "tests": 22,
+      "passed": 22,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "baseline",
+      "file": "tests/gateway/test_status_lock_security.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_status_lock_security.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-12/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-12.xml"
+      ],
+      "exit_code": 1,
+      "tests": 17,
+      "passed": 6,
+      "skipped": [],
+      "failures": [
+        {
+          "node": "tests.gateway.test_status_lock_security::test_new_lock_is_owner_only_in_traversable_home[18]",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_new_lock_is_owner_only_in_traversable_home[0]",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_existing_lock_tightened_without_replacing_inode[420-384]",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_existing_lock_tightened_without_replacing_inode[438-384]",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_existing_lock_tightened_without_replacing_inode[448-384]",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_lock_symlink_is_rejected_without_touching_target",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_lock_hardlink_is_rejected_without_chmod_of_other_path",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_foreign_owned_lock_fails_closed_before_chmod",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_changed_inode_during_open_fails_closed_without_chmod",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_replaced_inode_while_waiting_cannot_publish_status",
+          "phase": "failure"
+        },
+        {
+          "node": "tests.gateway.test_status_lock_security::test_preexisting_readonly_holder_is_not_bypassed_by_permission_migration",
+          "phase": "failure"
+        }
+      ]
+    },
+    {
+      "source": "baseline",
+      "file": "review/status-lock/original_test_status_security_concurrency.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "review/status-lock/original_test_status_security_concurrency.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/baseline-13/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/baseline-13.xml"
+      ],
+      "exit_code": 1,
+      "tests": 5,
+      "passed": 3,
+      "skipped": [],
+      "failures": [
+        {
+          "node": "review.status-lock.original_test_status_security_concurrency::test_read_only_lock_holder_cannot_disable_status",
+          "phase": "failure"
+        },
+        {
+          "node": "review.status-lock.original_test_status_security_concurrency::test_lock_is_private_under_default_umask",
+          "phase": "failure"
+        }
+      ]
+    },
+    {
+      "source": "candidate",
+      "file": "tests/gateway/test_status_update_owner.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_status_update_owner.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-0/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-0.xml"
+      ],
+      "exit_code": 0,
+      "tests": 23,
+      "passed": 23,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/clover_cli/test_postpull_missing_owner_guard.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_postpull_missing_owner_guard.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-1/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-1.xml"
+      ],
+      "exit_code": 0,
+      "tests": 1,
+      "passed": 1,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/gateway/test_status.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_status.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-2/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-2.xml"
+      ],
+      "exit_code": 0,
+      "tests": 74,
+      "passed": 72,
+      "skipped": [
+        "tests.gateway.test_status.TestTerminatePid::test_force_uses_taskkill_on_windows",
+        "tests.gateway.test_status.TestScopedLocks::test_windows_file_lock_uses_high_offset"
+      ],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/gateway/test_runtime_status_liveness_reconciliation.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_runtime_status_liveness_reconciliation.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-3/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-3.xml"
+      ],
+      "exit_code": 0,
+      "tests": 30,
+      "passed": 30,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/gateway/test_adapter_connect_classification.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_adapter_connect_classification.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-4/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-4.xml"
+      ],
+      "exit_code": 0,
+      "tests": 23,
+      "passed": 23,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/gateway/test_multiplex_lifecycle.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_multiplex_lifecycle.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-5/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-5.xml"
+      ],
+      "exit_code": 0,
+      "tests": 9,
+      "passed": 9,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/gateway/test_restart_reply_delivery.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_restart_reply_delivery.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-6/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-6.xml"
+      ],
+      "exit_code": 0,
+      "tests": 8,
+      "passed": 8,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/gateway/test_update_cron_drain.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_update_cron_drain.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-7/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-7.xml"
+      ],
+      "exit_code": 0,
+      "tests": 1,
+      "passed": 1,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/clover_cli/test_update_delivery_guard.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_update_delivery_guard.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-8/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-8.xml"
+      ],
+      "exit_code": 0,
+      "tests": 19,
+      "passed": 19,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/clover_cli/test_update_delivery_guard_wrappers.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_update_delivery_guard_wrappers.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-9/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-9.xml",
+        "-k",
+        "not test_real_stderr_wrapper_and_direct_worker_identity"
+      ],
+      "exit_code": 0,
+      "tests": 24,
+      "passed": 24,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/clover_cli/test_legacy_successor_identity_fences.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_legacy_successor_identity_fences.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-10/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-10.xml"
+      ],
+      "exit_code": 0,
+      "tests": 18,
+      "passed": 18,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/clover_cli/test_windows_update_single_relaunch.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/clover_cli/test_windows_update_single_relaunch.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-11/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-11.xml"
+      ],
+      "exit_code": 0,
+      "tests": 22,
+      "passed": 22,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "tests/gateway/test_status_lock_security.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "tests/gateway/test_status_lock_security.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-12/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-12.xml"
+      ],
+      "exit_code": 0,
+      "tests": 17,
+      "passed": 17,
+      "skipped": [],
+      "failures": []
+    },
+    {
+      "source": "candidate",
+      "file": "review/status-lock/original_test_status_security_concurrency.py",
+      "command": [
+        "/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.venv/bin/python",
+        "-m",
+        "pytest",
+        "review/status-lock/original_test_status_security_concurrency.py",
+        "-q",
+        "-s",
+        "--tb=short",
+        "--basetemp=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-13/pytest",
+        "--junitxml=/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/review/status-lock/receipts/candidate-13.xml"
+      ],
+      "exit_code": 1,
+      "tests": 5,
+      "passed": 4,
+      "skipped": [],
+      "failures": [
+        {
+          "node": "review.status-lock.original_test_status_security_concurrency::test_read_only_lock_holder_cannot_disable_status",
+          "phase": "failure"
+        }
+      ]
+    }
+  ],
+  "checks": {
+    "baseline_focus": true,
+    "candidate_focus": true,
+    "candidate_new_contract": true,
+    "baseline_new_contract_red": true,
+    "baseline_original_reproduces": true,
+    "candidate_original_only_obsolete_precondition": true
+  },
+  "checks_passed": true
+}

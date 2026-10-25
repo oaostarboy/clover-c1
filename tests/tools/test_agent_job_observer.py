@@ -159,7 +159,8 @@ async def test_two_concurrent_external_workers_attributed_and_redacted(hermetic_
     assert len(adapter.sends) == 1
     final = adapter.summary()
     assert "Found the lock race" in final and "Fixed DST catchup" in final
-    assert final.startswith("✅ 2 subagents ·") and "🛠 3 tool calls ·" in final
+    # These legacy reports contain findings, not authoritative task verdicts.
+    assert final.startswith("☘️ 2 subagents · 2 unverified") and "🛠 3 tool calls ·" in final
     # One live card for the job group, removed once the summary lands.
     assert {c["key"] for c in adapter.status_calls} == {f"delegation:{group_id}"}
     assert adapter.deleted
@@ -395,6 +396,175 @@ def test_activity_events_flag_is_parsed():
     assert parsed.activity_events is True
     assert parser.parse_args(["-z", "do it"]).activity_events is False
 
+
+
+@pytest.mark.asyncio
+@pytest.mark.unified_card
+@pytest.mark.parametrize('parser', ['clover-activity', 'claude-stream-json'])
+@pytest.mark.parametrize('report_kind,label,mark', [
+    ('done', 'done', '🍀'), ('partial', 'partial', '☘️'),
+    ('blocked', 'blocked', '☘️'), ('legacy', 'unverified', '☘️'),
+    ('example', 'unverified', '☘️'), ('malformed', 'unverified', '☘️'),
+])
+async def test_external_report_reaches_classification_and_finalized_card(parser, report_kind, label, mark):
+    from unittest.mock import AsyncMock, MagicMock
+    from agent import ack_checklist as ac
+    from agent.delegation_activity import DelegationActivityTracker, completion_display_state
+    from agent.foreground_time_limit import DispatchReceipt
+    from clover_cli import skin_engine
+    from gateway.config import PlatformConfig
+    from gateway.delegation_activity import AckCardEditor
+    from plugins.platforms.telegram.adapter import TelegramAdapter
+
+    skin_engine.init_skin_from_config({'display': {'skin': 'default'}})
+    ac.reset_for_tests()
+    ac.set_style_for_tests('unified')
+    card = ac.card_for([DispatchReceipt(delegation_id='external-report', seq=1,
+        goals=('check external report',), summary='checking work → verified result')])
+    assert card is not None
+    sink = _Sink()
+    observer = AgentJobObserver(session_id='external', sink=sink, group_id='external-report',
+        card_id='external-report', index=0, title='checking work', model='observed-model', parser=parser)
+    tracker = DelegationActivityTracker()
+    adapter = TelegramAdapter(PlatformConfig(enabled=True, token='test-token'))
+    adapter._rich_send_disabled = True
+    bot = MagicMock()
+    bot.edit_message_text = AsyncMock(return_value=MagicMock(message_id=42))
+    adapter._bot = bot
+    adapter.edit_message = AsyncMock(wraps=adapter.edit_message)
+    editor = AckCardEditor(card, adapter, '42', '42', asyncio.get_running_loop(), min_interval=0)
+    card.on_change = None
+    try:
+        observer.start()
+        assert await editor._edit(editor._render())
+        report = {'status': report_kind if report_kind in ('done', 'partial', 'blocked') else 'done',
+            'remaining': ['review'] if report_kind in ('partial', 'blocked') else [],
+            'owner': 'parent', 'next_step': 'review'}
+        protocol = 'Task outcome: ' + json.dumps(report) + '\nResult: ' + (
+            'not done' if report_kind in ('partial', 'blocked') else 'done')
+        if report_kind == 'example':
+            protocol = 'Example only:\n```python\n' + protocol + '\n```'
+        elif report_kind == 'legacy':
+            protocol = 'All checks passed. The work is ready.'
+        elif report_kind == 'malformed':
+            protocol = 'Task outcome: {broken json}'
+        text = protocol + '\nPlain summary: Reviewed scheduler. api_key=' + SECRET
+        wire = ({'clover_activity': 1, 'event': 'result', 'status': 'completed', 'text': text}
+            if parser == 'clover-activity' else
+            {'type': 'result', 'subtype': 'success', 'is_error': False, 'result': text})
+        observer.feed(json.dumps(wire) + '\n')
+        observer.finish(0)
+        observer.finish(0)  # a repeated exit must not report twice
+        completed = [e for e in sink.events if e[0] == 'subagent.complete']
+        assert len(completed) == 1
+        payload = completed[0][4]
+        assert payload['status'] == 'completed'  # display evidence does not change process policy
+        assert payload['model'] == 'observed-model'
+        assert completion_display_state(payload) == label
+        for event, tool, preview, args, kw in sink.events:
+            tracker.observe(event, tool, preview, args, **kw)
+        classic = tracker.render('external-report')
+        assert classic.startswith(mark)
+        assert 'Reviewed scheduler.' in classic and SECRET not in classic
+        final = editor._render()
+        assert final.startswith('> ' + mark) and (' · ' + label) in final
+        assert await editor._edit(final)
+        assert all(c.kwargs['finalize'] is True for c in adapter.edit_message.await_args_list)
+        for call in bot.edit_message_text.await_args_list:
+            assert call.kwargs['parse_mode'] == 'MarkdownV2'
+            assert '**' not in call.kwargs['text'].removeprefix('**>')
+            assert not any(line.strip() == '>' for line in call.kwargs['text'].splitlines())
+            assert SECRET not in call.kwargs['text']
+    finally:
+        editor.gone = True
+        editor._unregister_live()
+        ac.reset_for_tests()
+
+
+@pytest.mark.unified_card
+@pytest.mark.parametrize("job_count", [2, 3])
+@pytest.mark.parametrize("verified", [False, True])
+def test_registered_jobs_keep_publisher_index_on_independent_cards(job_count, verified):
+    """Real observer output reaches each single-part card, including index 1/2."""
+    import threading
+    from types import SimpleNamespace
+
+    from agent import ack_checklist as ac
+    from agent.delegation_activity import completion_display_state
+
+    class Sink:
+        # DelegationActivityPublisher allocates group-wide indexes but opens
+        # one single-part card per job. Do not rewrite indexes to part-local 0.
+        def __init__(self):
+            self.index = 0
+            self.cards = {}
+            self.events = []
+
+        def external_job_identity(self):
+            index = self.index
+            self.index += 1
+            return "jobs_review", index
+
+        def open_external_job_card(self, card_id, title, lifecycle):
+            card = ac.open_agent_job_part(card_id, title, lifecycle)
+            assert card is not None
+            self.cards[card_id] = card
+            return card_id
+
+        def observe(self, event_type, tool_name=None, preview=None, args=None, **kw):
+            self.events.append((event_type, kw))
+
+    ac.reset_for_tests()
+    ac.set_style_for_tests("unified")
+    sink = Sink()
+    try:
+        for index in range(job_count):
+            session = SimpleNamespace(id=f"proc_{index}", _lock=threading.Lock(),
+                                      output_buffer="", exited=False)
+            result = register_agent_job(session, {"title": f"Public job {index}",
+                "model": "claude-sonnet-5-5", "parser": "claude-stream-json"}, sink=sink)
+            assert result["observed"] is True
+            observer = session.agent_job
+            cl = sink.cards[f"jobs_review.{index}"].parts[0].checklist
+            assert not cl.kids
+            assert cl.model == "Sonnet 5.5" and cl.started is not None
+            observer.feed(json.dumps({"type": "assistant", "message": {"content": [
+                {"type": "tool_use", "id": f"call-{index}", "name": "Read",
+                 "input": {"file_path": "public.txt"}}]}}) + "\n")
+            assert cl.calls == 1 and len(cl.open) == 1
+            assert cl.open[0] == (f"call-{index}", "Read", "read_file public.txt")
+            observer.feed(json.dumps({"type": "user", "message": {"content": [
+                {"type": "tool_result", "tool_use_id": f"call-{index}",
+                 "is_error": False, "content": "private tool output"}]}}) + "\n")
+            assert cl.calls == 1 and cl.open == []
+            assert list(cl.recent) == [("read_file public.txt", True, 1)]
+            text = "Read the file."
+            if verified:
+                text = ('Task outcome: {"status":"done","remaining":[],"owner":"parent",'
+                        '"next_step":"review"}\nResult: done\nPlain summary: Read the file.')
+            observer.feed(json.dumps({"type": "result", "subtype": "success",
+                                     "is_error": False, "result": text}) + "\n")
+            observer.finish(0)
+            completed = [(event, kw) for event, kw in sink.events
+                         if event == "subagent.complete" and kw["task_index"] == index]
+            assert len(completed) == 1
+            payload = completed[0][1]
+            assert payload["status"] == "completed"  # process success is not task proof
+            assert completion_display_state(payload) == ("done" if verified else "unverified")
+            assert cl.state == (ac.DONE if verified else ac.UNVERIFIED)
+            before = (cl.model, cl.calls, list(cl.open), list(cl.recent), cl.started, cl.state)
+            observer.start()  # a late producer start cannot reopen terminal work
+            assert (cl.model, cl.calls, cl.open, list(cl.recent), cl.started, cl.state) == before
+        assert len(sink.cards) == job_count
+        assert len({id(card) for card in sink.cards.values()}) == job_count
+        for index in range(job_count):
+            events = [(event, kw) for event, kw in sink.events if kw["task_index"] == index]
+            assert [event for event, _ in events] == [
+                "subagent.start", "subagent.tool", "subagent.tool_done", "subagent.complete", "subagent.start"]
+            assert all(kw["delegation_id"] == f"jobs_review.{index}" for _, kw in events)
+            assert all(kw["subagent_id"] == f"proc_{index}" for _, kw in events)
+    finally:
+        ac.reset_for_tests()
 
 
 def test_turn_cap_is_unfinished_not_failed():

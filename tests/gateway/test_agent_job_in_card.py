@@ -21,6 +21,10 @@ from tools.agent_job_observer import register_agent_job
 pytestmark = pytest.mark.unified_card
 
 CLAUDE = "claude-stream-json"
+DONE_REPORT = (
+    'Task outcome: {"status":"done","remaining":[],"owner":"parent",'
+    '"next_step":"review"}\nResult: done\n'
+)
 
 
 class _TgChat(_Chat):
@@ -93,7 +97,8 @@ def _card_text(chat) -> str:
 
 
 @pytest.mark.asyncio
-async def test_an_agent_job_joins_the_running_card_and_posts_no_roster_card():
+@pytest.mark.parametrize("authoritative", [False, True], ids=["exit-only", "authoritative-done"])
+async def test_an_agent_job_joins_the_running_card_and_posts_no_roster_card(authoritative):
     chat = _TgChat()
     first = _opener_card("dj1", "shipping the card", "ship it", "on it")
     await _dispatch(chat, first)
@@ -114,13 +119,19 @@ async def test_an_agent_job_joins_the_running_card_and_posts_no_roster_card():
     # a long name stands alone; its stats close its section
     assert "\u25a0 **Audit cron locking**\n" in text and "\u2003\u2003*GPT-6.1 Sol \u00b7 \U0001f6e0 2 calls \u00b7 \u23f1 " in text
     assert "\U0001f527 *terminal pytest -q*" in text and "\u21b3 *read_file a.py*" in text
+    if authoritative:
+        # Feed an actual final report through the observer, not a display state.
+        job.feed(_line({"type": "result", "result": DONE_REPORT + "Plain summary: Locking is fine.",
+                        "is_error": False}))
     job.finish(0)
-    assert first.parts[1].checklist.state == ac.DONE and not first.finished, "the host part still runs"
+    expected = ac.DONE if authoritative else ac.UNVERIFIED
+    assert first.parts[1].checklist.state == expected and not first.finished, "the host part still runs"
     await pub.aclose()
 
 
 @pytest.mark.asyncio
-async def test_an_agent_job_alone_gets_its_own_unified_card():
+@pytest.mark.parametrize("authoritative", [False, True], ids=["legacy-result", "authoritative-done"])
+async def test_an_agent_job_alone_gets_its_own_unified_card(authoritative):
     chat = _TgChat()
     pub, job = await _start_job(chat)
     assert chat.status_calls == []
@@ -135,10 +146,13 @@ async def test_an_agent_job_alone_gets_its_own_unified_card():
     cl = card.parts[0].checklist
     assert cl.model == "GPT-6.1 Sol" and cl.calls == 1
     assert "\U0001f527 *terminal make test*" in card.render()
-    job.feed(_line({"type": "result", "result": "Plain summary: Locking is fine.", "is_error": False}))
+    report = (DONE_REPORT if authoritative else "") + "Plain summary: Locking is fine."
+    job.feed(_line({"type": "result", "result": report, "is_error": False}))
     job.finish(0)
-    assert cl.state == ac.DONE and cl.summary == "Locking is fine."
-    assert card.render().startswith("> \U0001f340 **Audit cron locking** \u00b7 done") and card.finished
+    expected = ac.DONE if authoritative else ac.UNVERIFIED
+    mark, label = ("\U0001f340", "done") if authoritative else ("☘️", "unverified")
+    assert cl.state == expected and cl.summary == "Locking is fine."
+    assert card.render().startswith(f"> {mark} **Audit cron locking** \u00b7 {label}") and card.finished
     assert "Locking is fine." not in card.render(), "the result is already in the chat"
     await pub.aclose()
 
@@ -152,7 +166,7 @@ async def test_a_failed_agent_job_gets_the_failure_mark():
     card = list(da._ACK_EDITORS.values())[0].card
     text = card.render()
     assert card.parts[0].checklist.state == ac.FAILED
-    assert text.splitlines()[0] == "> \U0001f342 **Audit cron locking** \u00b7 failed"
+    assert text.splitlines()[0] == "> \U0001f940 **Audit cron locking** \u00b7 failed"
     assert "exited with code 2" in text
     await pub.aclose()
 
@@ -167,12 +181,12 @@ async def test_a_failed_job_in_a_joined_card_keeps_the_failure_mark_on_its_name(
     text = first.render()
     assert "Audit cron locking" not in text, "the failed job left the running card"
     assert text.splitlines()[0] == "\U0001f500 **shipping the card**", "one part left: single layout"
-    assert first.part_liner(first.parts[1]).startswith("> \U0001f342 **Audit cron locking** \u00b7 failed")
+    assert first.part_liner(first.parts[1]).startswith("> \U0001f940 **Audit cron locking** \u00b7 failed")
     await pub.aclose()
 
 
 @pytest.mark.asyncio
-async def test_a_lifecycle_only_job_shows_running_then_done():
+async def test_a_lifecycle_only_job_shows_running_then_unverified():
     chat = _TgChat()
     pub, job = await _start_job(chat, parser="none", model="")
     card = list(da._ACK_EDITORS.values())[0].card
@@ -181,10 +195,56 @@ async def test_a_lifecycle_only_job_shows_running_then_done():
     assert "\u23f1" in text
     job.feed("some output\n")
     job.finish(0)
-    done = card.render()
-    assert card.parts[0].checklist.state == ac.DONE and card.finished
-    assert done.startswith("> \U0001f340 **Audit cron locking** \u00b7 done") and "*running*" not in done
+    final = card.render()
+    assert card.parts[0].checklist.state == ac.UNVERIFIED and card.finished
+    assert final.startswith("> ☘️ **Audit cron locking** \u00b7 unverified") and "*running*" not in final
     await pub.aclose()
+
+
+@pytest.mark.asyncio
+async def test_two_jobs_from_one_publisher_follow_one_joined_card():
+    chat = _TgChat()
+    first = _opener_card("native-host", "shipping the card", "ship it", "on it")
+    await _dispatch(chat, first)
+    editor = da._ACK_EDITORS[id(first)]
+    # The split opener is a normal message; the second send is the only card.
+    assert len(chat.sends) == 2 and chat.sends[0]["text"] == "on it"
+    assert chat.sends[1]["text"].startswith("**>")
+    card_id = editor._message_id
+    pub = _make_publisher(chat, chat_id="chat", clock=FakeClock())
+    jobs = []
+    try:
+        for index in range(2):
+            session = _Session()
+            session.id = f"proc_joined_{index}"
+            result = register_agent_job(session, {"title": f"Public job {index}",
+                "model": "claude-sonnet-5-5", "parser": CLAUDE}, sink=pub)
+            assert result["observed"] is True
+            await _settle()
+            job = session.agent_job
+            jobs.append(job)
+            job.feed(_tool_use(f"call-{index}", "Read", file_path=f"public-{index}.txt"))
+            cl = first.parts[index + 1].checklist
+            assert cl.model == "Sonnet 5.5" and cl.calls == 1 and len(cl.open) == 1
+            assert cl.started is not None
+        await _settle()
+        assert [job.index for job in jobs] == [0, 1]
+        assert len(first.parts) == 3 and all(part.card is first for part in first.parts)
+        assert list(da._ACK_EDITORS.values()) == [editor]
+        assert len(chat.sends) == 2 and chat.status_calls == []
+        assert editor._message_id == card_id, "both jobs edit the existing card"
+        assert pub.tracker.group_ids() == []
+        for index in range(2):
+            assert f"read_file public-{index}.txt" in editor._render()
+            jobs[index].feed(_tool_result(f"call-{index}"))
+            cl = first.parts[index + 1].checklist
+            assert not cl.open and list(cl.recent) == [(f"read_file public-{index}.txt", True, 1)]
+        await _settle()
+        assert list(da._ACK_EDITORS.values()) == [editor] and len(chat.sends) == 2
+        assert editor._message_id == card_id, "completion updates do not post another card"
+        assert len(first.parts) == 3 and not first.finished
+    finally:
+        await pub.aclose()
 
 
 @pytest.mark.asyncio

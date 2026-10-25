@@ -39,6 +39,7 @@ from typing import Any, Dict, Optional
 
 from clover_constants import get_clover_home
 from agent.secret_scope import get_secret as _get_secret
+from utils import atomic_replace
 
 logger = logging.getLogger(__name__)
 
@@ -710,7 +711,7 @@ def _write_claude_code_credentials(
                 json.dump(existing, fh, indent=2)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(_tmp_cred, cred_path)
+            atomic_replace(_tmp_cred, cred_path)
         except OSError:
             try:
                 _tmp_cred.unlink(missing_ok=True)
@@ -1156,7 +1157,7 @@ def _write_clover_oauth_credentials(
                 json.dump(oauth_data, fh, indent=2)
                 fh.flush()
                 os.fsync(fh.fileno())
-            os.replace(_tmp_oauth, oauth_file)
+            atomic_replace(_tmp_oauth, oauth_file)
         except OSError:
             try:
                 _tmp_oauth.unlink(missing_ok=True)

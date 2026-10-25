@@ -1,0 +1,64 @@
+{
+  "schema": 1,
+  "started_at": "2026-10-24T02:27:50.398911+00:00",
+  "finished_at": "2026-10-24T02:30:22.609963+00:00",
+  "argv": [
+    "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/clover",
+    "update",
+    "--gateway"
+  ],
+  "pid": 2820,
+  "outcome": "failed",
+  "pre_update": {
+    "sha": "0b50ba3dfc1b406ba2fcd394e479a6730a11722c",
+    "short_sha": "0b50ba3d",
+    "version": "1.5.9",
+    "source": "git"
+  },
+  "post_update": {
+    "sha": "0b50ba3dfc1b406ba2fcd394e479a6730a11722c",
+    "short_sha": "0b50ba3d",
+    "version": "1.5.9",
+    "source": "git"
+  },
+  "steps": [],
+  "skips": [
+    {
+      "name": "pre_update_backup",
+      "reason": "disabled (updates.pre_update_backup / --no-backup)",
+      "at": "2026-10-24T02:27:50.445666+00:00"
+    }
+  ],
+  "gateway_restart": {},
+  "fleet": [],
+  "plan": {
+    "install_method": "git",
+    "updatable_in_place": true,
+    "update_mechanism": "clover update",
+    "expected_sha": "0b50ba3dfc1b406ba2fcd394e479a6730a11722c",
+    "expected_version": "1.5.9",
+    "profiles": [
+      "default"
+    ],
+    "runtimes": [
+      {
+        "kind": "gateway",
+        "profile": "default",
+        "pid": 2542,
+        "supervisor": "external",
+        "code_sha": "9535350bee1d57cf7e466672e6f416403886bec1",
+        "code_version": "1.5.6",
+        "restart_via": "manual",
+        "detail": {}
+      }
+    ]
+  },
+  "delivery_restart_guard": {
+    "status": "deferred",
+    "reasons": [
+      "Gateway PID 2542 remains busy or unverified (timeout); restart pending."
+    ],
+    "owned_watcher_disarmed": false
+  },
+  "stop_reason": "Gateway PID 2542 remains busy or unverified (timeout); restart pending."
+}

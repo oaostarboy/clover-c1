@@ -1,0 +1,9 @@
+test_complete_reply_waits_for_controller_release (__main__.ChatWireTests.test_complete_reply_waits_for_controller_release) ... ok
+test_real_irc_socket_registration_human_delivery_and_reply_capture (__main__.ChatWireTests.test_real_irc_socket_registration_human_delivery_and_reply_capture) ... ok
+test_sdk_nonstream_requests_one_file_tool_without_faking_its_effect (__main__.ChatWireTests.test_sdk_nonstream_requests_one_file_tool_without_faking_its_effect) ... ok
+test_sdk_stream_preserves_tool_call (__main__.ChatWireTests.test_sdk_stream_preserves_tool_call) ... ok
+
+----------------------------------------------------------------------
+Ran 4 tests in 3.512s
+
+OK

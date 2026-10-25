@@ -17,6 +17,7 @@ from telegram.request import BaseRequest
 
 from agent import ack_checklist as ac
 from agent.delegation_activity import bind_activity_sink, _ACTIVITY_SINK
+from agent.task_outcome import task_outcome
 from gateway import delegation_activity as da
 from gateway.config import PlatformConfig
 from gateway.session_context import clear_session_vars, set_session_vars
@@ -288,7 +289,8 @@ async def test_accepted_launch_matrix_renders_public_steps_and_tracks_each_child
         assert part.checklist.calls == 1
         assert 'read\\_file page' in launch.endpoint.texts()[-1]
         assert 'PRIVATE OUTPUT' not in launch.endpoint.texts()[-1]
-        cb('subagent.complete', status='completed', summary='Result: done\nPlain summary: The links work.')
+        summary = 'Result: done\nPlain summary: The links work.'
+        cb('subagent.complete', status='completed', summary=summary, task_outcome=task_outcome({}, summary))
         await settle(launch.pub)
         final = launch.endpoint.texts()[-1]
         assert part.card.finished and 'done' in final

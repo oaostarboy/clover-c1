@@ -102,36 +102,36 @@ def test_done_collapses_the_card_to_one_plain_line():
 def test_done_clock_stops_at_the_end_time():
     card = _running_card()
     cl = card.parts[0].checklist
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done", summary="Plain summary: ok.")
     frozen = cl.render_unified(now=cl.started + 5)
     later = cl.render_unified(now=cl.started + 5000)
     assert frozen == later
 
 
-def test_failed_card_is_one_line_with_one_short_reason():
+def test_unfinished_card_is_one_line_with_one_short_reason():
     card = _running_card()
     ac.on_child_event(
         "subagent.complete", delegation_id="d1", status="completed", outcome="not_done",
         summary="Result: not done\nPlain summary: The folder does not exist.",
     )
     lines = card.render().splitlines()
-    assert lines[2] == "> \U0001f342 **fixing the bugs** \u00b7 failed"
+    assert lines[2] == "> ☘️ **fixing the bugs** \u00b7 unfinished"
     assert lines[3].startswith("> *Sonnet 5.5") and lines[3].endswith("*"), "the stats line"
     assert lines[-1] == "> The folder does not exist." and "**>" not in card.render()
-    assert "\u2713 find" not in card.render() and card.parts[0].checklist.steps[1][1] == "failed"
+    assert "\u2713 find" not in card.render() and card.parts[0].checklist.steps[1][1] == "unfinished"
 
 
 def test_failed_status_gives_the_failed_header():
     card = _running_card()
     ac.on_child_event("subagent.complete", delegation_id="d1", status="failed", summary="boom")
-    assert card.render().splitlines()[2] == "> \U0001f342 **fixing the bugs** \u00b7 failed"
+    assert card.render().splitlines()[2] == "> \U0001f940 **fixing the bugs** \u00b7 failed"
 
 
 def test_stopped_card_shape():
     card = _running_card()
     ac.on_child_event("subagent.complete", delegation_id="d1", status="interrupted")
     lines = card.render().splitlines()
-    assert lines[2] == "> \U0001f940 **fixing the bugs** \u00b7 stopped"
+    assert lines[2] == "> ⏹ **fixing the bugs** \u00b7 stopped"
     assert lines[3:] == [], "nothing else (no stats line) is left on a card whose only job was stopped"
 
 
@@ -179,7 +179,7 @@ def test_activity_before_the_part_exists_is_ignored_safely():
 
 def test_activity_after_finish_does_not_change_the_card():
     card = _running_card()
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done", summary="Plain summary: ok.")
     done = card.render()
     assert ac.on_child_event("subagent.tool", delegation_id="d1", tool_name="t", tool_count=99) is False
     assert card.render() == done
@@ -218,7 +218,7 @@ def test_classic_render_is_the_plain_checklist():
 
 def test_events_before_the_receipt_still_replay_into_the_unified_card():
     ac.on_child_event("subagent.todo", delegation_id="d9", todos=_todos("completed", "in_progress", "pending"))
-    ac.on_child_event("subagent.complete", delegation_id="d9", status="completed", summary="Plain summary: early.")
+    ac.on_child_event("subagent.complete", delegation_id="d9", status="completed", outcome="done", summary="Plain summary: early.")
     card = _card("d9")
     assert card.render() == "> \U0001f340 **fixing the bugs** \u00b7 done"
 
@@ -244,7 +244,7 @@ def test_markdown_in_title_and_summary_cannot_break_the_card():
     card = _card(header="\U0001f504 fixing *bold* things \u2192 a *b*, ~5 min", steps=("one",))
     assert "*bold*" not in card.render()
     ac.on_child_event(
-        "subagent.complete", delegation_id="d1", status="completed",
+        "subagent.complete", delegation_id="d1", status="completed", outcome="done",
         summary="Plain summary: It **works** now.",
     )
     text = card.render()
@@ -437,7 +437,7 @@ def test_each_helper_keeps_a_deque_of_three():
 def test_finished_card_has_no_tool_lines_and_no_result():
     card = _running_card()
     _done("d1", "terminal", 15)
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed",
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done",
                       summary="Plain summary: All good.")
     text = card.render()
     assert _tool_lines(text) == [] and "All good" not in text and "15" in text
@@ -561,7 +561,7 @@ def test_multi_header_counts_done_helpers():
     card = _multi_card(goals=("a", "b", "c"))
     head = lambda: card.render().splitlines()[0]
     assert head().endswith("\u00b7 0 of 3 done")
-    ac.on_child_event("subagent.complete", status="completed", summary="ok", **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="ok", **_kid("dm", 0))
     assert head().endswith("\u00b7 1 of 3 done")
     ac.on_child_event("subagent.complete", status="failed", summary="boom", **_kid("dm", 1))
     assert head().endswith("\u00b7 1 of 3 done"), "a failed helper is not done"
@@ -571,7 +571,7 @@ def test_multi_finished_all_ok_is_one_line_with_the_count_of_subagents():
     card = _live_multi()
     ac.on_child_event("subagent.complete", status="completed", outcome="done",
                       summary="Plain summary: Booking works.", **_kid("dm", 1))
-    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: Pamphlet is fine.",
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: Pamphlet is fine.",
                       **_kid("dm", 2))
     cl = card.parts[0].checklist
     for k in cl.kids:  # whole seconds: a float sum like (t + 100) - t can land a hair under 100
@@ -585,32 +585,33 @@ def test_multi_finished_all_ok_is_one_line_with_the_count_of_subagents():
     assert "**>" not in text and "Goal" not in text and "Booking works" not in text
 
 
-def test_multi_finished_with_one_failed_and_one_stopped_counts_only_the_failure():
+def test_multi_finished_with_one_unfinished_and_one_stopped_counts_both():
     card = _multi_card(goals=("a", "b", "c"))
-    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: fine.", **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: fine.", **_kid("dm", 0))
     ac.on_child_event("subagent.complete", status="completed", outcome="not_done",
                       summary="Result: not done\nPlain summary: Site is down.", **_kid("dm", 1))
     ac.on_child_event("subagent.complete", status="interrupted", summary="", **_kid("dm", 2))
     lines = card.render().splitlines()
-    assert lines[0] == "> \U0001f342 **2 subagents** \u00b7 failed"
-    assert lines[1].startswith("> *1 of 2 done \u00b7 1 failed")
-    assert lines[-1] == "> Site is down." and "stopped" not in card.render()
+    assert lines[0] == "> ☘️ **3 subagents** \u00b7 unfinished"
+    assert lines[1].startswith("> *1 of 3 done \u00b7 1 unfinished \u00b7 1 stopped")
+    assert lines[-1] == "> Site is down."
 
 
-def test_multi_stopped_without_a_failure_is_dropped_from_the_count():
+def test_multi_stopped_without_a_failure_is_still_stopped():
     card = _multi_card(goals=("a", "b"))
-    ac.on_child_event("subagent.complete", status="completed", summary="ok", **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="ok", **_kid("dm", 0))
     ac.on_child_event("subagent.complete", status="cancelled", **_kid("dm", 1))
     first = card.render().splitlines()[0]
-    assert first == "> \U0001f340 **checking the 3 sites** \u00b7 done", "a stop is not a failure and not counted"
+    assert first == "> ⏹ **2 subagents** \u00b7 stopped", "a stop is neither failure nor verified success"
+    assert "1 of 2 done \u00b7 1 stopped" in card.render()
 
 
-def test_max_iterations_counts_as_failed_for_a_multi_helper():
+def test_max_iterations_counts_as_unfinished_for_a_multi_helper():
     card = _multi_card(goals=("a", "b"))
-    ac.on_child_event("subagent.complete", status="completed", exit_reason="max_iterations", **_kid("dm", 0))
-    ac.on_child_event("subagent.complete", status="completed", summary="ok", **_kid("dm", 1))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", exit_reason="max_iterations", **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="ok", **_kid("dm", 1))
     lines = card.render().splitlines()
-    assert lines[0].startswith("> \U0001f342 **") and "1 failed" in lines[1]
+    assert lines[0].startswith("> ☘️ **") and "1 unfinished" in lines[1]
     assert lines[-1] == "> ran out of steps"
 
 
@@ -621,7 +622,7 @@ def test_multi_footer_totals_and_a_summary_cut_on_a_word():
     ac.on_child_event("subagent.tool", tool_name="t", tool_count=5, **_kid("dm", 0))
     ac.on_child_event("subagent.tool", tool_name="t", tool_count=7, **_kid("dm", 1))
     long = "Plain summary: " + " ".join(["word"] * 80) + "."
-    ac.on_child_event("subagent.complete", status="completed", summary=long, **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary=long, **_kid("dm", 0))
     cl.kids[0].started -= 50; cl.kids[1].started = cl.kids[0].started + 10
     lines = _flat(card.render()).splitlines()
     assert "> *1 running \u00b7 1 done \u00b7 \U0001f6e0 12 calls \u00b7 " in "\n".join(lines)
@@ -634,7 +635,7 @@ def test_multi_complete_before_the_part_exists_is_replayed_per_child():
                       summary="Result: not done\nPlain summary: Nope.")
     card = _multi_card(goals=("g1", "g2"))
     lines = _flat(card.render()).splitlines()
-    assert any(ln.startswith("> \U0001f342 **second** \u00b7 failed \u00b7 ") for ln in lines)
+    assert any(ln.startswith("> ☘️ **second** \u00b7 unfinished \u00b7 ") for ln in lines)
     assert "> \u25a0 **g1** \u00b7 waiting" in lines
 
 
@@ -666,8 +667,8 @@ def test_classic_multi_dispatch_is_still_the_plain_line():
 
 
 def _no_emoji(text):
-    """True when no character is an emoji, except the title's \U0001f500 and the \U0001f527 on a running tool line, and the \U0001f340 / \U0001f342 of a subagent that ended."""
-    return not any(ord(ch) >= 0x1F000 or ch in "\u2b1c\U0001f940" for ch in text.replace("\U0001f500 **", "**").replace("\U0001f500 ", "").replace("\U0001f6e0", "").replace("\u23f1", "").replace("\U0001f527 ", "").replace("\U0001f340 ", "").replace("\U0001f342 ", ""))
+    """True when no character is an emoji, except the title's \U0001f500 and the \U0001f527 on a running tool line, and the \U0001f340 / \U0001f940 of a subagent that ended."""
+    return not any(ord(ch) >= 0x1F000 or ch in "\u2b1c⏹" for ch in text.replace("\U0001f500 **", "**").replace("\U0001f500 ", "").replace("\U0001f6e0", "").replace("\u23f1", "").replace("\U0001f527 ", "").replace("\U0001f340 ", "").replace("\U0001f940 ", ""))
 
 
 def test_seven_helper_card_is_compact_and_under_the_telegram_limit():
@@ -679,14 +680,14 @@ def test_seven_helper_card_is_compact_and_under_the_telegram_limit():
         ac.on_child_event("subagent.tool", tool_name="web_search", preview="q" * 70,
                           args={"query": "q" * 70}, tool_count=2, **_kid("dm", i))
     for i in range(6):
-        ac.on_child_event("subagent.complete", status="completed", summary=para, **_kid("dm", i))
+        ac.on_child_event("subagent.complete", status="completed", outcome="done", summary=para, **_kid("dm", i))
     text = _flat(card.render())
     assert len(text) < 4000
     # more than 6 helpers: a finished helper is ONE 🍀 line with its stats
     rows = [ln for ln in text.splitlines() if "**Check site number" in ln and " \u00b7 done" in ln]
     assert len(rows) == 6 and all(len(r) < 90 for r in rows)
     assert all(r.startswith("> \U0001f340 **Check site number") for r in rows)
-    ac.on_child_event("subagent.complete", status="completed", summary=para, **_kid("dm", 6))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary=para, **_kid("dm", 6))
     done = card.render()
     assert done.count("\n") <= 1 and "sentence" not in done, "once every helper is over: one line"
 
@@ -696,7 +697,7 @@ def test_six_helpers_still_get_the_full_layout_while_one_runs():
     for i in range(6):
         ac.on_child_event("subagent.start", **_kid("dm", i, model="claude-sonnet-5-5"))
     for i in range(5):
-        ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", i))
+        ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.", **_kid("dm", i))
     text = _flat(card.render())
     assert text.count("\u25a0 **job 5**") == 1 and text.count("\U0001f340 **job") == 5
     assert "ok." not in text and text.count(" \u00b7 done \u00b7 Sonnet 5.5") == 5
@@ -711,7 +712,7 @@ def test_four_helper_summaries_are_cut_before_titles_when_the_budget_is_tight():
         ac.on_child_event("subagent.tool", tool_name="web_search", preview="q" * 70,
                           args={"query": "q" * 70}, tool_count=2, **_kid("dm", i))
     for i in range(3):
-        ac.on_child_event("subagent.complete", status="completed", summary=para, **_kid("dm", i))
+        ac.on_child_event("subagent.complete", status="completed", outcome="done", summary=para, **_kid("dm", i))
     full = card.render()
     import pytest as _p
     mp = _p.MonkeyPatch()
@@ -807,7 +808,7 @@ def test_the_relayed_plain_summary_wins_over_a_truncated_summary():
     ac.on_child_event("subagent.start", delegation_id="d1", model="claude-sonnet-5-5")
     # what delegate_tool sends: summary cut before its 'Plain summary:' line
     ac.on_child_event(
-        "subagent.complete", delegation_id="d1", status="completed",
+        "subagent.complete", delegation_id="d1", status="completed", outcome="done",
         summary="I haven't tried them in a live Telegram chat. The test bot runs the new code. Commit: `abc`",
         plain_summary="The fix is in and the test bot is running it.",
     )
@@ -817,7 +818,7 @@ def test_the_relayed_plain_summary_wins_over_a_truncated_summary():
 
 def test_without_a_relayed_plain_summary_the_old_extraction_still_works():
     card = _card()
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed",
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done",
                       summary="Result: done\nPlain summary: Old style works.")
     assert card.parts[0].checklist.summary == "Old style works."
 
@@ -1046,7 +1047,7 @@ def test_classic_style_ack_text_is_unchanged_on_a_chat_platform():
 
 
 def _clean_chars(text):
-    return text.replace("\U0001f342", "")  # the one allowed status emoji
+    return text.replace("\U0001f940", "")  # the one allowed status emoji
 
 
 def test_a_running_title_leads_with_the_roster_icon_and_the_card_has_no_other_emoji():
@@ -1061,13 +1062,13 @@ def test_a_running_title_leads_with_the_roster_icon_and_the_card_has_no_other_em
 
 def test_the_failure_emoji_appears_only_on_a_failed_or_stopped_title_and_a_failed_name():
     ok = _running_card()
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", summary="Plain summary: ok.")
-    assert "\U0001f342" not in ok.render()
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done", summary="Plain summary: ok.")
+    assert "\U0001f940" not in ok.render()
     ac.reset_for_tests(); ac.set_style_for_tests("unified")
     bad = _running_card()
     ac.on_child_event("subagent.complete", delegation_id="d1", status="failed", summary="boom")
     text = bad.render()
-    assert text.count("\U0001f342") == 1 and text.splitlines()[2] == "> \U0001f342 **fixing the bugs** \u00b7 failed"
+    assert text.count("\U0001f940") == 1 and text.splitlines()[2] == "> \U0001f940 **fixing the bugs** \u00b7 failed"
     assert "\U0001f500" not in text, "the failure emoji replaces the roster icon"
     ac.reset_for_tests(); ac.set_style_for_tests("unified")
     multi = _multi_card(goals=("a", "b", "c"))
@@ -1075,8 +1076,8 @@ def test_the_failure_emoji_appears_only_on_a_failed_or_stopped_title_and_a_faile
     ac.on_child_event("subagent.start", **_kid("dm", 1))
     ac.on_child_event("subagent.complete", status="failed", summary="Plain summary: broke.", **_kid("dm", 1))
     lines = multi.render().splitlines()
-    assert lines[0].startswith("\U0001f500 **") and any(ln.startswith("> \U0001f342 **b** \u00b7 failed") for ln in lines)
-    assert sum(ln.count("\U0001f342") for ln in lines) == 1
+    assert lines[0].startswith("\U0001f500 **") and any(ln.startswith("> \U0001f940 **b** \u00b7 failed") for ln in lines)
+    assert sum(ln.count("\U0001f940") for ln in lines) == 1
     assert _no_emoji(_clean_chars(multi.render()))
 
 
@@ -1084,7 +1085,7 @@ def test_goal_line_is_plain_and_has_the_eta_while_running():
     card = _running_card()
     assert "> Goal: test build + PR \u00b7 ~10\u201325 min" in card.render().splitlines()
     assert "*Goal" not in card.render()
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done", summary="Plain summary: ok.")
     assert "Goal" not in card.render() and "~" not in card.render(), "a finished card has no Goal"
 
 
@@ -1115,13 +1116,13 @@ def test_one_call_is_singular_in_a_subagent_header_and_the_footer():
     assert "\U0001f6e0 1 call \u00b7" in text and "1 calls" not in text and "*1 running \u00b7 1 waiting \u00b7 \U0001f6e0 1 call \u00b7" in text
 
 
-def test_step_marks_are_plain_characters():
+def test_step_marks_keep_plain_progress_and_semantic_failure():
     card = _card(steps=("a", "b", "c", "d", "e"))
     cl = card.parts[0].checklist
     cl.steps[0][1], cl.steps[1][1], cl.steps[2][1], cl.steps[3][1], cl.steps[4][1] = (
         "completed", "in_progress", "pending", "failed", "cancelled")
     lines = card.render().splitlines()
-    assert lines[-5:] == ["> \u2713 a", "> \u25b8 b", "> \u25cb c", "> \u2717 d", "> \u2013 e"]
+    assert lines[-5:] == ["> \u2713 a", "> \u25b8 b", "> \u25cb c", "> 🥀 d", "> \u2013 e"]
     multi = _multi_card(goals=("x", "y"))
     ac.on_child_event("subagent.start", **_kid("dm", 0))
     multi.parts[0].checklist.kids[0].steps[:] = [["s", "completed"], ["t", "in_progress"], ["u", "pending"]]
@@ -1196,7 +1197,7 @@ def test_the_single_card_reads_stats_title_goal_steps_tools():
 
 def test_the_finished_single_card_has_no_result_text():
     card = _running_card()
-    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed",
+    ac.on_child_event("subagent.complete", delegation_id="d1", status="completed", outcome="done",
                       summary="Plain summary: The fix is in.")
     assert "The fix is in" not in card.render()
 
@@ -1204,7 +1205,7 @@ def test_the_finished_single_card_has_no_result_text():
 def test_a_done_subagent_keeps_no_result_text_even_a_long_one():
     card = _multi_card(goals=("a", "b"))
     long = "Plain summary: " + " ".join(["word"] * 80) + "."
-    ac.on_child_event("subagent.complete", status="completed", summary=long, **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary=long, **_kid("dm", 0))
     text = card.render()
     assert "word" not in text and "> \U0001f340 **a** \u00b7 done" in text.splitlines()
     assert "> \u25a0 **b** \u00b7 waiting" in text.splitlines()
@@ -1239,16 +1240,16 @@ def test_the_collapsed_telegram_cut_is_header_hint_spacer_and_nothing_else():
 
 def test_all_ended_with_a_failure_shows_the_counts_and_the_title_emoji():
     card = _multi_card(goals=("a", "b", "c"))
-    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.", **_kid("dm", 0))
     ac.on_child_event("subagent.complete", status="failed", summary="Plain summary: bad.", **_kid("dm", 1))
-    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", 2))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.", **_kid("dm", 2))
     lines = card.render().splitlines()
-    assert lines[0] == "> \U0001f342 **3 subagents** \u00b7 failed"
+    assert lines[0] == "> \U0001f940 **3 subagents** \u00b7 failed"
     assert lines[1].startswith("> *2 of 3 done \u00b7 1 failed")
     ac.reset_for_tests(); ac.set_style_for_tests("unified")
     card = _multi_card(goals=("a", "b"))
-    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", 0))
-    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", 1))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.", **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.", **_kid("dm", 1))
     lines = card.render().splitlines()
     assert lines[0] == "> \U0001f340 **2 subagents** \u00b7 done" and lines[1].startswith("> *2 done")
 
@@ -1260,14 +1261,14 @@ def test_compaction_starts_above_six_with_plain_one_liners_and_grouped_waiting()
     card = ac.card_for([r])
     kw = lambda i, **k: dict(delegation_id="c9", task_index=i, task_count=9, subagent_id=f"z{i}", **k)
     ac.on_child_event("subagent.start", **kw(0, model="claude-sonnet-5-5", title="job 0"))
-    ac.on_child_event("subagent.complete", status="completed", plain_summary="all good here", **kw(0, title="job 0"))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", plain_summary="all good here", **kw(0, title="job 0"))
     ac.on_child_event("subagent.start", **kw(1, model="claude-sonnet-5-5", title="job 1"))
     ac.on_child_event("subagent.complete", status="failed", plain_summary="it broke", **kw(1, title="job 1"))
     for i in (2, 3):
         ac.on_child_event("subagent.start", **kw(i, model="claude-sonnet-5-5", title=f"job {i}"))
     lines = _flat(card.render()).splitlines()
     assert any(ln.startswith("> \U0001f340 **job 0** \u00b7 done") for ln in lines)
-    assert "> \U0001f342 **job 1** \u00b7 failed \u00b7 it broke" in lines
+    assert "> \U0001f940 **job 1** \u00b7 failed \u00b7 it broke" in lines
     assert "> waiting: job 4, job 5, job 6, job 7, job 8" in lines
     assert not any(ln.startswith("> \u2b1c") or "\U0001f504" in ln for ln in lines)
 
@@ -1278,7 +1279,7 @@ def test_compaction_starts_above_six_with_plain_one_liners_and_grouped_waiting()
 def test_each_subagent_name_of_a_multi_card_leads_with_the_section_mark_but_a_single_card_does_not():
     multi = _live_multi()
     names = [ln for ln in multi.render().splitlines() if "**" in ln and "\u00b7" in ln and ln.startswith("> ")]
-    assert names and all(ln.startswith(("> \u25a0 **", "> \U0001f340 **", "> \U0001f342 **")) for ln in names)
+    assert names and all(ln.startswith(("> \u25a0 **", "> \U0001f340 **", "> \U0001f940 **")) for ln in names)
     assert any(ln.startswith("> \u25a0 **") for ln in names), "the one still working is a section"
     single = _running_card().render()
     assert "\u25a0" not in single
@@ -1288,7 +1289,7 @@ def test_a_failed_subagent_keeps_the_failure_mark_instead_of_the_section_mark():
     card = _multi_card(goals=("a", "b"))
     ac.on_child_event("subagent.complete", status="failed", summary="Plain summary: broke.", **_kid("dm", 1))
     lines = card.render().splitlines()
-    assert "> \U0001f342 **b** \u00b7 failed \u00b7 broke." in lines and not any("\u25a0 **b**" in ln for ln in lines)
+    assert "> \U0001f940 **b** \u00b7 failed \u00b7 broke." in lines and not any("\u25a0 **b**" in ln for ln in lines)
 
 
 @pytest.mark.parametrize("command, expected", [
@@ -1360,7 +1361,7 @@ def _job(did, seq, work, goals=("g",)):
 
 def _end(did, i, n, status="completed"):
     ac.on_child_event("subagent.complete", delegation_id=did, task_index=i, task_count=n,
-                      subagent_id=f"{did}-{i}", status=status, summary="Plain summary: ok.")
+                      subagent_id=f"{did}-{i}", status=status, outcome="done", summary="Plain summary: ok.")
 
 
 def _five_subagents_in_three_jobs():
@@ -1408,7 +1409,7 @@ def test_a_joined_card_of_four_parts_is_titled_n_subagents():
 
 def test_a_joined_running_card_shows_only_the_parts_still_running():
     card = _five_subagents_in_three_jobs()
-    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", outcome="done", summary="Plain summary: ok.")
     _end("b", 0, 2)
     text = card.render()
     lines = text.splitlines()
@@ -1422,14 +1423,14 @@ def test_a_joined_running_card_shows_only_the_parts_still_running():
 def test_a_finished_joined_card_says_n_jobs_done_on_one_line():
     card = ac.card_for([_job("a", 1, "disks"), _job("b", 2, "network"), _job("c", 3, "logs")])
     for did in "abc":
-        ac.on_child_event("subagent.complete", delegation_id=did, status="completed", summary="Plain summary: ok.")
+        ac.on_child_event("subagent.complete", delegation_id=did, status="completed", outcome="done", summary="Plain summary: ok.")
     assert card.render() == "> \U0001f340 **logs** \u00b7 done", "the part that ended last"
     assert card.part_liner(card.parts[0]) == "> \U0001f340 **disks** \u00b7 done"
 
 
 def test_a_failed_part_leaves_the_joined_card_and_the_last_part_gets_the_single_layout():
     card = _five_subagents_in_three_jobs()
-    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", outcome="done", summary="Plain summary: ok.")
     _end("b", 0, 2)
     _end("b", 1, 2)
     _end("c", 0, 2)
@@ -1437,7 +1438,7 @@ def test_a_failed_part_leaves_the_joined_card_and_the_last_part_gets_the_single_
     assert card.finished
     part_c = next(p for p in card.parts if p.delegation_id == "c")
     liner = card.part_liner(part_c).splitlines()
-    assert liner[0] == "> \U0001f342 **2 subagents** \u00b7 failed"
+    assert liner[0] == "> \U0001f940 **2 subagents** \u00b7 failed"
     assert liner[1].startswith("> *1 of 2 done \u00b7 1 failed")
     assert all(ln.startswith("> ") for ln in liner) and "**>" not in "\n".join(liner)
 
@@ -1455,7 +1456,7 @@ def test_a_single_part_card_keeps_its_work_title():
 # -- a finished job collapses to one 🍀 line; long names move their stats down --
 
 CLOVER = "\U0001f340"
-LEAF = "\U0001f342"
+LEAF = "\U0001f940"
 
 
 def _timed(card, did, secs=125.0, calls=None):
@@ -1480,7 +1481,7 @@ def _lines(card):
 
 def test_a_part_that_ended_leaves_a_running_card_and_the_last_one_uses_the_single_layout():
     card = _joined(("a", "disks", ("g",)), ("b", "network", ("g",)))
-    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", outcome="done", summary="Plain summary: ok.")
     _timed(card, "a", calls=3)
     lines = _lines(card)
     assert lines[0] == "\U0001f500 **network**", "one part left: the single layout, no 'N subagents'"
@@ -1508,16 +1509,17 @@ def test_a_part_still_running_is_not_collapsed_even_if_some_of_its_subagents_end
     assert not any(CLOVER + " **checking" in ln for ln in lines)
 
 
-def test_an_ended_part_with_a_failure_or_a_stop_counts_only_what_is_shown():
+def test_an_ended_part_with_a_failure_or_a_stop_counts_both_honestly():
     card = _joined(("a", "checking sites", ("x", "y", "z")), ("b", "backups", ("u", "v")), ("c", "network", ("g",)))
     _end("a", 0, 3); _end("a", 1, 3); _end("a", 2, 3, status="failed")
     _end("b", 0, 2); _end("b", 1, 2, status="interrupted")
     _timed(card, "a", calls=1); _timed(card, "b", calls=1)
     a = card.part_liner(card.parts[0]).splitlines()
-    assert a[0] == "> \U0001f342 **3 subagents** \u00b7 failed"
+    assert a[0] == "> \U0001f940 **3 subagents** \u00b7 failed"
     assert a[1] == "> *2 of 3 done \u00b7 1 failed \u00b7 \U0001f6e0 3 \u00b7 \u23f1 2m05s*"
     b = card.part_liner(card.parts[1])
-    assert "stopped" not in b or b.startswith("> \U0001f340 **backups**")
+    assert b.startswith("> ⏹ **2 subagents** \u00b7 stopped")
+    assert "1 of 2 done \u00b7 1 stopped" in b
 
 
 def test_a_single_subagent_part_that_failed_or_stopped_says_so():
@@ -1529,13 +1531,13 @@ def test_a_single_subagent_part_that_failed_or_stopped_says_so():
     assert "disks" not in text and "logs" not in text, "ended parts left the running card"
     assert text.splitlines()[0] == "\U0001f500 **network**", "one part left: single layout"
     assert card.part_liner(card.parts[0]).splitlines() == [
-        "> \U0001f342 **disks** \u00b7 failed", "> *\U0001f6e0 2 \u00b7 \u23f1 2m05s*", "> broke."]
-    assert card.part_liner(card.parts[1]) == "> \U0001f940 **logs** \u00b7 stopped", "no stats line when stopped"
+        "> \U0001f940 **disks** \u00b7 failed", "> *\U0001f6e0 2 \u00b7 \u23f1 2m05s*", "> broke."]
+    assert card.part_liner(card.parts[1]) == "> ⏹ **logs** \u00b7 stopped", "no stats line when stopped"
 
 
 def test_a_finished_joined_card_is_the_last_ended_part_as_one_plain_line():
     card = _joined(("a", "disks", ("g",)), ("b", "network", ("x", "y")))
-    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", outcome="done", summary="Plain summary: ok.")
     _end("b", 0, 2); _end("b", 1, 2)
     _timed(card, "a", calls=3); _timed(card, "b", calls=2)
     lines = _lines(card)
@@ -1583,7 +1585,7 @@ def test_short_names_keep_their_stats_inline():
 
 def test_a_long_ended_title_puts_its_stats_on_the_next_line():
     card = _joined(("a", "putting outside workers in the same card as the subagents", ("g",)), ("b", "logs", ("g",)))
-    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", outcome="done", summary="Plain summary: ok.")
     _timed(card, "a", calls=5)
     lines = card.part_liner(card.parts[0]).splitlines()
     assert lines == ["> \U0001f340 **putting outside workers in the same card as the subagents** \u00b7 done",
@@ -1593,7 +1595,7 @@ def test_a_long_ended_title_puts_its_stats_on_the_next_line():
 def test_a_done_subagent_on_a_joined_card_is_one_line_with_no_result_text():
     card = _joined(("a", "checking sites", ("x", "y")), ("b", "network", ("g",)))
     ac.on_child_event("subagent.complete", delegation_id="a", task_index=0, task_count=2, subagent_id="a-0",
-                      status="completed", summary="Plain summary: Most are in the tests folder.")
+                      status="completed", outcome="done", summary="Plain summary: Most are in the tests folder.")
     lines = _lines(card)
     assert "> " + CLOVER + " **x** \u00b7 done" in lines
     assert not any("Most are" in ln for ln in lines)
@@ -1611,7 +1613,7 @@ def test_a_running_footer_shows_live_counts_and_leaves_out_zeros():
     for i in range(5):
         ac.on_child_event("subagent.start", **_kid("dm", i))
     for i in range(2):
-        ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", i))
+        ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.", **_kid("dm", i))
     foot = _footer(card)
     assert foot.startswith("> *3 running \u00b7 2 done") and "subagents" not in foot
     assert "waiting" not in foot and "failed" not in foot
@@ -1623,7 +1625,7 @@ def test_a_running_footer_orders_running_waiting_done_failed_stopped():
     ac.on_child_event("subagent.start", **_kid("dm", 1))
     ac.on_child_event("subagent.start", **_kid("dm", 2))
     ac.on_child_event("subagent.start", **_kid("dm", 3))
-    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", 1))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.", **_kid("dm", 1))
     ac.on_child_event("subagent.complete", status="failed", summary="Plain summary: broke.", **_kid("dm", 2))
     ac.on_child_event("subagent.complete", status="interrupted", summary="", **_kid("dm", 3))
     assert _footer(card).startswith("> *1 running \u00b7 1 waiting \u00b7 1 done \u00b7 1 failed")
@@ -1632,7 +1634,7 @@ def test_a_running_footer_orders_running_waiting_done_failed_stopped():
 
 def test_a_joined_running_footer_counts_only_the_running_parts():
     card = _five_subagents_in_three_jobs()
-    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", outcome="done", summary="Plain summary: ok.")
     _end("b", 0, 2)
     assert " subagents" not in _footer(card)
     foot = _footer(card)
@@ -1641,10 +1643,10 @@ def test_a_joined_running_footer_counts_only_the_running_parts():
 
 def test_a_finished_failed_joined_card_is_the_last_ended_part():
     bad = _five_subagents_in_three_jobs()
-    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", summary="Plain summary: ok.")
+    ac.on_child_event("subagent.complete", delegation_id="a", status="completed", outcome="done", summary="Plain summary: ok.")
     _end("b", 0, 2); _end("b", 1, 2); _end("c", 0, 2); _end("c", 1, 2, status="failed")
     lines = bad.render().splitlines()
-    assert lines[0] == "> \U0001f342 **2 subagents** \u00b7 failed"
+    assert lines[0] == "> \U0001f940 **2 subagents** \u00b7 failed"
     assert lines[1].startswith("> *1 of 2 done \u00b7 1 failed")
 
 
@@ -1812,7 +1814,7 @@ def test_a_failed_next_to_a_stopped_one_keeps_only_the_failure():
     ac.on_child_event("subagent.complete", status="interrupted", **_kid("dm", 0))
     ac.on_child_event("subagent.complete", status="failed", summary="", **_kid("dm", 1))
     lines = _flat(card.render()).splitlines()
-    assert any(ln.startswith("> \U0001f342 **b** \u00b7 failed") for ln in lines)
+    assert any(ln.startswith("> \U0001f940 **b** \u00b7 failed") for ln in lines)
     assert not any("**a**" in ln for ln in lines)
     assert lines[0].endswith("0 of 2 done")
 
@@ -1821,7 +1823,7 @@ def test_an_ended_subagent_is_always_exactly_one_line_however_long_its_name():
     long_name = "a very long subagent name that will not fit"
     lines = ac._ended_line(long_name, type("O", (), dict(
         state=ac.FAILED, calls=13, model="", started=0.0, ended=60.0, reason="hit an error"))())
-    assert lines == [f"\U0001f342 **{long_name}** \u00b7 failed \u00b7 hit an error"], "always ONE line"
+    assert lines == [f"\U0001f940 **{long_name}** \u00b7 failed \u00b7 hit an error"], "always ONE line"
     done = ac._ended_line(long_name, type("O", (), dict(
         state=ac.DONE, calls=13, model="Opus 5.5", started=0.0, ended=60.0, reason=""))())
     assert done == [f"\U0001f340 **{long_name}** \u00b7 done \u00b7 Opus 5.5 \u00b7 \U0001f6e0 13 \u00b7 \u23f1 1m00s"]
@@ -1834,7 +1836,7 @@ def test_a_failed_subagent_collapses_with_one_short_plain_reason():
     text = card.render()
     lines = _flat(text).splitlines()
     i = next(i for i, ln in enumerate(lines) if "**a**" in ln)
-    assert lines[i] == "> \U0001f342 **a** \u00b7 failed \u00b7 hit an error"
+    assert lines[i] == "> \U0001f940 **a** \u00b7 failed \u00b7 hit an error"
     assert "Traceback" not in text and "ValueError" not in text
 
 
@@ -1848,8 +1850,8 @@ def test_a_failed_reason_is_cut_to_forty_and_max_iterations_has_its_own_words():
     assert reasons and reasons[0].endswith("\u2026") and all(len(r) <= ac.REASON_CHARS for r in reasons)
     ac.reset_for_tests(); ac.set_style_for_tests("unified")
     card = _two_kids()
-    ac.on_child_event("subagent.complete", status="completed", exit_reason="max_iterations", **_kid("dm", 0))
-    ac.on_child_event("subagent.complete", status="completed", summary="ok", **_kid("dm", 1))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", exit_reason="max_iterations", **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="ok", **_kid("dm", 1))
     final = card.render().splitlines()
     assert final[-1] == "> ran out of steps" and all(len(ln.strip()) <= 62 for ln in final)
 
@@ -1859,7 +1861,7 @@ def test_a_single_stopped_subagent_card_has_the_stop_mark_and_no_raw_text():
     ac.on_child_event("subagent.complete", delegation_id="d1", status="interrupted",
                       summary="Operation interrupted: waiting for the model")
     text = card.render()
-    assert text.splitlines()[2] == "> \U0001f940 **fixing the bugs** \u00b7 stopped"
+    assert text.splitlines()[2] == "> ⏹ **fixing the bugs** \u00b7 stopped"
     assert "Operation interrupted" not in text and "\U0001f500" not in text
 
 
@@ -1880,16 +1882,16 @@ def test_a_joined_card_with_every_job_stopped_keeps_just_the_stop_title():
     ac.on_child_event("subagent.complete", delegation_id="a", status="interrupted", summary="")
     assert card.render().splitlines()[0] == "\U0001f500 **logs**", "one part left: single layout"
     ac.on_child_event("subagent.complete", delegation_id="b", status="interrupted", summary="")
-    assert card.render().splitlines() == ["> \U0001f940 **logs** \u00b7 stopped"]
+    assert card.render().splitlines() == ["> ⏹ **logs** \u00b7 stopped"]
 
 
-def test_a_partly_stopped_job_shows_only_its_other_helpers():
+def test_a_partly_stopped_job_keeps_its_stopped_count():
     card = _multi_card(goals=("a", "b"))
-    ac.on_child_event("subagent.complete", status="completed", summary="Plain summary: ok.", **_kid("dm", 0))
+    ac.on_child_event("subagent.complete", status="completed", outcome="done", summary="Plain summary: ok.", **_kid("dm", 0))
     ac.on_child_event("subagent.complete", status="interrupted", **_kid("dm", 1))
     text = card.render()
-    assert text.startswith("> \U0001f340 **checking the 3 sites** \u00b7 done")
-    assert "stopped" not in text
+    assert text.startswith("> ⏹ **2 subagents** \u00b7 stopped")
+    assert "1 of 2 done \u00b7 1 stopped" in text
 
 
 
@@ -1914,7 +1916,7 @@ def test_a_done_subagent_is_one_line_while_its_sibling_in_the_same_job_still_run
     kids = card.parts[0].checklist.kids
     kids[0].calls, kids[0].started = 34, 1000.0
     ac.on_child_event("subagent.complete", delegation_id="dj", task_index=0, task_count=2, subagent_id="dj-0",
-                      status="completed", summary="Result: done\nPlain summary: Removed the old copy.")
+                      status="completed", outcome="done", summary="Result: done\nPlain summary: Removed the old copy.")
     kids[0].ended = 1000.0 + 30 * 60
     lines = _flat(card.render()).splitlines()
     assert "> \U0001f340 **alpha** \u00b7 done \u00b7 Opus 5.5 \u00b7 \U0001f6e0 34 \u00b7 \u23f1 30m" in lines
@@ -1936,13 +1938,13 @@ def test_a_joined_card_with_done_running_and_failed_subagents():
         ac.on_child_event("subagent.start", delegation_id="a", task_index=i, task_count=3, subagent_id=f"a{i}",
                           model="claude-opus-5-5")
     ac.on_child_event("subagent.complete", delegation_id="a", task_index=0, task_count=3, subagent_id="a0",
-                      status="completed", summary="Plain summary: fine.")
+                      status="completed", outcome="done", summary="Plain summary: fine.")
     ac.on_child_event("subagent.complete", delegation_id="a", task_index=1, task_count=3, subagent_id="a1",
                       status="failed", summary="Plain summary: the server said no.")
     lines = _flat(card.render()).splitlines()
     assert lines[0] == "\U0001f500 **4 subagents** \u00b7 1 of 4 done"
     assert any(ln.startswith("> \U0001f340 **one** \u00b7 done") for ln in lines)
-    assert "> \U0001f342 **two** \u00b7 failed \u00b7 the server said no." in lines
+    assert "> \U0001f940 **two** \u00b7 failed \u00b7 the server said no." in lines
     assert any(ln.startswith("> \u25a0 **six**") for ln in lines), "the one still working is a section"
     assert "> **second job**" in lines or any(ln.startswith("> \u25a0 **second job**") for ln in lines), "job 2 follows"
     assert not any("\u25a0 **one**" in ln or "\u25a0 **two**" in ln for ln in lines)
@@ -1963,7 +1965,7 @@ def test_every_subagent_done_is_the_finished_card_again():
     card = _job_of_two()
     for i in (0, 1):
         ac.on_child_event("subagent.complete", delegation_id="dj", task_index=i, task_count=2,
-                          subagent_id=f"dj-{i}", status="completed", summary="Plain summary: ok.")
+                          subagent_id=f"dj-{i}", status="completed", outcome="done", summary="Plain summary: ok.")
     assert card.finished and card.render().splitlines()[0] == "> \U0001f340 **2 subagents** \u00b7 done"
 
 

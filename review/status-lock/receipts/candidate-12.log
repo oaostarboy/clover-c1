@@ -1,0 +1,3 @@
+...............{"readonly_child": "O_RDONLY + LOCK_EX", "elapsed": 1.007937488029711, "mode_after": "0o600", "same_inode": true, "persisted_after_release": 13}
+..
+17 passed in 2.40s

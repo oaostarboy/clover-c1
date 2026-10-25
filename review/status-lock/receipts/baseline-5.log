@@ -1,0 +1,26 @@
+....✗ The default gateway is running as a profile multiplexer and already serves profile 'coder'.
+  When gateway.multiplex_profiles is on, the default gateway is the
+  single inbound process for every profile. Starting a separate
+  gateway for this profile would double-bind its platforms (two
+  pollers on one bot token, port conflicts).
+
+  Manage the multiplexer instead (from the default profile):
+
+    clover gateway restart
+
+  Pass --force to start a separate profile gateway anyway (not
+  recommended while the multiplexer is running).
+.✗ The default gateway is running as a profile multiplexer and already serves profile 'coder'.
+  When gateway.multiplex_profiles is on, the default gateway is the
+  single inbound process for every profile. Starting a separate
+  gateway for this profile would double-bind its platforms (two
+  pollers on one bot token, port conflicts).
+
+  Manage the multiplexer instead (from the default profile):
+
+    clover gateway restart
+
+  Pass --force to start a separate profile gateway anyway (not
+  recommended while the multiplexer is running).
+....
+9 passed in 1.55s

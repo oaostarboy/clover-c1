@@ -45,6 +45,30 @@ def test_proved_timestamp_wrapper_is_not_a_second_gateway(topology):
     assert topology.guard._unsafe_gateways() == []
 
 
+def test_macos_156_script_child_has_owner_status_but_wrapper_does_not(topology, monkeypatch):
+    """Synthetic SUNI roles, not evidence of the live parent's exact argv."""
+    from pathlib import Path
+    from clover_cli import update_receipt
+
+    t = topology
+    monkeypatch.setattr("sys.platform", "darwin")
+    monkeypatch.setattr(update_receipt, "_current", None)
+    python = t.commands[t.worker][0]
+    command = [python, str(Path(t.path.parent) / "agents/clover-c1/clover_cli/main.py"),
+               "gateway", "run", "--external-supervisor"]
+    t.commands[t.worker] = command
+    t.commands[t.wrapper][6:] = command
+    t.row.pop("update_restart_capability")
+    t.row["code_version"] = "1.5.6"
+    t.row["code_sha"] = "9535350bee1d57cf7e466672e6f416403886bec1"
+    t.path.write_text(json.dumps(t.row), encoding="utf-8")
+    reasons = t.guard._unsafe_gateways()
+    assert len(reasons) == 1
+    assert reasons[0].startswith("legacy: ")
+    assert "no owner-bound gateway status" not in reasons[0]
+    assert t.guard.require_delivery_safe_update()["status"] == "legacy-proceed"
+
+
 def test_proved_historical_launchd_wrapper_matches_its_prepared_child(topology):
     topology.commands[topology.wrapper].remove('--external-supervisor')
     assert topology.guard._unsafe_gateways() == []

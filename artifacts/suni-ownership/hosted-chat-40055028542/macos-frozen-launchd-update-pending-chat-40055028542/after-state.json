@@ -1,0 +1,67 @@
+{
+  "pid": 3140,
+  "kind": "clover-gateway",
+  "argv": [
+    "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/clover_cli/main.py",
+    "gateway",
+    "run",
+    "--external-supervisor"
+  ],
+  "start_time": 179280966166,
+  "clover_home": "/Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover",
+  "gateway_state": "running",
+  "exit_reason": null,
+  "restart_requested": false,
+  "active_agents": 0,
+  "platforms": {
+    "api_server": {
+      "state": "connected",
+      "error_code": null,
+      "error_message": null,
+      "updated_at": "2026-10-24T02:41:04.351198+00:00",
+      "writer_pid": 3140,
+      "writer_start_time": 179280966166
+    },
+    "irc": {
+      "state": "connected",
+      "error_code": null,
+      "error_message": null,
+      "updated_at": "2026-10-24T02:41:04.354184+00:00",
+      "writer_pid": 3140,
+      "writer_start_time": 179280966166
+    }
+  },
+  "session_store": {
+    "status": "ok"
+  },
+  "updated_at": "2026-10-24T02:41:04.356775+00:00",
+  "code_sha": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+  "code_version": "1.5.9",
+  "update_restart_capability": "reply-carriers-through-ack-v1",
+  "native_wrapper": {
+    "pid": 3139,
+    "start_time": 179280966140,
+    "argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.stderr_timestamp",
+      "--error-log",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-native-home/.clover/logs/gateway.error.log",
+      "--",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "worker_argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ]
+  }
+}

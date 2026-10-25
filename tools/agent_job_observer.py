@@ -377,8 +377,14 @@ class AgentJobObserver:
                        exited_unverified=True)
             return
         if exit_code == 0 and not result_error:
+            from agent.task_outcome import task_outcome
+
+            # Only the parsed final result is evidence, never streamed notes,
+            # tool output, arbitrary stdout, or a successful process exit.
+            report = task_outcome({}, result_text or "")
+            evidence = {"task_outcome": report} if report["status"] != "unknown" else {}
             self._emit("subagent.complete", status="completed", duration_seconds=duration,
-                       summary=result_text or "")
+                       summary=result_text or "", **evidence)
             return
         detail = f"exited with code {exit_code}" if exit_code not in (None, 0) else "reported an error"
         if result_error and result_text:

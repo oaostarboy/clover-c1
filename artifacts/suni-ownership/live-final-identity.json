@@ -1,0 +1,6 @@
+{
+  "observed_at": "2026-10-24T01:14:55.239234+00:00",
+  "processes": "40563     1 Sat Oct 17 15:54:14 2026     06-05:20:41 S   \n40564 40563 Sat Oct 17 15:54:14 2026     06-05:20:41 S",
+  "receipt_stop_reason": "PID 40563: no owner-bound gateway status",
+  "pending_exists": true
+}

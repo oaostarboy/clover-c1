@@ -17,7 +17,7 @@ def _start(tracker, index):
 
 def _complete(tracker, index, summary="all done"):
     tracker.observe(
-        "subagent.complete", preview=summary, status="completed",
+        "subagent.complete", preview=summary, status="completed", outcome="done",
         delegation_id="batch-1", subagent_id=f"sa-{index}", task_index=index,
         task_count=2, goal=f"goal {index}", duration_seconds=4.0,
     )

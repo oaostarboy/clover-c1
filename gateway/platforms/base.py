@@ -3433,7 +3433,7 @@ class BasePlatformAdapter(ABC):
 
                     note_outbound(
                         self, chat_id, getattr(result, "message_id", None),
-                        args[1] if len(args) > 1 else kw.get("content"),
+                        args[1] if len(args) > 1 else kw.get("content"), kw.get("metadata"),
                     )
                     # The first reply of a delegation-completion turn: the
                     # finished cards go in right under it (before a new

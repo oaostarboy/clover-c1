@@ -1160,7 +1160,10 @@ json.dump(sorted(leaf_paths(DEFAULT_CONFIG)), sys.stdout, indent=2)
             # Case-insensitive: the message names the managing system as the
             # identifier it is keyed by, and the display form is not the
             # property under test here.
-            echo "$OUTPUT" | grep -qi "managed by nixos" || (echo "FAIL: $label not guarded"; echo "$OUTPUT"; exit 1)
+            # Here-string, not `echo | grep -q`: under stdenv's pipefail, grep -q
+            # exits on first match and echo can die of SIGPIPE, failing the check
+            # even though the guard message is present.
+            grep -qi "managed by nixos" <<< "$OUTPUT" || (echo "FAIL: $label not guarded"; echo "$OUTPUT"; exit 1)
             echo "PASS: $label blocked in managed mode"
           }
 

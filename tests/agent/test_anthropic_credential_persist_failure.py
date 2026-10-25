@@ -445,3 +445,82 @@ def test_retry_path_fails_closed_when_rotation_cannot_commit(
         "sk-ant-oat01-winner",
         "sk-ant-ort01-winner",
     )
+
+
+# ---------------------------------------------------------------------------
+# Windows: a transiently held credential file must not lose the rotated pair
+# ---------------------------------------------------------------------------
+
+
+def _winerror5(*_a, **_kw):
+    exc = PermissionError(13, "Access is denied")
+    exc.winerror = 5  # what CPython sets on Windows for ERROR_ACCESS_DENIED
+    return exc
+
+
+def _simulate_windows_held_target(monkeypatch, *, failures):
+    """Make ``os.replace`` onto the singleton raise WinError 5 *failures* times."""
+    import utils
+
+    real_replace = os.replace
+    calls = {"n": 0}
+
+    def _held_replace(src, dst):
+        if os.path.basename(os.fspath(dst)) in _SINGLETON_FILENAMES:
+            calls["n"] += 1
+            if calls["n"] <= failures:
+                raise _winerror5()
+        return real_replace(src, dst)
+
+    monkeypatch.setattr(utils, "_IS_WINDOWS", True)
+    monkeypatch.setattr(utils.time, "sleep", lambda _s: None)
+    monkeypatch.setattr(AA.os, "replace", _held_replace)
+    return calls
+
+
+def test_claude_code_writer_retries_when_windows_holds_the_target(
+    claude_credentials, monkeypatch
+):
+    """Another process (CLI, AV scan) briefly holding .credentials.json gives
+    WinError 5 on rename; the rotated pair must still land (Troy, #159)."""
+    calls = _simulate_windows_held_target(monkeypatch, failures=2)
+
+    AA._write_claude_code_credentials(
+        _ROTATED_ACCESS, _ROTATED_REFRESH, _EXPIRED_MS + 3_600_000
+    )
+
+    assert calls["n"] == 3, "expected two refused renames then a successful one"
+    assert _read_claude_pair(claude_credentials) == (_ROTATED_ACCESS, _ROTATED_REFRESH)
+
+
+def test_claude_code_writer_rewrites_in_place_when_target_stays_held(
+    claude_credentials, monkeypatch
+):
+    """If the rename never wins, write through the existing file rather than
+    dropping the single-use rotated token."""
+    _simulate_windows_held_target(monkeypatch, failures=10_000)
+
+    AA._write_claude_code_credentials(
+        _ROTATED_ACCESS, _ROTATED_REFRESH, _EXPIRED_MS + 3_600_000
+    )
+
+    assert _read_claude_pair(claude_credentials) == (_ROTATED_ACCESS, _ROTATED_REFRESH)
+    assert [p.name for p in claude_credentials.parent.iterdir() if ".tmp." in p.name] == []
+
+
+def test_clover_oauth_writer_retries_when_windows_holds_the_target(
+    clover_home, monkeypatch
+):
+    oauth_file = clover_home / ".anthropic_oauth.json"
+    oauth_file.write_text(
+        json.dumps({"accessToken": _STALE_ACCESS, "refreshToken": _STALE_REFRESH,
+                    "expiresAt": _EXPIRED_MS}),
+        encoding="utf-8",
+    )
+    _simulate_windows_held_target(monkeypatch, failures=2)
+
+    AA._write_clover_oauth_credentials(
+        _ROTATED_ACCESS, _ROTATED_REFRESH, _EXPIRED_MS + 3_600_000
+    )
+
+    assert json.loads(oauth_file.read_text(encoding="utf-8"))["refreshToken"] == _ROTATED_REFRESH

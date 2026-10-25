@@ -140,7 +140,8 @@ async def test_helper_events_never_post_a_roster_card_without_a_summary():
     assert adapter.status_calls == [], "no 🔀 roster card on any path"
     assert pub.tracker.group_ids() == []
     cl = ac._PARTS["deleg_aaaa0001"].checklist
-    assert cl.state == ac.DONE and cl.calls >= 1
+    # A completed worker without an authoritative task report is not verified.
+    assert cl.state == ac.UNVERIFIED and cl.calls >= 1
     await pub.aclose()
 
 

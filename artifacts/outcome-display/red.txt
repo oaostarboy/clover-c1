@@ -1,0 +1,46 @@
+.FFFFFF                                                                  [100%]
+=================================== FAILURES ===================================
+__ test_completed_task_outcome_is_not_a_failure[partial-partial-\u2618\ufe0f] __
+tests/agent/test_delegation_outcome_display.py:43: in test_completed_task_outcome_is_not_a_failure
+    assert text.startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f0c505dd230>('> ☘️ **checking work** · partial')
+E    +    where <built-in method startswith of str object at 0x7f0c505dd230> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> partial — owner: parent — next: review'.startswith
+__ test_completed_task_outcome_is_not_a_failure[blocked-blocked-\u2618\ufe0f] __
+tests/agent/test_delegation_outcome_display.py:43: in test_completed_task_outcome_is_not_a_failure
+    assert text.startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f0c505dd530>('> ☘️ **checking work** · blocked')
+E    +    where <built-in method startswith of str object at 0x7f0c505dd530> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> blocked — owner: parent — next: review'.startswith
+_ test_completed_task_outcome_is_not_a_failure[unknown-unverified-\u2618\ufe0f] _
+tests/agent/test_delegation_outcome_display.py:43: in test_completed_task_outcome_is_not_a_failure
+    assert text.startswith(f'> {mark} **checking work** · {label}')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f0c505d34b0>('> ☘️ **checking work** · unverified')
+E    +    where <built-in method startswith of str object at 0x7f0c505d34b0> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> task success not reported'.startswith
+__________ test_six_completed_workers_keep_partial_and_blocked_counts __________
+tests/agent/test_delegation_outcome_display.py:53: in test_six_completed_workers_keep_partial_and_blocked_counts
+    assert text.startswith('> ☘️ **6 subagents** · partial')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f0c50701110>('> ☘️ **6 subagents** · partial')
+E    +    where <built-in method startswith of str object at 0x7f0c50701110> = '> 🍂 **6 subagents** · failed\n> *2 of 6 done · 4 failed · ⏱ 0s*\n> partial — owner: parent — next: review'.startswith
+_________________ test_real_failure_beats_positive_task_report _________________
+tests/agent/test_delegation_outcome_display.py:61: in test_real_failure_beats_positive_task_report
+    assert card.render().startswith('> 🥀 **checking work** · failed')
+E   AssertionError: assert False
+E    +  where False = <built-in method startswith of str object at 0x7f0c50593730>('> 🥀 **checking work** · failed')
+E    +    where <built-in method startswith of str object at 0x7f0c50593730> = '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> Everything looks good.'.startswith
+E    +      where '> 🍂 **checking work** · failed\n> *⏱ 0s*\n> Everything looks good.' = render()
+E    +        where render = <agent.ack_checklist.Card object at 0x7f0c50c140e0>.render
+_____________ test_classic_tracker_counts_agree_with_unified_card ______________
+tests/agent/test_delegation_outcome_display.py:71: in test_classic_tracker_counts_agree_with_unified_card
+    assert '2 done · 3 partial · 1 blocked' in text
+E   AssertionError: assert '2 done · 3 partial · 1 blocked' in '⏳ 6 subagents · 2 done · 4 unfinished · ⏱ 0s\n> 🍀 **Untitled task**\n> *⏱ 0s*\n> ⠀\n> 🍀 **Untitled task**\n> *⏱ 0s*\n...*⏱ 0s*\n> ran out of steps before finishing\n> ⠀\n> ⏳ **Untitled task**\n> *⏱ 0s*\n> ran out of steps before finishing'
+=========================== short test summary info ============================
+FAILED tests/agent/test_delegation_outcome_display.py::test_completed_task_outcome_is_not_a_failure[partial-partial-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_completed_task_outcome_is_not_a_failure[blocked-blocked-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_completed_task_outcome_is_not_a_failure[unknown-unverified-\u2618\ufe0f]
+FAILED tests/agent/test_delegation_outcome_display.py::test_six_completed_workers_keep_partial_and_blocked_counts
+FAILED tests/agent/test_delegation_outcome_display.py::test_real_failure_beats_positive_task_report
+FAILED tests/agent/test_delegation_outcome_display.py::test_classic_tracker_counts_agree_with_unified_card
+6 failed, 1 passed in 0.87s

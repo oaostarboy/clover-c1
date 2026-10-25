@@ -35,6 +35,65 @@ def _make_run_side_effect(branch="main", verify_ok=True, commit_count="0"):
     return side_effect
 
 
+@pytest.fixture(autouse=True)
+def _isolate_update_homes(_hermetic_environment, tmp_path, monkeypatch):
+    """Update discovery is install-wide: CLOVER_HOME alone is not a sandbox.
+
+    In particular, pytest temp dirs can themselves live below ~/.clover.
+    get_default_clover_root() then intentionally finds the real default and
+    sibling profiles even with a temporary CLOVER_HOME. Keep that behavior;
+    give this module a whole disposable install instead of mocking discovery.
+    Run after the suite's environment fixture so it cannot overwrite this
+    narrower boundary. Collection-time imports still need a sandboxed runner.
+    """
+    import os
+    import sys
+    from contextvars import ContextVar
+
+    import clover_constants
+
+    home = tmp_path / "update-home"
+    clover_home = home / ".clover"
+    paths = {
+        "HOME": home,
+        "USERPROFILE": home,
+        "HOMEDRIVE": home.drive,
+        "HOMEPATH": str(home)[len(home.drive):],
+        "CLOVER_HOME": clover_home,
+        "CLOVER_TEST_ISOLATION": clover_home,
+        "APPDATA": home / "AppData" / "Roaming",
+        "LOCALAPPDATA": home / "AppData" / "Local",
+        "XDG_CONFIG_HOME": home / ".config",
+        "XDG_CONFIG_DIRS": home / ".config",
+        "XDG_DATA_HOME": home / ".local" / "share",
+        "XDG_DATA_DIRS": home / ".local" / "share",
+        "XDG_CACHE_HOME": home / ".cache",
+        "XDG_STATE_HOME": home / ".local" / "state",
+        "XDG_RUNTIME_DIR": home / ".run",
+    }
+    for name, path in paths.items():
+        monkeypatch.setenv(name, str(path))
+    for path in paths.values():
+        if not isinstance(path, str):
+            path.mkdir(parents=True, exist_ok=True)
+    os.chmod(paths["XDG_RUNTIME_DIR"], 0o700)
+    # Imported resolver functions use these module globals. An inherited
+    # ContextVar takes precedence over env; don't pin get_clover_home itself,
+    # since profile-layout tests must still be able to switch CLOVER_HOME.
+    monkeypatch.setattr(clover_constants, "_CLOVER_HOME_OVERRIDE", ContextVar(
+        "_update_test_home_override", default=clover_constants._UNSET,
+    ))
+    monkeypatch.setattr(clover_constants, "_default_clover_root_memo", None)
+    monkeypatch.setattr(clover_constants, "_profile_fallback_warned", False)
+    state = sys.modules.get("clover_state")
+    if state is not None:
+        monkeypatch.setattr(state, "DEFAULT_DB_PATH", clover_home / "state.db")
+    from clover_cli import update_cmd
+
+    monkeypatch.setattr(update_cmd, "_LAST_SIBLING_SNAPSHOTS", {})
+    return home
+
+
 @pytest.fixture
 def mock_args():
     return SimpleNamespace()
@@ -87,6 +146,104 @@ def _patch_gateway_discovery():
          patch("clover_cli.gateway.supports_systemd_services", return_value=False), \
          patch("clover_cli.gateway.find_profile_gateway_processes", return_value=[]):
         yield
+
+
+class TestCmdUpdateHomeIsolation:
+    def test_fixture_rehomes_cached_resolvers(self, tmp_path, monkeypatch):
+        """A stale task override and imported aliases must not beat the fixture."""
+        import os
+        from pathlib import Path
+
+        import clover_constants
+        from clover_cli import backup, config, main as hm, profiles, update_cmd
+
+        simulated_host = tmp_path / "simulated-host"
+        monkeypatch.setattr(clover_constants, "_default_clover_root_memo", (
+            str(clover_constants._get_platform_default_clover_home()),
+            os.environ["CLOVER_HOME"], simulated_host,
+        ))
+        # Use a separate context variable so poisoning never escapes this test.
+        from contextvars import ContextVar
+
+        monkeypatch.setattr(clover_constants, "_CLOVER_HOME_OVERRIDE", ContextVar(
+            "_poisoned_update_test_home", default=str(simulated_host),
+        ))
+        monkeypatch.setattr(update_cmd, "_LAST_SIBLING_SNAPSHOTS", {"host": "old"})
+        assert backup.get_clover_home() == simulated_host
+        assert profiles._get_default_clover_home() == simulated_host
+
+        nested = tmp_path / "next-test"
+        import inspect
+        private_home = inspect.unwrap(_isolate_update_homes)(None, nested, monkeypatch)
+        expected = private_home / ".clover"
+        assert Path.home() == private_home
+        for resolver in (clover_constants.get_clover_home, config.get_clover_home,
+                         hm.get_clover_home, update_cmd.get_clover_home, backup.get_clover_home,
+                         clover_constants.get_default_clover_root, profiles._get_default_clover_home):
+            assert resolver() == expected
+        assert profiles._get_profiles_root() == expected / "profiles"
+        assert update_cmd._LAST_SIBLING_SNAPSHOTS == {}
+        assert Path(os.environ["HOMEDRIVE"] + os.environ["HOMEPATH"]) == private_home
+        for key in ("USERPROFILE", "APPDATA", "LOCALAPPDATA",
+                    "XDG_CONFIG_HOME", "XDG_CONFIG_DIRS", "XDG_DATA_HOME", "XDG_DATA_DIRS",
+                    "XDG_CACHE_HOME", "XDG_STATE_HOME", "XDG_RUNTIME_DIR"):
+            assert Path(os.environ[key]).is_relative_to(private_home), key
+        # Dynamic resolution still follows deliberate private profile switches.
+        named = expected / "profiles" / "work"
+        monkeypatch.setenv("CLOVER_HOME", str(named))
+        assert backup.get_clover_home() == named
+        assert profiles._get_default_clover_home() == expected
+
+    @pytest.mark.parametrize("active_name", ["default", "named"])
+    def test_update_snapshots_only_disposable_profiles(self, tmp_path, monkeypatch, active_name):
+        """Run the real backup/discovery path, not an empty sibling mock.
+
+        A CLOVER_HOME below the operator's ~/.clover still resolves its
+        default root to the operator's home. The module fixture must move
+        HOME too, including when pytest's temp tree is below ~/.clover.
+        """
+        from pathlib import Path
+
+        from clover_cli import backup, main as hm
+
+        private_home = tmp_path / "update-home"
+        default = private_home / ".clover"
+        active = default if active_name == "default" else default / "profiles" / active_name
+        sibling = default / "profiles" / "disposable-sibling"
+        homes = {default, active, sibling}
+        for home in homes:
+            home.mkdir(parents=True, exist_ok=True)
+            (home / "config.yaml").write_text("updates:\n  pre_update_backup: quick\n", encoding="utf-8")
+        monkeypatch.setenv("CLOVER_HOME", str(active))
+        before = set(tmp_path.rglob("*"))
+
+        destinations = []
+        real_snapshot = backup.create_quick_snapshot
+
+        def record_snapshot(*args, **kwargs):
+            home = kwargs.get("clover_home") or backup.get_clover_home()
+            destinations.append(Path(home).resolve())
+            return real_snapshot(*args, **kwargs)
+
+        monkeypatch.setattr(backup, "create_quick_snapshot", record_snapshot)
+        monkeypatch.setattr("shutil.which", lambda _name: None)
+        monkeypatch.setattr(subprocess, "run", _make_run_side_effect(commit_count="1"))
+        # The subject is cmd_update through the real pre-update backup. Stop
+        # before runtime reload, dependency installs, or service operations.
+        with patch.object(hm, "_reload_updated_runtime_modules", side_effect=SystemExit(0)):
+            with pytest.raises(SystemExit) as stopped:
+                cmd_update(SimpleNamespace())
+        assert stopped.value.code == 0
+        assert destinations, "cmd_update must reach the real snapshot path"
+        assert all(path.is_relative_to(private_home) for path in destinations), destinations
+        assert set(destinations) == {home.resolve() for home in homes}
+        created = set(tmp_path.rglob("*")) - before
+        assert created
+        assert all(path.is_relative_to(private_home) for path in created), created
+        for home in homes:
+            snapshots = list((home / "state-snapshots").glob("*/config.yaml"))
+            assert len(snapshots) == 1
+            assert snapshots[0].read_bytes() == (home / "config.yaml").read_bytes()
 
 
 class TestCmdUpdateNpmLockfileCache:
@@ -616,17 +773,15 @@ class TestCmdUpdateProfileSkillSync:
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
     def test_active_profile_included_in_skill_sync(
-        self, mock_run, _mock_which, mock_args, capsys
+        self, mock_run, _mock_which, mock_args, capsys, _isolate_update_homes
     ):
-        from pathlib import Path
-
         mock_run.side_effect = _make_run_side_effect(
             branch="main", verify_ok=True, commit_count="1"
         )
 
-        default_p = SimpleNamespace(name="default", path=Path("/fake/.clover"))
-        active_p = SimpleNamespace(name="bit", path=Path("/fake/.clover/profiles/bit"))
-        other_p = SimpleNamespace(name="work", path=Path("/fake/.clover/profiles/work"))
+        default_p = SimpleNamespace(name="default", path=_isolate_update_homes / ".clover")
+        active_p = SimpleNamespace(name="bit", path=default_p.path / "profiles" / "bit")
+        other_p = SimpleNamespace(name="work", path=default_p.path / "profiles" / "work")
         all_profiles = [default_p, active_p, other_p]
 
         synced_paths = []
@@ -654,15 +809,13 @@ class TestCmdUpdateProfileSkillSync:
     @patch("shutil.which", return_value=None)
     @patch("subprocess.run")
     def test_single_profile_default_is_synced(
-        self, mock_run, _mock_which, mock_args, capsys
+        self, mock_run, _mock_which, mock_args, capsys, _isolate_update_homes
     ):
-        from pathlib import Path
-
         mock_run.side_effect = _make_run_side_effect(
             branch="main", verify_ok=True, commit_count="1"
         )
 
-        default_p = SimpleNamespace(name="default", path=Path("/fake/.clover"))
+        default_p = SimpleNamespace(name="default", path=_isolate_update_homes / ".clover")
         synced_paths = []
 
         def fake_seed(path, quiet=False):

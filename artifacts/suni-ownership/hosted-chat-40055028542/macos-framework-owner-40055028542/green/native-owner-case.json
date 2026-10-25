@@ -1,0 +1,57 @@
+{
+  "scope": "native-macos-launchd-process-seam",
+  "source_ref": "5bfc4013ae48f6247194d46beec9071bf44f4f6f",
+  "python": "/Users/runner/work/clover-c1/clover-c1/.macos-proof-venv/bin/python",
+  "native_update_acceptance": "NOT EXERCISED",
+  "source_tree": "22623c567b679fa8ce052dce0caaf982e1bfd9a6",
+  "observed": {
+    "worker_pid": 2023,
+    "wrapper_pid": 2022,
+    "worker_ppid": 2022,
+    "worker_argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "wrapper_argv": [
+      "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+      "-m",
+      "clover_cli.stderr_timestamp",
+      "--error-log",
+      "/Users/runner/work/clover-c1/clover-c1/artifacts/suni-ownership/hosted/green/private-fixture-6qlbj3ow/home/logs/gateway.error.log",
+      "--",
+      "/Users/runner/work/clover-c1/clover-c1/.macos-proof-venv/bin/python",
+      "-m",
+      "clover_cli.main",
+      "gateway",
+      "run",
+      "--external-supervisor"
+    ],
+    "worker_exe": "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+    "wrapper_exe": "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+    "venv_python": "/Users/runner/work/clover-c1/clover-c1/.macos-proof-venv/bin/python",
+    "venv_python_resolved": "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/bin/python3.12",
+    "port": 49175,
+    "launchd_label": "ai.clover.acceptance.suni.4448a18b05fc4199b253c66864a677b5"
+  },
+  "launchd_selected": [
+    "state = running",
+    "program = /Users/runner/work/clover-c1/clover-c1/.macos-proof-venv/bin/python",
+    "pid = 2022"
+  ],
+  "guard_sha256": "f16befb42735a4336a3ee4e13440d56f8574be24d9787fce5726846050baacd0",
+  "false_return_lines": [],
+  "worker_start": 179280955081,
+  "wrapper_start": 179280955067,
+  "owner_admission": true,
+  "stale_worker_rejected": true,
+  "wrong_home_rejected": true,
+  "unadmitted_rejected": true,
+  "identity_stable": true,
+  "framework_alias_exercised": true,
+  "passed": true,
+  "fixture_label_absent_after_cleanup": true
+}

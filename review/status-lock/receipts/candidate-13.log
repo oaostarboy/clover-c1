@@ -1,0 +1,14 @@
+..F..
+=================================== FAILURES ===================================
+_______________ test_read_only_lock_holder_cannot_disable_status _______________
+review/status-lock/original_test_status_security_concurrency.py:118: in test_read_only_lock_holder_cannot_disable_status
+    assert stat.S_IMODE(lock.stat().st_mode) == 0o644
+E   AssertionError: assert 384 == 420
+E    +  where 384 = <built-in function S_IMODE>(33152)
+E    +    where <built-in function S_IMODE> = stat.S_IMODE
+E    +    and   33152 = os.stat_result(st_mode=33152, st_ino=59274463, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1792805327, st_mtime=1792805327, st_ctime=1792805327).st_mode
+E    +      where os.stat_result(st_mode=33152, st_ino=59274463, st_dev=35, st_nlink=1, st_uid=1000, st_gid=1000, st_size=0, st_atime=1792805327, st_mtime=1792805327, st_ctime=1792805327) = stat()
+E    +        where stat = PosixPath('/home/starboy/.clover/workspace/artifacts/reliability-only/activation-158/runtime-158/src/.worktrees/subagent-sa-0-f6608989/.test-sandbox/status-lock/candidate-13/pytest/test_read_only_lock_holder_can0/owner/gateway_state.lock').stat
+=========================== short test summary info ============================
+FAILED review/status-lock/original_test_status_security_concurrency.py::test_read_only_lock_holder_cannot_disable_status
+1 failed, 4 passed in 0.64s

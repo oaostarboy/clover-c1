@@ -1,0 +1,11 @@
+{
+  "pid": 3186,
+  "create_time": 1792808847.904735,
+  "argv": [
+    "/opt/homebrew/Cellar/python@3.12/3.12.14/Frameworks/Python.framework/Versions/3.12/Resources/Python.app/Contents/MacOS/Python",
+    "/Users/runner/work/clover-c1/clover-c1/.macos-native-install/venv/bin/clover",
+    "update",
+    "--gateway"
+  ],
+  "repo": "/Users/runner/work/clover-c1/clover-c1/.macos-native-install"
+}
