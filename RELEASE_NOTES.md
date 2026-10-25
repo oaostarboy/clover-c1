@@ -15,6 +15,13 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 1.5.9.1 | Clover C1.5.9.1 | 2026-10-25
+- Long handoff replies and drafts stay complete, including spacing between message chunks.
+- Concurrent requests cannot launch the same helper twice.
+- Helpers stop safely before starting work if required history storage cannot open.
+- Valid structured helper results no longer trigger a retry that loses their completion status.
+- Database saves wait within their existing budget when short reads temporarily block a commit.
+
 ## 1.5.9 | Clover C1.5.9 | 2026-10-23
 - Helpers now start when your chat is not inside a code project, instead of being refused after a restart.
 - Helpers working in a real code project still get their own safe copy, and still stop if that copy cannot be made.
