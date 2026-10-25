@@ -94,7 +94,14 @@ def test_long_bullets_are_capped():
 
 @pytest.mark.parametrize(
     "a,b,expected",
-    [("1.1.1", "1.1.0", 1), ("1.1", "1.1.0", 0), ("v1.10.0", "1.9.9", 1), ("1.0", "1.0.1", -1)],
+    [
+        ("1.1.1", "1.1.0", 1),
+        ("1.1", "1.1.0", 0),
+        ("v1.10.0", "1.9.9", 1),
+        ("1.0", "1.0.1", -1),
+        ("1.5.9.1", "1.5.9", 1),
+        ("1.5.10", "1.5.9.1", 1),
+    ],
 )
 def test_version_ordering_is_numeric_not_lexical(a, b, expected):
     pa, pb = rn.parse_version(a), rn.parse_version(b)

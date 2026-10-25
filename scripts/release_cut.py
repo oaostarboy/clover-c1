@@ -60,7 +60,7 @@ MAX_BULLET_CHARS = 110  # clover_cli.release_notes.MAX_BULLET_CHARS
 EXIT_REFUSED = 2
 EXIT_TEST_FAILED = 3
 
-_STRICT_VERSION = re.compile(r"^\d+\.\d+\.\d+$")
+_STRICT_VERSION = re.compile(r"^\d+\.\d+\.\d+(?:\.\d+)?$")
 _TAG_VERSION = re.compile(r"^v?(\d+(?:\.\d+)*)$")
 _HEADER = re.compile(r"^##\s+(?P<version>[^|\s]+)\s*\|\s*(?P<name>[^|]*?)\s*\|\s*(?P<date>.*?)\s*$")
 _DRAFT = re.compile(r"^\s*<!--\s*draft\s*-->\s*$", re.IGNORECASE)
@@ -86,12 +86,11 @@ class TestFailure(Exception):
 # --------------------------------------------------------------------------
 
 
-def parse_strict(version: str) -> tuple[int, int, int]:
+def parse_strict(version: str) -> tuple[int, ...]:
     value = version.strip().lstrip("vV")
     if not _STRICT_VERSION.match(value):
-        raise Refusal(f"version {version!r} must look like X.Y.Z (digits only, three parts)")
-    major, minor, patch = (int(p) for p in value.split("."))
-    return major, minor, patch
+        raise Refusal(f"version {version!r} must look like X.Y.Z or X.Y.Z.N (digits only)")
+    return tuple(int(p) for p in value.split("."))
 
 
 def _norm(parts: tuple[int, ...]) -> tuple[int, ...]:
@@ -108,14 +107,17 @@ def _loose(version: str) -> Optional[tuple[int, ...]]:
     return _norm(tuple(int(p) for p in m.group(1).split(".")))
 
 
-def fmt(version: tuple[int, int, int]) -> str:
+def fmt(version: tuple[int, ...]) -> str:
     return ".".join(str(p) for p in version)
 
 
 def bump(current: str, kind: str) -> str:
-    major, minor, patch = parse_strict(current)
+    parts = parse_strict(current)
+    major, minor = parts[:2]
     if kind == "patch":
-        return fmt((major, minor, patch + 1))
+        # A fourth release component is the maintenance counter. Keep patch
+        # bumps within that series instead of collapsing 1.5.9.1 to 1.5.10.
+        return fmt((*parts[:-1], parts[-1] + 1))
     if kind == "minor":
         return fmt((major, minor + 1, 0))
     raise Refusal(f"--bump must be 'patch' or 'minor', got {kind!r} (pass an explicit X.Y.Z for a major)")

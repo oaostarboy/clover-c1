@@ -160,9 +160,27 @@ def test_bump_helpers():
     assert rc.bump("1.1.3", "patch") == "1.1.4"
     assert rc.bump("1.1.3", "minor") == "1.2.0"
     assert rc.bump("1.9.9", "patch") == "1.9.10"
+    assert rc.bump("1.5.9.1", "patch") == "1.5.9.2"
+    assert rc.bump("1.5.9.1", "minor") == "1.6.0"
     assert rc.release_date_string(__import__("datetime").date(2026, 10, 8)) == "2026.10.8"
     with pytest.raises(rc.Refusal):
         rc.bump("1.1.3", "major")
+
+
+def test_four_part_maintenance_release_sorts_between_patch_and_next_patch(repo):
+    """The exact maintenance identifier is accepted without changing normal 3-part ordering."""
+    target = "1.5.9.1"
+    assert rc.parse_strict("1.5.9") < rc.parse_strict(target) < rc.parse_strict("1.5.10")
+    _write_entry(repo, target)
+    assert _run(repo, target) == 0
+    assert rc.read_versions(repo) == {"init": target, "pyproject": target, "lock": target}
+
+
+@pytest.mark.parametrize("bad", ["1.5.9.1.1", "1.5.9.x", "1.5.9-rc1", "1..9.1", "1.5.9."])
+def test_maintenance_version_rejects_malformed_four_part_tokens(repo, bad):
+    with pytest.raises(rc.Refusal):
+        rc.parse_strict(bad)
+    assert _run(repo, bad) == rc.EXIT_REFUSED
 
 
 # ---------------------------------------------------------------------------
@@ -314,7 +332,7 @@ def test_version_below_the_newest_tag_is_refused(repo, capsys):
     assert "not greater than the newest existing tag" in capsys.readouterr().err
 
 
-@pytest.mark.parametrize("bad", ["1.1", "1.1.x", "v", "1.1.4-rc1", "banana"])
+@pytest.mark.parametrize("bad", ["1.1", "1.1.x", "v", "1.1.4-rc1", "1.5.9.1.1", "banana"])
 def test_malformed_versions_are_refused(repo, bad):
     assert _run(repo, bad) == rc.EXIT_REFUSED
 
