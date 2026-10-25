@@ -22,26 +22,44 @@ def _delete_db(tmp_path):
 @pytest.mark.parametrize("release", [False, True])
 def test_real_contention_phase_and_transaction_lifetime(tmp_path, monkeypatch, phase, release):
     db = _delete_db(tmp_path)
-    blocker = sqlite3.connect(db.db_path, isolation_level=None)
+    blocker = sqlite3.connect(
+        db.db_path, isolation_level=None, check_same_thread=False
+    )
     trace = []
     retries = []
+    commit_started = threading.Event()
+    release_thread = None
     try:
         if phase == "begin":
             blocker.execute("BEGIN IMMEDIATE")
         else:
             blocker.execute("BEGIN")
             blocker.execute("SELECT * FROM messages").fetchall()
-        db._conn.set_trace_callback(trace.append)
+
+        def record(sql):
+            trace.append(sql)
+            if sql == "COMMIT":
+                commit_started.set()
+
+        db._conn.set_trace_callback(record)
         real_retry = db._sleep_before_write_retry
 
         def observe_retry(deadline, patience):
             retries.append(db._conn.in_transaction)
-            if release:
+            if release and phase == "begin":
                 blocker.rollback()
             return real_retry(deadline, patience)
 
         monkeypatch.setattr(db, "_sleep_before_write_retry", observe_retry)
         write = lambda conn: conn.execute("UPDATE sessions SET title='durable progress' WHERE id='worker'")
+        if release and phase == "commit":
+            def release_reader_after_commit_starts():
+                assert commit_started.wait(2), "write did not reach the contended COMMIT"
+                blocker.rollback()
+
+            release_thread = threading.Thread(target=release_reader_after_commit_starts)
+            release_thread.start()
+
         if release:
             db._execute_write(write, patience_s=.2)
             assert db.get_session("worker")["title"] == "durable progress"
@@ -49,14 +67,21 @@ def test_real_contention_phase_and_transaction_lifetime(tmp_path, monkeypatch, p
             with pytest.raises(sqlite3.OperationalError, match="phase=" + phase):
                 db._execute_write(write, patience_s=.01)
             assert blocker.in_transaction
-        assert retries and not any(retries), "retry sleep must not hold a write transaction"
+        if phase == "commit" and release:
+            # The temporary COMMIT busy handler waits for the reader directly;
+            # the release must not depend on retry-sleep being called.
+            assert not retries
+        else:
+            assert retries and not any(retries), "retry sleep must not hold a write transaction"
         assert not db._conn.in_transaction
         assert any(sql == "BEGIN IMMEDIATE" for sql in trace)
         assert any(sql.startswith("UPDATE sessions SET title") for sql in trace) is (phase == "commit" or release)
         assert any(sql == "COMMIT" for sql in trace) is (phase == "commit" or release)
         if phase == "commit":
-            assert "ROLLBACK" in trace
+            assert ("ROLLBACK" in trace) is (not release)
     finally:
+        if release_thread is not None:
+            release_thread.join(2)
         db._conn.set_trace_callback(None)
         blocker.close()
         db.close()
