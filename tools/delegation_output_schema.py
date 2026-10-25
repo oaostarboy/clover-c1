@@ -78,6 +78,49 @@ def append_output_contract(context: Optional[str], schema: Dict[str, Any]) -> st
     return f"{base}\n\n{block}" if base else block
 
 
+def _has_unclosed_payload_fence(text: str) -> bool:
+    """Return True when a trailing Markdown fence can contain JSON payload.
+
+    Only the unmatched-fence edge is needed here; closed-fence extraction
+    remains in ``extract_json_candidate``. Non-payload code fences are ignored.
+    """
+    lines = text.splitlines()
+    opener_re = re.compile(r"^ {0,3}(`{3,}|~{3,})([^`~]*)$")
+    close_re_cache: Dict[Tuple[str, int], re.Pattern[str]] = {}
+    index = 0
+    while index < len(lines):
+        match = opener_re.match(lines[index])
+        if not match:
+            index += 1
+            continue
+        fence, info = match.groups()
+        marker = fence[0]
+        close_re = close_re_cache.setdefault(
+            (marker, len(fence)),
+            re.compile(
+                "^ {0,3}"
+                + re.escape(marker)
+                + "{" + str(len(fence)) + ",}"
+                + r"[ \t]*$"
+            ),
+        )
+        close_index = next(
+            (i for i in range(index + 1, len(lines)) if close_re.match(lines[i])),
+            None,
+        )
+        if close_index is not None:
+            index = close_index + 1
+            continue
+        label = (info or "").strip().lower().split(maxsplit=1)[0:1]
+        body = "\n".join(lines[index + 1 :]).lstrip()
+        if label == ["json"] or body.startswith(("{", "[")):
+            return True
+        # An unmatched non-payload fence owns the rest of the response as
+        # code; do not reinterpret fence-looking lines inside its body.
+        return False
+    return False
+
+
 def extract_json_candidate(text: str) -> str:
     """Extract one unambiguous JSON payload, preferring a caller fence.
 
@@ -89,6 +132,8 @@ def extract_json_candidate(text: str) -> str:
     fence, retain the legacy plain-JSON-in-prose fallback.
     """
     raw = (text or "").strip()
+    if _has_unclosed_payload_fence(raw):
+        return raw
     fences = list(re.finditer(r"```([^\n`]*)\n?(.*?)```", raw, re.DOTALL))
     payloads: List[str] = []
     for match in fences:
