@@ -108,6 +108,11 @@ def test_version_ordering_is_numeric_not_lexical(a, b, expected):
     assert (pa > pb) - (pa < pb) == expected
 
 
+@pytest.mark.parametrize("malformed", ["1.5.9.1+1", "1.5.9.1-rc1", "1.5.9.1junk"])
+def test_parse_version_rejects_suffixes_instead_of_truncating(malformed):
+    assert rn.parse_version(malformed) is None
+
+
 def test_load_missing_or_unreadable_file_is_empty(tmp_path):
     assert rn.load_release_notes(tmp_path / "nope.md") == []
     assert rn.load_release_notes(tmp_path) == []  # a directory
