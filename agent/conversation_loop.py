@@ -7666,7 +7666,16 @@ def run_conversation(
                     # called: the detached job owns the rest, and finalize_turn
                     # still persists and learns as usual.
                     _turn_exit_reason = _directive.reason
-                    final_response = _directive.text
+                    # A deterministic checkpoint acknowledgment must not erase
+                    # direct, user-facing text already produced in this turn.
+                    # Reuse router ownership/dedup rules; do not reconstruct or
+                    # replay content from prior turns or already streamed text.
+                    from agent.router_backstop import _pending_handoff_text
+                    _pending = _pending_handoff_text(agent, messages, _directive.text)
+                    final_response = (
+                        f"{_pending}\n\n{_directive.text}"
+                        if _pending else _directive.text
+                    )
                     append_message(messages, {"role": "assistant", "content": final_response})
                     agent._safe_print(f"\n{final_response}\n")
                     if agent.stream_delta_callback:

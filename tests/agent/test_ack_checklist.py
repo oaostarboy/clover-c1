@@ -41,12 +41,12 @@ def test_steps_are_validated_trimmed_and_capped():
     assert ac.clean_steps("not a list") == () and ac.clean_steps(None) == ()
 
 
-def test_say_is_cut_and_blank_is_dropped():
-    assert ac.clean_say("  on it,   one sec. ") == "on it, one sec."
+def test_say_is_preserved_and_blank_is_dropped():
+    assert ac.clean_say("  on it,   one sec. ") == "on it,   one sec."
     assert ac.clean_say("   ") == "" and ac.clean_say(None) == ""
     long = ("word " * 80).strip()
     out = ac.clean_say(long)
-    assert len(out) <= ac.MAX_SAY_CHARS and out.endswith("\u2026")
+    assert out == long
 
 
 # ── rendering ──────────────────────────────────────────────────────────────
