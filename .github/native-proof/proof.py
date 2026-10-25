@@ -29,7 +29,7 @@ def full_sha(value):
 def plan(repo, old_ref, target_ref, target_tree, next_ref):
     full_sha(target_ref)
     full_sha(target_tree)
-    if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+', old_ref):
+    if not re.fullmatch(r'v[0-9]+\.[0-9]+\.[0-9]+(?:\.[0-9]+)?', old_ref):
         raise ValueError('old_ref must be an explicit release tag')
     if not next_ref.startswith('ci/native-next/'):
         raise ValueError('next_ref must be a unique ci/native-next/<run-name> branch')
