@@ -6,6 +6,7 @@ import {
   getRecommendedDefaultModel,
   listOAuthProviders,
   pollOAuthSession,
+  saveCloverConfig,
   setEnvVar,
   startOAuthLogin,
   submitOAuthCode,
@@ -971,12 +972,19 @@ export async function setOnboardingModel(model: string) {
 // — the model was already persisted by completeWithModelConfirm (or by
 // setOnboardingModel if they changed it), so all that's left is to mark
 // onboarding done and unblock the rest of the app.
-export function confirmOnboardingModel(ctx: OnboardingContext) {
+export function confirmOnboardingModel(ctx: OnboardingContext, agentName?: string) {
   const { flow } = $desktopOnboarding.get()
 
   if (flow.status !== 'confirming_model') {
     return
   }
+
+  const name = agentName?.trim() || 'Clover'
+  void ctx.requestGateway('config.set', { key: 'agent_name', value: name }).catch(() => {})
+  void saveCloverConfig(
+    { branding: { agent_name: name }, agent: { name } },
+    ctx.profile
+  ).catch(() => {})
 
   // No success toast here: the confirm-model screen already showed "<provider>
   // connected." notifyReady is reserved for completion paths that SKIP this

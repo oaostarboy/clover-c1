@@ -8617,6 +8617,22 @@ def test_setup_status_reports_provider_config(monkeypatch):
     resp = server.handle_request({"id": "1", "method": "setup.status", "params": {}})
 
     assert resp["result"]["provider_configured"] is False
+    assert "config_exists" in resp["result"]
+
+
+def test_config_set_and_get_agent_name(tmp_path, monkeypatch):
+    monkeypatch.setattr("clover_cli.config.get_clover_home", lambda: tmp_path)
+    monkeypatch.setattr("tui_gateway.server._clover_home", tmp_path)
+
+    set_resp = server.handle_request(
+        {"id": "1", "method": "config.set", "params": {"key": "agent_name", "value": "Jarvis"}}
+    )
+    assert set_resp["result"]["value"] == "Jarvis"
+
+    get_resp = server.handle_request(
+        {"id": "2", "method": "config.get", "params": {"key": "agent_name"}}
+    )
+    assert get_resp["result"]["name"] == "Jarvis"
 
 
 def test_probe_credentials_emits_exact_empty_key_warning():

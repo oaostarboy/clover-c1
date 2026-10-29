@@ -55,6 +55,22 @@ describe('interpretRuntimeReadiness', () => {
     })
   })
 
+  it('routes to onboarding when config does not exist on disk', () => {
+    const result = interpretRuntimeReadiness({
+      setup: { config_exists: false, provider_configured: false },
+      setupError: null,
+      runtime: { ok: true },
+      runtimeError: null
+    })
+
+    expect(result).toEqual({
+      checksDisagree: false,
+      ready: false,
+      reason: 'Add a provider credential before sending your first message.',
+      source: 'setup_status'
+    })
+  })
+
   it('uses explicit fallback when both checks are missing', () => {
     const result = interpretRuntimeReadiness({
       setup: null,

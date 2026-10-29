@@ -13948,6 +13948,12 @@ def _(rid, params: dict) -> dict:
                 agent.verbose_logging = nv == "verbose"
         return _ok(rid, {"key": key, "value": nv})
 
+    if key in {"agent_name", "agent.name", "branding.agent_name"}:
+        name = str(value or "").strip() or "Clover"
+        _write_config_key("branding.agent_name", name)
+        _write_config_key("agent.name", name)
+        return _ok(rid, {"key": key, "value": name})
+
     if key == "focus":
         # Focus view — display-only reduced-output mode (/focus). Composes with
         # the tool_progress machinery rather than duplicating it: enabling it

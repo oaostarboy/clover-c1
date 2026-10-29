@@ -2179,6 +2179,8 @@ export const ar = defineLocale({
     free: 'مجاني',
     price: (input, output) => `${input} إدخال / ${output} إخراج لكل مليون رمز`,
     change: 'تغيير',
+    agentNameLabel: 'سمّ وكيل Clover الخاص بك',
+    agentNamePlaceholder: 'Clover',
     startChatting: 'ابدأ',
     docs: provider => `وثائق ${provider}`
   },

@@ -2917,6 +2917,8 @@ export const zh: Translations = {
     free: '免费',
     price: (input, output) => `${input} 输入 / ${output} 输出每 Mtok`,
     change: '更改',
+    agentNameLabel: '为你的 Clover 智能体命名',
+    agentNamePlaceholder: 'Clover',
     startChatting: '开始',
     docs: provider => `${provider} 文档`
   },

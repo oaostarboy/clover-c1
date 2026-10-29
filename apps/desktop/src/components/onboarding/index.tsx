@@ -205,7 +205,7 @@ export function DesktopOnboardingOverlay({
   // connecting overlay's exit choreography instead of cutting instantly.
   const [leaving, setLeaving] = useState(false)
 
-  const finalizeOnboarding = () => {
+  const finalizeOnboarding = (agentName?: string) => {
     if (leaving) {
       return
     }
@@ -213,13 +213,13 @@ export function DesktopOnboardingOverlay({
     const reduce = typeof window !== 'undefined' && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches
 
     if (reduce) {
-      confirmOnboardingModel(ctx)
+      confirmOnboardingModel(ctx, agentName)
 
       return
     }
 
     setLeaving(true)
-    window.setTimeout(() => confirmOnboardingModel(ctx), ONBOARDING_EXIT_MS)
+    window.setTimeout(() => confirmOnboardingModel(ctx, agentName), ONBOARDING_EXIT_MS)
   }
 
   useEffect(() => {

@@ -3266,8 +3266,40 @@ def cmd_chat(args):
     except Exception:
         pass
 
-    # First-run guard: check if any provider is configured before launching
-    if not _has_any_provider_configured():
+    # First-run guard: check if config exists and if any provider is configured before launching
+    from clover_cli.config import get_config_path
+    config_path = get_config_path()
+    config_exists = config_path.exists()
+    has_providers = _has_any_provider_configured()
+
+    if not config_exists or not has_providers:
+        from clover_cli.setup import (
+            is_interactive_stdin,
+            print_noninteractive_setup_guidance,
+        )
+
+        if not is_interactive_stdin():
+            print()
+            if not config_exists:
+                print("No Clover configuration exists yet.")
+            else:
+                print("It looks like Clover isn't configured yet -- no API keys or providers found.")
+            print()
+            print("  Run:  clover setup")
+            print()
+            print_noninteractive_setup_guidance(
+                "No interactive TTY detected for the first-run setup prompt."
+            )
+            sys.exit(1)
+
+        # If no config exists, bring them to onboarding right away!
+        if not config_exists:
+            print()
+            print("No Clover configuration found — launching onboarding setup...")
+            print()
+            cmd_setup(args)
+            return
+
         print()
         print(
             "It looks like Clover isn't configured yet -- no API keys or providers found."
@@ -3275,17 +3307,6 @@ def cmd_chat(args):
         print()
         print("  Run:  clover setup")
         print()
-
-        from clover_cli.setup import (
-            is_interactive_stdin,
-            print_noninteractive_setup_guidance,
-        )
-
-        if not is_interactive_stdin():
-            print_noninteractive_setup_guidance(
-                "No interactive TTY detected for the first-run setup prompt."
-            )
-            sys.exit(1)
 
         try:
             reply = input("Run setup now? [Y/n] ").strip().lower()

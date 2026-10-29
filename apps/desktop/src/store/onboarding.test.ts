@@ -676,4 +676,41 @@ describe('saveOnboardingLocalEndpoint', () => {
     completeDesktopOnboarding()
     expect($desktopOnboarding.get().desktopTourCompleted).toBe(false)
   })
+
+  it('confirmOnboardingModel saves custom agent name via gateway', async () => {
+    const { confirmOnboardingModel } = await import('./onboarding')
+    const rpcCalls: Array<{ method: string; params?: Record<string, unknown> }> = []
+
+    $desktopOnboarding.set({
+      configured: false,
+      flow: {
+        status: 'confirming_model',
+        currentModel: 'gpt-4o',
+        providerSlug: 'openai',
+        label: 'OpenAI',
+        saving: false
+      },
+      mode: 'oauth',
+      providers: null,
+      reason: null,
+      requested: false,
+      firstRunSkipped: false,
+      manual: false,
+      localEndpoint: false
+    })
+
+    const testCtx: OnboardingContext = {
+      requestGateway: async (method, params) => {
+        rpcCalls.push({ method, params })
+        return undefined as never
+      }
+    }
+
+    confirmOnboardingModel(testCtx, 'Alfred')
+    expect($desktopOnboarding.get().configured).toBe(true)
+    expect(rpcCalls).toContainEqual({
+      method: 'config.set',
+      params: { key: 'agent_name', value: 'Alfred' }
+    })
+  })
 })

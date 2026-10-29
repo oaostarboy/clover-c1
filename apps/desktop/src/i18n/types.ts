@@ -2325,6 +2325,8 @@ export interface Translations {
     free: string
     price: (input: string, output: string) => string
     change: string
+    agentNameLabel: string
+    agentNamePlaceholder: string
     startChatting: string
     docs: (provider: string) => string
   }

@@ -1,4 +1,5 @@
 export interface SetupStatusSnapshot {
+  config_exists?: boolean
   provider_configured?: boolean
 }
 
@@ -93,12 +94,24 @@ export function interpretRuntimeReadiness(
   const defaultReason = options.defaultReason ?? DEFAULT_NOT_READY_REASON
   const unknownReady = options.unknownReady ?? false
 
+  const configExists =
+    typeof signals.setup?.config_exists === 'boolean' ? Boolean(signals.setup.config_exists) : undefined
+
   const setupConfigured =
     typeof signals.setup?.provider_configured === 'boolean' ? Boolean(signals.setup.provider_configured) : undefined
 
   const runtimeOk = typeof signals.runtime?.ok === 'boolean' ? Boolean(signals.runtime.ok) : undefined
   const runtimeFailure = normalizeMessage(signals.runtime?.error) ?? normalizeMessage(signals.runtimeError)
   const setupFailure = normalizeMessage(signals.setupError)
+
+  if (configExists === false) {
+    return {
+      checksDisagree: false,
+      ready: false,
+      reason: runtimeFailure ?? setupFailure ?? defaultReason,
+      source: 'setup_status'
+    }
+  }
 
   const checksDisagree =
     typeof setupConfigured === 'boolean' && typeof runtimeOk === 'boolean' && setupConfigured !== runtimeOk

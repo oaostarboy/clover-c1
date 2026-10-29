@@ -1731,6 +1731,30 @@ def _apply_default_agent_settings(config: dict):
     print_info("  Run `clover setup agent` later to customize.")
 
 
+def setup_agent_name(config: dict) -> None:
+    """Configure the agent's name across branding and agent config."""
+    print_header("Name your Clover agent")
+    print_info("Give your AI companion a personalized name (or press Enter to keep default).")
+    print()
+
+    branding_cfg = config.get("branding")
+    branding = branding_cfg if isinstance(branding_cfg, dict) else {}
+    agent_cfg = config.get("agent")
+    agent = agent_cfg if isinstance(agent_cfg, dict) else {}
+
+    current_name = str(branding.get("agent_name") or agent.get("name") or "Clover").strip()
+    try:
+        name_input = prompt("Agent name", current_name)
+    except Exception:
+        name_input = None
+    name = (name_input.strip() if name_input else "") or current_name or "Clover"
+
+    config.setdefault("branding", {})["agent_name"] = name
+    config.setdefault("agent", {})["name"] = name
+    save_config(config)
+    print_success(f"Agent named: {name}")
+
+
 def setup_agent_settings(config: dict):
     """Configure agent behavior: iterations, progress display, compression, session reset."""
 
@@ -2720,6 +2744,7 @@ def _offer_openclaw_migration(clover_home: Path) -> bool:
 # =============================================================================
 
 SETUP_SECTIONS = [
+    ("name", "Agent Name", setup_agent_name),
     ("model", "Model & Provider", setup_model_provider),
     ("tts", "Text-to-Speech", setup_tts),
     ("terminal", "Terminal Backend", setup_terminal_backend),
@@ -2951,7 +2976,8 @@ def _run_setup_wizard_impl(args):
 
     active_provider = get_active_provider()
     is_existing = (
-        bool(get_env_value("OPENROUTER_API_KEY"))
+        config_path.exists()
+        or bool(get_env_value("OPENROUTER_API_KEY"))
         or bool(get_env_value("OPENAI_BASE_URL"))
         or active_provider is not None
     )
@@ -3074,6 +3100,7 @@ def _run_setup_wizard_impl(args):
     # Tune later with `clover setup agent`.
     if not is_existing:
         _apply_default_agent_settings(config)
+        setup_agent_name(config)
 
     def _model_step() -> None:
         if not (

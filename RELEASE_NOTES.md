@@ -15,6 +15,11 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 2.0.2 | Clover C2.0.2 | 2026-10-29
+- Automatically detects if a configuration already exists on startup, bringing new users straight to onboarding.
+- Personalize your Clover agent during first-run onboarding by naming your AI companion directly.
+- Setup wizard and desktop onboarding seamlessly persist custom agent branding across all chat surfaces.
+
 ## 2.0.1 | Clover C2.0.1 | 2026-10-29
 - Automatically builds the desktop app during update on macOS, Windows, and Linux desktops.
 - Automatically installs Clover to the macOS Applications folder and Windows Start Menu / Desktop.

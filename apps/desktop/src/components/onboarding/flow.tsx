@@ -34,7 +34,7 @@ export function FlowPanel({
   ctx: OnboardingContext
   flow: OnboardingFlow
   leaving: boolean
-  onBegin: () => void
+  onBegin: (agentName?: string) => void
 }) {
   const { t } = useI18n()
   const title = 'provider' in flow && flow.provider ? providerTitle(flow.provider) : ''
@@ -222,12 +222,13 @@ function ConfirmingModelPanel({
 }: {
   flow: Extract<OnboardingFlow, { status: 'confirming_model' }>
   leaving: boolean
-  onBegin: () => void
+  onBegin: (agentName?: string) => void
   profile?: string
 }) {
   const { t } = useI18n()
   const scrambledModel = useScramble(flow.currentModel, leaving)
   const scrambledBegin = useScramble(t.onboarding.startChatting, leaving)
+  const [agentName, setAgentName] = useState('Clover')
   // Local state controls whether the model picker dialog is open.
   // We reuse the existing ModelPickerDialog component (the same picker
   // available from the chat shell) rather than building an inline
@@ -250,7 +251,7 @@ function ConfirmingModelPanel({
   const freeTier = providerRow?.free_tier
 
   return (
-    <div className="grid place-items-center gap-7 py-6 text-center">
+    <div className="grid place-items-center gap-6 py-6 text-center">
       <DecodedLabel leaving={leaving} text={t.onboarding.connectedProvider(flow.label)} />
 
       <div
@@ -295,6 +296,24 @@ function ConfirmingModelPanel({
 
       <div
         className={cn(
+          'grid justify-items-center gap-1.5 transition duration-[360ms] ease-out w-full max-w-xs',
+          leaving ? 'opacity-0 saturate-0' : 'opacity-100 saturate-100'
+        )}
+      >
+        <span className="font-mono text-[0.625rem] uppercase tracking-[0.2em] text-muted-foreground">
+          {t.onboarding.agentNameLabel}
+        </span>
+        <Input
+          className="text-center font-medium h-9"
+          disabled={flow.saving}
+          onChange={e => setAgentName(e.target.value)}
+          placeholder={t.onboarding.agentNamePlaceholder}
+          value={agentName}
+        />
+      </div>
+
+      <div
+        className={cn(
           'transition duration-[360ms] ease-out',
           leaving ? 'opacity-0 saturate-0' : 'opacity-100 saturate-100'
         )}
@@ -303,7 +322,7 @@ function ConfirmingModelPanel({
           disabled={flow.saving}
           label={<GlyphText text={scrambledBegin} />}
           loading={flow.saving}
-          onClick={onBegin}
+          onClick={() => onBegin(agentName.trim() || 'Clover')}
         />
       </div>
 

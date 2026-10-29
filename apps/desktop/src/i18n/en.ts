@@ -2752,6 +2752,8 @@ export const en: Translations = {
     free: 'Free',
     price: (input, output) => `${input} in / ${output} out per Mtok`,
     change: 'Change',
+    agentNameLabel: 'Name your Clover agent',
+    agentNamePlaceholder: 'Clover',
     startChatting: 'Begin',
     docs: provider => `${provider} docs`
   },

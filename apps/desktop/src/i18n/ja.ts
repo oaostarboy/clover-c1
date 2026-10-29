@@ -2428,6 +2428,8 @@ export const ja = defineLocale({
     free: '無料',
     price: (input, output) => `${input} 入力 / ${output} 出力 per Mtok`,
     change: '変更',
+    agentNameLabel: 'Clover エージェントに名前を付ける',
+    agentNamePlaceholder: 'Clover',
     startChatting: '始める',
     docs: provider => `${provider} ドキュメント`
   },

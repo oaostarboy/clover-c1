@@ -373,6 +373,16 @@ def _(rid, params: dict) -> dict:
         # config actually changed — a /skin or /statusbar write bumps mtime
         # but must not cost a multi-second MCP reconnect.
         return _ok(rid, {"mtime": mtime, "mcp_rev": _compute_mcp_rev()})
+    if key in {"agent_name", "agent.name", "branding.agent_name"}:
+        cfg = _load_cfg()
+        branding = cfg.get("branding") if isinstance(cfg.get("branding"), dict) else {}
+        agent_cfg = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+        name = (
+            branding.get("agent_name")
+            or agent_cfg.get("name")
+            or "Clover"
+        )
+        return _ok(rid, {"name": name, "value": name})
     return _err(rid, 4002, f"unknown config key: {key}")
 
 
@@ -380,8 +390,18 @@ def _(rid, params: dict) -> dict:
 def _(rid, params: dict) -> dict:
     try:
         from clover_cli.main import _has_any_provider_configured
+        from clover_cli.config import get_config_path
 
-        return _ok(rid, {"provider_configured": bool(_has_any_provider_configured())})
+        cfg_path = get_config_path()
+        cfg_exists = cfg_path.exists()
+        provider_cfg = bool(_has_any_provider_configured())
+        return _ok(
+            rid,
+            {
+                "config_exists": cfg_exists,
+                "provider_configured": bool(cfg_exists and provider_cfg),
+            },
+        )
     except Exception as e:
         return _err(rid, 5016, str(e))
 

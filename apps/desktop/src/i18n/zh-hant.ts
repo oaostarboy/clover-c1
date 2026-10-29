@@ -2340,6 +2340,8 @@ export const zhHant = defineLocale({
     free: '免費',
     price: (input, output) => `${input} 輸入 / ${output} 輸出 每 Mtok`,
     change: '變更',
+    agentNameLabel: '為你的 Clover 智慧體命名',
+    agentNamePlaceholder: 'Clover',
     startChatting: '開始',
     docs: provider => `${provider} 文件`
   },

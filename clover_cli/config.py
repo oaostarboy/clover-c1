@@ -2098,6 +2098,7 @@ def check_config_version(*, _warn_on_parse_failure: bool = True) -> Tuple[int, i
 # automatically. A few optional/legacy roots are valid on disk but intentionally
 # absent from DEFAULT_CONFIG (omitted when unused / alternate schema forms).
 _EXTRA_KNOWN_ROOT_KEYS = {
+    "branding",          # branding and agent naming (agent_name, welcome, etc.)
     "custom_providers",  # legacy list form; modern equivalent is providers: {}
     "fallback_model",    # optional single dict or chain list; omitted when disabled
     "mcp_servers",       # MCP server definitions written by setup/tools flows
