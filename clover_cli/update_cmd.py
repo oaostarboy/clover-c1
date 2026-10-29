@@ -4500,7 +4500,7 @@ def _update_node_dependencies() -> list[str]:
     )
     if result.returncode == 0:
         _record_npm_lockfile_hash(shared_clover_root)
-        print("  ✓ ui-tui, web workspaces installed (desktop skipped)")
+        print("  ✓ ui-tui, web workspaces installed")
         failures: list[str] = []
     else:
         print("  ⚠ npm install failed")
@@ -9444,12 +9444,13 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 healthy_after, detail_after = _venv_core_imports_healthy()
                 if healthy_after:
                     print("✓ Dependencies repaired!")
-                    _check_and_apply_config_migration(
+                    _repair_node_deps_on_current_checkout(
+                        _print_update_completion,
                         assume_yes=assume_yes,
                         gateway_mode=gateway_mode,
                         pre_update_snapshot_id=pre_update_snapshot_id,
+                        completion_message="✓ Update complete!",
                     )
-                    _print_update_completion("✓ Update complete!")
                 else:
                     print(f"⚠ Venv still unhealthy after repair: {detail_after}")
                     print("  Close all Clover windows/gateways and re-run: clover update")

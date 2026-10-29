@@ -6291,9 +6291,20 @@ def _run_npm_watching_for_engine_failure(
     forwarded to this process's stderr as it arrives (so live output is
     unchanged) and accumulated for the caller.
     """
+    run_cmd = list(cmd)
+    shell = False
+    if sys.platform == "win32":
+        exe = run_cmd[0] if run_cmd else ""
+        if exe.lower() in ("npm", "npm.cmd") or exe.lower().endswith((".cmd", ".bat")):
+            shell = True
+        if not exe.lower().endswith((".cmd", ".exe", ".bat")):
+            resolved = shutil.which(f"{exe}.cmd") or shutil.which(exe)
+            if resolved:
+                run_cmd[0] = resolved
+
     if capture_output:
         return subprocess.run(
-            cmd,
+            run_cmd,
             cwd=cwd,
             env=env,
             capture_output=True,
@@ -6302,11 +6313,12 @@ def _run_npm_watching_for_engine_failure(
             errors="replace",
             check=False,
             stdin=subprocess.DEVNULL,
+            shell=shell,
         )
 
     captured: list[str] = []
     with subprocess.Popen(
-        cmd,
+        run_cmd,
         cwd=cwd,
         env=env,
         stderr=subprocess.PIPE,
@@ -6314,12 +6326,21 @@ def _run_npm_watching_for_engine_failure(
         encoding="utf-8",
         errors="replace",
         stdin=subprocess.DEVNULL,
+        shell=shell,
     ) as proc:
         if proc.stderr is not None:
             for line in proc.stderr:
                 captured.append(line)
-                sys.stderr.write(line)
-            sys.stderr.flush()
+                if sys.stderr is not None:
+                    try:
+                        sys.stderr.write(line)
+                    except Exception:
+                        pass
+            if sys.stderr is not None:
+                try:
+                    sys.stderr.flush()
+                except Exception:
+                    pass
         returncode = proc.wait()
     return subprocess.CompletedProcess(cmd, returncode, None, "".join(captured))
 
@@ -8224,6 +8245,10 @@ def cmd_gui(args: argparse.Namespace):
             print("Desktop GUI requires Node.js/npm, but npm was not found on PATH.")
             print("Install Node.js, then run:  clover gui")
             sys.exit(1)
+        if sys.platform == "win32" and not npm.lower().endswith((".cmd", ".exe", ".bat")):
+            npm_cmd = shutil.which(f"{npm}.cmd") or shutil.which(npm)
+            if npm_cmd:
+                npm = npm_cmd
     else:
         npm = None
 
@@ -8248,6 +8273,7 @@ def cmd_gui(args: argparse.Namespace):
         else:
             print(f"→ Skipping desktop package build (--skip-build); using {packaged_executable}")
     else:
+        assert npm is not None
         # Check the content-hash stamp before doing any build work.
         # If the source tree hasn't changed since the last successful build,
         # skip the npm install + build entirely (saves a ton of useless work).
@@ -8299,9 +8325,16 @@ def cmd_gui(args: argparse.Namespace):
                 stopped = _stop_desktop_processes_locking_build(desktop_dir)
                 if stopped:
                     print(f"  ⚠ Stopped running desktop app to free the build output (pid {', '.join(map(str, stopped))})")
+            build_kwargs = {
+                "cwd": desktop_dir,
+                "env": npm_build_env,
+                "check": False,
+                "stdin": subprocess.DEVNULL,
+            }
+            if sys.platform == "win32":
+                build_kwargs["shell"] = True
             build_result = subprocess.run(
-                [npm, "run", build_script], cwd=desktop_dir, env=npm_build_env, check=False,
-                stdin=subprocess.DEVNULL,
+                [npm, "run", build_script], **build_kwargs
             )
             if (
                 build_result.returncode != 0
@@ -8330,8 +8363,7 @@ def cmd_gui(args: argparse.Namespace):
                     # is still locked by a running instance; stop it before retry.
                     _stop_desktop_processes_locking_build(desktop_dir)
                     build_result = subprocess.run(
-                        [npm, "run", build_script], cwd=desktop_dir, env=npm_build_env, check=False,
-                        stdin=subprocess.DEVNULL,
+                        [npm, "run", build_script], **build_kwargs
                     )
             if (
                 build_result.returncode != 0
@@ -8348,7 +8380,9 @@ def cmd_gui(args: argparse.Namespace):
                 if not _electron_dist_ok(PROJECT_ROOT):
                     _redownload_electron_dist(PROJECT_ROOT, env, mirror=mirror)
                 _stop_desktop_processes_locking_build(desktop_dir)
-                build_result = subprocess.run([npm, "run", build_script], cwd=desktop_dir, env=mirror_env, check=False, stdin=subprocess.DEVNULL)
+                mirror_kwargs = dict(build_kwargs)
+                mirror_kwargs["env"] = mirror_env
+                build_result = subprocess.run([npm, "run", build_script], **mirror_kwargs)
             if build_result.returncode != 0:
                 print("✗ Desktop GUI build failed")
                 print(f"  Run manually:  cd apps/desktop && npm run {build_script}")
@@ -8411,7 +8445,15 @@ def cmd_gui(args: argparse.Namespace):
 
     if source_mode:
         print("→ Launching Clover Desktop from source build...")
-        launch_result = subprocess.run([npm, "exec", "--", "electron", "."], cwd=desktop_dir, env=env, check=False, stdin=subprocess.DEVNULL)
+        launch_kwargs = {
+            "cwd": desktop_dir,
+            "env": env,
+            "check": False,
+            "stdin": subprocess.DEVNULL,
+        }
+        if sys.platform == "win32":
+            launch_kwargs["shell"] = True
+        launch_result = subprocess.run([npm or "npm", "exec", "--", "electron", "."], **launch_kwargs)
         sys.exit(launch_result.returncode)
 
     if packaged_executable is None:
@@ -10436,6 +10478,22 @@ def _resolve_node_runtime_npm() -> str | None:
     # On native Windows the platform npm (``npm.cmd``) is exactly what we
     # want — only reject Windows shims when we're a POSIX/WSL process.
     if _is_windows():
+        if not npm:
+            npm = (
+                shutil.which("npm.cmd")
+                or shutil.which("npm.exe")
+                or shutil.which("npm")
+            )
+        if npm and sys.platform == "win32":
+            if not npm.lower().endswith((".cmd", ".exe", ".bat")):
+                if Path(f"{npm}.cmd").is_file():
+                    npm = f"{npm}.cmd"
+                elif Path(f"{npm}.exe").is_file():
+                    npm = f"{npm}.exe"
+                else:
+                    which_cmd = shutil.which(f"{npm}.cmd") or shutil.which(npm)
+                    if which_cmd:
+                        npm = which_cmd
         return npm
 
     if not npm:

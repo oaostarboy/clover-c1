@@ -989,13 +989,19 @@ def find_node_executable_on_path(command: str) -> str | None:
         sep and sep in command_str for sep in (os.sep, os.altsep, "/", "\\")
     )
     if has_path_separator:
-        return command_str if Path(command_str).is_file() else None
+        if Path(command_str).is_file():
+            if not command_str.lower().endswith((".cmd", ".exe", ".bat")):
+                for ext in (".cmd", ".exe", ".bat"):
+                    if Path(command_str + ext).is_file():
+                        return command_str + ext
+            return command_str
+        return None
 
     for name in _candidate_node_command_names(command_str):
         for directory in os.environ.get("PATH", "").split(os.pathsep):
             if not directory:
                 continue
-            candidate = Path(directory) / name
+            candidate = Path(directory.strip("\"'")) / name
             if candidate.is_file():
                 return str(candidate)
     return None

@@ -333,21 +333,30 @@ def spawn_background_desktop_provision(
     project_root: Optional[Path] = None,
 ) -> Optional[subprocess.Popen]:
     """Spawn a detached low-priority background process to build desktop and register launchers."""
+    log_file = None
     try:
         root = project_root
         if root is None:
             from clover_cli.main import PROJECT_ROOT
             root = PROJECT_ROOT
 
-        from clover_constants import with_clover_node_path
+        from clover_constants import get_clover_home, with_clover_node_path
         build_env = with_clover_node_path()
+
+        try:
+            log_dir = get_clover_home() / "logs"
+            log_dir.mkdir(parents=True, exist_ok=True)
+            log_path = log_dir / "desktop-build.log"
+            log_file = open(log_path, "a", encoding="utf-8")
+        except Exception:
+            log_file = subprocess.DEVNULL
 
         cmd = [sys.executable, "-m", "clover_cli.main", "desktop", "--build-only"]
         popen_kwargs = {
             "cwd": root,
             "env": build_env,
-            "stdout": subprocess.DEVNULL,
-            "stderr": subprocess.DEVNULL,
+            "stdout": log_file,
+            "stderr": subprocess.STDOUT if log_file != subprocess.DEVNULL else subprocess.DEVNULL,
             "stdin": subprocess.DEVNULL,
             "close_fds": True,
         }
@@ -367,8 +376,19 @@ def spawn_background_desktop_provision(
                     pass
             popen_kwargs["preexec_fn"] = _low_prio
 
-        return subprocess.Popen(cmd, **popen_kwargs)
+        proc = subprocess.Popen(cmd, **popen_kwargs)
+        if log_file is not None and hasattr(log_file, "close"):
+            try:
+                log_file.close()
+            except Exception:
+                pass
+        return proc
     except Exception:
+        if log_file is not None and hasattr(log_file, "close"):
+            try:
+                log_file.close()
+            except Exception:
+                pass
         return None
 
 
