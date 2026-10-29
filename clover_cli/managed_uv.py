@@ -612,6 +612,7 @@ def update_managed_uv(
     *,
     repair_observer: Callable[[RuntimeRepairResult], None] | None = None,
     force: bool = False,
+    skip_delivery_guard: bool = False,
 ) -> Optional[str]:
     """Run ``uv self update`` on the managed uv binary.
 
@@ -628,7 +629,7 @@ def update_managed_uv(
     # This API is also used outside updates (e.g. setup). Only a real updater
     # invocation can owe a fleet restart; keep ordinary uv maintenance read-only
     # with respect to gateway discovery.
-    if 'update' in sys.argv[1:]:
+    if not skip_delivery_guard and 'update' in sys.argv[1:]:
         from clover_cli.update_delivery_guard import require_delivery_safe_update
         require_delivery_safe_update()
 

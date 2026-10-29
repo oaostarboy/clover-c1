@@ -1573,3 +1573,19 @@ class TestUpdateNodeDependencies:
         assert cwd_calls, "expected at least one npm call"
         for cwd in cwd_calls:
             assert cwd == tmp_path, f"npm must run from PROJECT_ROOT; got cwd={cwd}"
+
+
+class TestWindowsGatewayRestartArgvResume:
+    def test_gateway_restart_argv_for_resume_exported_on_main(self):
+        """_gateway_restart_argv_for_resume must be accessible on clover_cli.main."""
+        from clover_cli import main as hm
+        from clover_cli.update_cmd import _gateway_restart_argv_for_resume
+        fn = getattr(hm, "_gateway_restart_argv_for_resume")
+        assert fn is _gateway_restart_argv_for_resume
+
+    def test_gateway_restart_argv_for_resume_callable(self):
+        from clover_cli.update_cmd import _gateway_restart_argv_for_resume
+        assert _gateway_restart_argv_for_resume(None) == []
+        token = {"profiles": {}, "unmapped": [{"pid": 1234, "argv": ["python", "-m", "clover_cli.main", "gateway", "run"]}]}
+        res = _gateway_restart_argv_for_resume(token)
+        assert isinstance(res, list)

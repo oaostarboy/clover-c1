@@ -64,7 +64,7 @@ def test_status_does_not_inherit_predecessor_capability(monkeypatch, tmp_path):
 
 
 def test_modern_entry_classifies_before_update_work_and_continues(monkeypatch):
-    from clover_cli import update_cmd, update_delivery_guard
+    from clover_cli import main as hm, update_cmd, update_delivery_guard
     calls=[]
     monkeypatch.setattr(update_delivery_guard, 'require_delivery_safe_update',
                         lambda: calls.append('guard') or {'status': 'legacy-proceed'})
@@ -72,8 +72,12 @@ def test_modern_entry_classifies_before_update_work_and_continues(monkeypatch):
         calls.append('work')
         raise _Reached()
     monkeypatch.setattr(update_cmd, '_capture_active_lazy_features', mutation)
-    with pytest.raises(_Reached):
-        update_cmd._cmd_update_impl(SimpleNamespace(), False)
+    monkeypatch.setattr(hm, '_capture_active_lazy_features', mutation, raising=False)
+    try:
+        with pytest.raises(_Reached):
+            update_cmd._cmd_update_impl(SimpleNamespace(), False)
+    finally:
+        hm.__dict__.pop('_capture_active_lazy_features', None)
     assert calls == ['guard', 'work']
 
 

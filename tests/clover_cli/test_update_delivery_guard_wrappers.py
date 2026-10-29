@@ -74,11 +74,31 @@ def test_proved_historical_launchd_wrapper_matches_its_prepared_child(topology):
     assert topology.guard._unsafe_gateways() == []
 
 
+def test_proved_gateway_process_tree_is_not_a_second_gateway(topology):
+    """A legitimate gateway launcher parent wrapping an admitted child is recognized."""
+    t = topology
+    t.commands[t.wrapper] = list(t.commands[t.worker])
+    assert t.guard._unsafe_gateways() == []
+
+
+def test_proved_windows_venv_launcher_process_tree(topology, monkeypatch):
+    """Windows venv python launcher wrapping uv-managed interpreter."""
+    t = topology
+    monkeypatch.setattr("sys.platform", "win32")
+    venv_python = r"C:\Users\User\AppData\Local\clover\clover-c1\.venv\Scripts\python.exe"
+    uv_python = r"C:\Users\User\AppData\Roaming\uv\python\cpython-3.11.16\bin\python.exe"
+    t.commands[t.wrapper] = [venv_python, "-m", "clover_cli.main", "gateway", "run", "--replace"]
+    t.commands[t.worker] = [uv_python, "-m", "clover_cli.main", "gateway", "run", "--replace"]
+    assert t.guard._unsafe_gateways() == []
+
+
 @pytest.mark.parametrize('unproved', [
-    'gateway-parent', 'unrelated-parent', 'unknown-wrapper-time', 'changed-wrapper-time',
-    'unknown-worker-time', 'stale-worker-time', 'missing-capability', 'unknown-capability',
-    'wrong-home', 'wrong-log', 'different-child-command', 'not-direct-child',
-    'missing-worker', 'unreadable-wrapper', 'unreadable-legacy-environment',
+    'gateway-parent-wrong-profile', 'gateway-parent-started-after-child',
+    'gateway-parent-wrong-home', 'unrelated-parent', 'unknown-wrapper-time',
+    'changed-wrapper-time', 'unknown-worker-time', 'stale-worker-time',
+    'missing-capability', 'unknown-capability', 'wrong-home', 'wrong-log',
+    'different-child-command', 'not-direct-child', 'missing-worker',
+    'unreadable-wrapper', 'unreadable-legacy-environment',
     'missing-legacy-environment', 'malformed-wrapper', 'relative-interpreter',
     'different-interpreter', 'additional-unknown-gateway', 'worker-time-changes-after-admission',
 ])
@@ -86,8 +106,20 @@ def test_wrapper_exception_never_admits_unproved_process(topology, monkeypatch, 
     import psutil
     import gateway.status as status
     t = topology
-    if unproved == 'gateway-parent':
+    if unproved == 'gateway-parent-wrong-profile':
+        t.commands[t.wrapper] = list(t.commands[t.worker]) + ['--profile', 'foreign']
+    elif unproved == 'gateway-parent-started-after-child':
         t.commands[t.wrapper] = list(t.commands[t.worker])
+        t.starts[t.wrapper] = 50
+    elif unproved == 'gateway-parent-wrong-home':
+        t.commands[t.wrapper] = list(t.commands[t.worker])
+        old_proc = t.process
+        def bad_env_proc(pid):
+            p = old_proc(pid)
+            if pid == t.wrapper:
+                p.environ = lambda: {'CLOVER_HOME': str(t.path.parent / 'foreign')}
+            return p
+        monkeypatch.setattr(psutil, 'Process', bad_env_proc)
     elif unproved == 'unrelated-parent':
         t.commands[t.wrapper] = ['/bin/sh', '-c', 'gateway run']
     elif unproved == 'unknown-wrapper-time':

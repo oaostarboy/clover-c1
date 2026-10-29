@@ -8739,7 +8739,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
         try:
             from clover_cli import update_restart_watcher as _urw
 
-            _restart_argv = _m()._gateway_restart_argv_for_resume(
+            _restart_argv = _gateway_restart_argv_for_resume(
                 _windows_gateway_resume
             )
             if _handoff_adopted:
@@ -9520,7 +9520,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 # without spawning a second process. Other platforms arm here.
                 _rollback_argv = _m()._gateway_restart_argv_for_running_gateway()
                 if not _rollback_argv and _windows_gateway_resume:
-                    _rollback_argv = _m()._gateway_restart_argv_for_resume(_windows_gateway_resume)
+                    _rollback_argv = _gateway_restart_argv_for_resume(_windows_gateway_resume)
                 _rollback_services = list((_windows_gateway_resume or {}).get("services") or [])
                 _supervisors = {
                     r.supervisor for r in ((_pre_update_plan.runtimes if _pre_update_plan else []) or [])
@@ -9841,7 +9841,8 @@ def _cmd_update_impl(args, gateway_mode: bool):
         from clover_cli.managed_uv import ensure_uv, update_managed_uv
 
         # Keep managed uv current — runs `uv self update` if we already have one.
-        update_managed_uv()
+        # Delivery safety was already verified before pulling at line 8538.
+        update_managed_uv(skip_delivery_guard=True)
 
         uv_bin = ensure_uv()
 

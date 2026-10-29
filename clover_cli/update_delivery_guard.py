@@ -80,8 +80,99 @@ def _macos_framework_wrapper(wrapper, child, argv: list[str], command: list[str]
         return False
 
 
+def _proved_process_tree_wrapper(pid: int, admitted: dict[int, tuple[Path, int]]) -> bool:
+    """Recognize a legitimate gateway process tree wrapper (such as a venv launcher).
+
+    On Windows (and similar multi-process virtualenv/shim environments), running
+    ``clover gateway run`` or ``python.exe -m clover_cli.main gateway run`` through
+    a venv is a two-process chain: the venv launcher (e.g. ``venv\\Scripts\\python.exe``)
+    spawns the underlying interpreter from uv's managed directory. The inner worker
+    writes the PID file and runtime state (and is admitted), leaving the launcher
+    parent in ``unmapped``.
+
+    To prove the parent is a legitimate launcher rather than an unknown gateway:
+    1. It must be an ancestor of an admitted gateway child in a contiguous
+       gateway execution chain (direct parent or launcher ancestor).
+    2. It must be live with a stable start time <= child start time.
+    3. Its command line must be a valid Clover ``gateway run`` command.
+    4. Its command line and environment (if readable) must belong to the same
+       profile/CLOVER_HOME as the admitted child.
+    5. Truly unknown gateways (unrelated processes, mismatched profiles,
+       processes without an admitted child) fail closed.
+    """
+    import psutil
+    from gateway.status import (
+        _get_process_start_time,
+        looks_like_gateway_command_line,
+        _command_line_belongs_to_profile,
+    )
+
+    try:
+        start = _get_process_start_time(pid)
+        if start is None:
+            return False
+        wrapper = psutil.Process(pid)
+        argv = wrapper.cmdline()
+        if not argv:
+            return False
+        cmdline_str = " ".join(str(part) for part in argv)
+        if "clover_cli.stderr_timestamp" in cmdline_str:
+            return False
+        if not looks_like_gateway_command_line(cmdline_str):
+            return False
+
+        for child_pid, (home, child_start) in admitted.items():
+            if _get_process_start_time(child_pid) != child_start:
+                continue
+            curr = psutil.Process(child_pid)
+            curr_pid = child_pid
+            is_valid_ancestor = False
+            while True:
+                try:
+                    parent_pid = curr.ppid()
+                except Exception:
+                    break
+                if parent_pid == curr_pid or parent_pid <= 0:
+                    break
+                try:
+                    parent = psutil.Process(parent_pid)
+                    parent_argv = parent.cmdline()
+                    parent_cmd = " ".join(str(p) for p in parent_argv or [])
+                except Exception:
+                    break
+                if not looks_like_gateway_command_line(parent_cmd):
+                    break
+                if not _command_line_belongs_to_profile(parent_cmd, home):
+                    break
+                p_start = _get_process_start_time(parent_pid)
+                if p_start is None or p_start > child_start:
+                    break
+                try:
+                    p_env = parent.environ()
+                except Exception:
+                    p_env = {}
+                if p_env.get("CLOVER_HOME"):
+                    try:
+                        if Path(p_env["CLOVER_HOME"]).resolve() != home.resolve():
+                            break
+                    except Exception:
+                        break
+                if parent_pid == pid:
+                    if _get_process_start_time(pid) == start:
+                        is_valid_ancestor = True
+                    break
+                curr = parent
+                curr_pid = parent_pid
+
+            if is_valid_ancestor:
+                return True
+    except Exception:
+        return False
+    return False
+
+
 def _proved_stderr_wrapper(pid: int, admitted: dict[int, tuple[Path, int]]) -> bool:
-    """Recognize only our exact wrapper around an already admitted direct child.
+    """Recognize our exact wrapper or launcher around an already admitted direct child.
 
     A parent relationship alone is not evidence: another gateway, an unreadable
     parent, or a wrapper whose worker lacks capability must still block update.
@@ -96,34 +187,36 @@ def _proved_stderr_wrapper(pid: int, admitted: dict[int, tuple[Path, int]]) -> b
             return False
         wrapper = psutil.Process(pid)
         argv = wrapper.cmdline()
-        if (len(argv) < 7 or not Path(argv[0]).is_absolute()
-                or argv[1:4] != ['-m', 'clover_cli.stderr_timestamp', '--error-log']
-                or argv[5] != '--'):
-            return False
-        command = argv[6:]
-        if not _is_clover_gateway_run_argv(command):
-            return False
-        for child_pid, (home, child_start) in admitted.items():
-            child = psutil.Process(child_pid)
-            if child.ppid() != pid:
-                continue
-            child_command = child.cmdline()
-            expected = command
-            if child_command != command:
-                # Historical launchd plists omit the flag which the loaded
-                # wrapper adds. Require its real environment, not ambient env.
-                expected = _prepare_child_command(command, wrapper.environ())
-            import sys
-            framework = sys.platform == 'darwin' and '/Python.framework/' in argv[0]
-            if command[0] != argv[0] or child_command != expected or framework:
-                if (not child_command or child_command[1:] != expected[1:]
-                        or not _macos_framework_wrapper(wrapper, child, argv, command, home)):
+        if len(argv) >= 4 and argv[1:4] == ['-m', 'clover_cli.stderr_timestamp', '--error-log']:
+            if (len(argv) < 7 or not Path(argv[0]).is_absolute()
+                    or argv[5] != '--'):
+                return False
+            command = argv[6:]
+            if not _is_clover_gateway_run_argv(command):
+                return False
+            for child_pid, (home, child_start) in admitted.items():
+                child = psutil.Process(child_pid)
+                if child.ppid() != pid:
                     continue
-            if (Path(argv[4]).resolve() == (home/'logs/gateway.error.log').resolve()
-                    and _get_process_start_time(child_pid) == child_start
-                    and child.ppid() == pid
-                    and _get_process_start_time(pid) == start):
-                return True
+                child_command = child.cmdline()
+                expected = command
+                if child_command != command:
+                    # Historical launchd plists omit the flag which the loaded
+                    # wrapper adds. Require its real environment, not ambient env.
+                    expected = _prepare_child_command(command, wrapper.environ())
+                import sys
+                framework = sys.platform == 'darwin' and '/Python.framework/' in argv[0]
+                if command[0] != argv[0] or child_command != expected or framework:
+                    if (not child_command or child_command[1:] != expected[1:]
+                            or not _macos_framework_wrapper(wrapper, child, argv, command, home)):
+                        continue
+                if (Path(argv[4]).resolve() == (home/'logs/gateway.error.log').resolve()
+                        and _get_process_start_time(child_pid) == child_start
+                        and child.ppid() == pid
+                        and _get_process_start_time(pid) == start):
+                    return True
+            return False
+        return _proved_process_tree_wrapper(pid, admitted)
     except Exception:
         return False
     return False
@@ -176,7 +269,7 @@ def _unsafe_gateways() -> list[str]:
                 continue
             admitted[pid] = (proc.path, row['start_time'])
     for pid in unmapped:
-        if not _proved_stderr_wrapper(pid, admitted):
+        if not (_proved_stderr_wrapper(pid, admitted) or _proved_process_tree_wrapper(pid, admitted)):
             reasons.append(f'PID {pid}: no owner-bound gateway status')
     return reasons
 

@@ -5084,6 +5084,7 @@ _LAZY_COMMAND_EXPORTS = {
     "clover_cli.update_cmd": (
         "_abort_dependency_sync_if_self_locked",
         "_adopt_handed_off_gateway_resume",
+        "_gateway_restart_argv_for_resume",
         "_hand_off_windows_gateway_resume",
         "_verify_windows_gateway_relaunch",
         "_own_ancestor_pids",
