@@ -8368,6 +8368,41 @@ def _desktop_app_present(desktop_dir: Path) -> bool:
     )
 
 
+def _should_auto_build_desktop_on_update() -> bool:
+    """Return whether this host environment should automatically build desktop on update.
+
+    Auto-builds on desktop operating systems (macOS, Windows, and Linux/BSD with
+    a DISPLAY or WAYLAND_DISPLAY) so users who updated via CLI or chat get the
+    desktop app ready to use without running manual build commands.
+    """
+    try:
+        from clover_constants import is_termux
+
+        if is_termux():
+            return False
+    except Exception:
+        pass
+
+    try:
+        from clover_cli.config import load_config
+
+        cfg = load_config() or {}
+        desktop_cfg = cfg.get("desktop", {})
+        if isinstance(desktop_cfg, dict) and desktop_cfg.get("auto_build_on_update") is False:
+            return False
+        updates_cfg = cfg.get("updates", {})
+        if isinstance(updates_cfg, dict) and updates_cfg.get("auto_build_desktop") is False:
+            return False
+    except Exception:
+        pass
+
+    if sys.platform in ("darwin", "win32"):
+        return True
+    if sys.platform.startswith(("linux", "freebsd", "openbsd", "netbsd")):
+        return bool(os.environ.get("DISPLAY")) or bool(os.environ.get("WAYLAND_DISPLAY"))
+    return False
+
+
 def _rebuild_desktop_after_update(
     desktop_dir: Path, *, had_desktop_app_before_update: bool
 ) -> bool:
@@ -8380,9 +8415,14 @@ def _rebuild_desktop_after_update(
     returns ``True``.
     """
     # The release tree is ignored by git and can disappear during an update.
-    # Its pre-update presence is enough to restore it; do not make people who
-    # have never used Desktop pay for an Electron build.
-    has_desktop_app = had_desktop_app_before_update or _desktop_app_present(desktop_dir)
+    # Its pre-update presence is enough to restore it. On desktop-capable systems
+    # (macOS, Windows, Linux with DISPLAY), auto-build desktop so users who
+    # updated via CLI or chat get the desktop app automatically.
+    has_desktop_app = (
+        had_desktop_app_before_update
+        or _desktop_app_present(desktop_dir)
+        or _should_auto_build_desktop_on_update()
+    )
     if not (
         (desktop_dir / "package.json").exists()
         and _m()._resolve_node_runtime_npm()
@@ -8406,6 +8446,10 @@ def _rebuild_desktop_after_update(
     except Exception:
         skip_desktop_build = False
     if skip_desktop_build:
+        try:
+            _m()._register_desktop_launchers(desktop_dir)
+        except Exception:
+            pass
         print("  ✓ Desktop app up to date")
         return True
 
@@ -8440,6 +8484,10 @@ def _rebuild_desktop_after_update(
 
         print(f"  Full build log: {_dhh()}/logs/update.log")
         return False
+    try:
+        _m()._register_desktop_launchers(desktop_dir)
+    except Exception:
+        pass
     print("  ✓ Desktop app up to date")
     return True
 

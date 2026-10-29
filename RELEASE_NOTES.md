@@ -15,6 +15,11 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 2.0.1 | Clover C2.0.1 | 2026-10-29
+- Automatically builds the desktop app during update on macOS, Windows, and Linux desktops.
+- Automatically installs Clover to the macOS Applications folder and Windows Start Menu / Desktop.
+- Chat and CLI users can update anytime to receive the desktop app with zero extra setup.
+
 ## 2.0.0 | Clover C2.0 | 2026-10-29
 - Interactive first-run desktop tour guides you through chat, preview, terminal, and shortcuts.
 - Apple Liquid Glass onboarding with live ASCII clovers and native blur across macOS, Windows, and Linux.

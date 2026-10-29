@@ -103,9 +103,13 @@ def _needs_interpreter(bin_path: Path) -> bool:
         # A shell wrapper (e.g. the installer's bash launcher) execs the venv
         # python itself — leave it alone.
         return False
+    # `/usr/bin/env python3` delegates to PATH at launch time, which may not
+    # resolve to the running venv when launched from a desktop entry.
+    if "/env " in shebang or shebang.startswith("#!/usr/bin/env"):
+        return True
     # A python shebang pointing INSIDE the running interpreter's environment
-    # already resolves correctly; anything else (``/usr/bin/env python3``,
-    # a system path) would escape the venv when spawned by the DE.
+    # already resolves correctly; anything else (a system path) would
+    # escape the venv when spawned by the DE.
     exe_dir = str(Path(sys.executable).resolve().parent)
     return exe_dir not in shebang
 

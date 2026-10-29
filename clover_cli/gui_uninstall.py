@@ -125,11 +125,18 @@ def packaged_gui_app_paths() -> "list[Path]":
     elif sys.platform == "win32":
         local = os.environ.get("LOCALAPPDATA")
         local_base = Path(local) if local else (home / "AppData" / "Local")
+        appdata = os.environ.get("APPDATA")
+        roaming = Path(appdata) if appdata else (home / "AppData" / "Roaming")
+        userprofile = os.environ.get("USERPROFILE")
+        desk = Path(userprofile) / "Desktop" if userprofile else (home / "Desktop")
         paths += [
             # NSIS per-user install (perMachine=false → Programs\Clover).
             local_base / "Programs" / "Clover",
             # Older / alternate layout some builds used.
             local_base / "clover-desktop",
+            # Start menu and desktop shortcuts
+            roaming / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Clover.lnk",
+            desk / "Clover.lnk",
         ]
         program_files = os.environ.get("ProgramFiles")
         if program_files:

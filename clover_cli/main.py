@@ -8103,6 +8103,29 @@ def _register_linux_desktop_entry() -> None:
         print(f"⚠ Could not install the desktop launcher entry: {exc}")
 
 
+def _register_desktop_launchers(desktop_dir: Path, packaged_executable: Optional[Path] = None) -> None:
+    """Register Clover Desktop in the OS application launcher (Linux .desktop, macOS Applications, Windows Start Menu)."""
+    _register_linux_desktop_entry()
+    if sys.platform == "darwin":
+        try:
+            from clover_cli.desktop_app_entry import install_macos_desktop_entry
+
+            installed = install_macos_desktop_entry(desktop_dir, packaged_executable=packaged_executable)
+            if installed:
+                print(f"✓ macOS application installed: {installed}")
+        except Exception as exc:
+            logger.debug("Could not install macOS desktop application: %s", exc)
+    elif sys.platform == "win32":
+        try:
+            from clover_cli.desktop_app_entry import install_windows_desktop_entry
+
+            installed = install_windows_desktop_entry(desktop_dir, packaged_executable=packaged_executable)
+            if installed:
+                print(f"✓ Windows desktop shortcuts installed: {', '.join(str(p) for p in installed)}")
+        except Exception as exc:
+            logger.debug("Could not install Windows desktop shortcuts: %s", exc)
+
+
 def cmd_gui(args: argparse.Namespace):
     """Build and launch the native Electron desktop GUI."""
     desktop_dir = PROJECT_ROOT / "apps" / "desktop"
@@ -8339,10 +8362,10 @@ def cmd_gui(args: argparse.Namespace):
             # Build succeeded — write the stamp so next run can skip
             _write_desktop_build_stamp(PROJECT_ROOT, source_mode=source_mode)
 
-    # Linux: register the app in the desktop launcher, so Clover shows up
-    # in the application menu with its icon. Best-effort and idempotent.
-    # A failure must never stop the app from launching.
-    _register_linux_desktop_entry()
+    # Register the app in the system launcher / Applications / Start Menu,
+    # so Clover shows up in the application menu with its icon.
+    # Best-effort and idempotent. A failure must never stop the app from launching.
+    _register_desktop_launchers(desktop_dir, packaged_executable=packaged_executable)
 
     # --build-only: produce the artifact but do NOT launch. The installer's
     # --update flow drives the rebuild headlessly and then launches the desktop
