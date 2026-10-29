@@ -7070,7 +7070,19 @@ class GatewaySlashCommandsMixin:
             try:
                 urls["Report"] = upload_to_pastebin(report)
             except Exception as exc:
-                return t("gateway.debug.upload_failed", error=exc)
+                # Save locally so the report is not lost
+                local_path = None
+                try:
+                    import time
+                    from clover_constants import get_clover_home
+                    dest_dir = get_clover_home() / "pastes"
+                    dest_dir.mkdir(parents=True, exist_ok=True)
+                    timestamp = time.strftime("%Y%m%d_%H%M%S")
+                    local_path = dest_dir / f"debug_report_{timestamp}.txt"
+                    local_path.write_text(report, encoding="utf-8")
+                except Exception:
+                    pass
+                return ("failed", local_path, exc)
 
             # Schedule auto-deletion after 6 hours
             _schedule_auto_delete(list(urls.values()))
@@ -7084,9 +7096,35 @@ class GatewaySlashCommandsMixin:
             lines.append(t("gateway.debug.auto_delete"))
             lines.append(t("gateway.debug.full_logs_hint"))
             lines.append(t("gateway.debug.share_hint"))
-            return "\n".join(lines)
+            return ("success", None, "\n".join(lines))
 
-        return await loop.run_in_executor(None, _collect_and_upload)
+        status, local_path, payload = await loop.run_in_executor(None, _collect_and_upload)
+        if status == "success":
+            return str(payload)
+
+        # Upload failed: payload is the exception
+        exc = payload
+        adapters = getattr(self, "adapters", None)
+        adapter = adapters.get(event.source.platform) if adapters else None
+        if adapter and local_path and hasattr(adapter, "send_document"):
+            try:
+                await adapter.send_document(
+                    chat_id=event.source.chat_id,
+                    file_path=str(local_path),
+                    caption="Clover Debug Report",
+                    file_name=local_path.name,
+                )
+                return t(
+                    "gateway.debug.upload_failed",
+                    error=f"{exc}\n(Debug report attached above and saved locally to: {local_path})",
+                )
+            except Exception as send_err:
+                logger.debug(f"Failed to send debug document: {send_err}")
+
+        error_msg = f"{exc}"
+        if local_path:
+            error_msg += f"\n(Saved debug report locally to: {local_path})"
+        return t("gateway.debug.upload_failed", error=error_msg)
 
     async def _handle_repair_command(self, event: MessageEvent) -> str:
         """Use the update IPC/watch path, with identical platform and admin access."""

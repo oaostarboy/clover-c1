@@ -45,3 +45,42 @@ class TestHandleDebugCommand:
         mock_sweep.assert_called_once()
         assert "https://paste.rs/report" in result
 
+    @pytest.mark.asyncio
+    async def test_debug_handles_upload_failure_with_local_save(self, tmp_path, monkeypatch):
+        runner = _make_runner()
+        event = _make_event()
+        monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
+
+        with patch("clover_cli.debug._sweep_expired_pastes", return_value=(0, 0)), \
+             patch("clover_cli.debug._capture_dump", return_value="dump"), \
+             patch("clover_cli.debug.collect_debug_report", return_value="report text"), \
+             patch("clover_cli.debug.upload_to_pastebin", side_effect=RuntimeError("paste services down")):
+            result = await runner._handle_debug_command(event)
+
+        assert "paste services down" in result
+        assert "debug_report_" in result
+        pastes_dir = tmp_path / "pastes"
+        saved = list(pastes_dir.glob("debug_report_*.txt"))
+        assert len(saved) == 1
+        assert saved[0].read_text() == "report text"
+
+    @pytest.mark.asyncio
+    async def test_debug_handles_upload_failure_and_sends_document(self, tmp_path, monkeypatch):
+        from unittest.mock import AsyncMock, MagicMock
+        runner = _make_runner()
+        event = _make_event(platform=Platform.TELEGRAM)
+        monkeypatch.setenv("CLOVER_HOME", str(tmp_path))
+
+        mock_adapter = MagicMock()
+        mock_adapter.send_document = AsyncMock()
+        runner.adapters[Platform.TELEGRAM] = mock_adapter
+
+        with patch("clover_cli.debug._sweep_expired_pastes", return_value=(0, 0)), \
+             patch("clover_cli.debug._capture_dump", return_value="dump"), \
+             patch("clover_cli.debug.collect_debug_report", return_value="report text"), \
+             patch("clover_cli.debug.upload_to_pastebin", side_effect=RuntimeError("paste services down")):
+            result = await runner._handle_debug_command(event)
+
+        mock_adapter.send_document.assert_awaited_once()
+        assert "attached above" in result
+

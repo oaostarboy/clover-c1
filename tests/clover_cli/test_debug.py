@@ -72,12 +72,77 @@ class TestUploadPasteRs:
             with pytest.raises(urllib.error.URLError):
                 _upload_paste_rs("test")
 
+    def test_upload_paste_rs_passes_ssl_context(self):
+        from clover_cli.debug import _upload_paste_rs
 
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"https://paste.rs/abc\n"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("clover_cli.debug.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            _upload_paste_rs("hello")
+
+        _, kwargs = mock_open.call_args
+        assert kwargs.get("context") is not None
+
+
+class TestUploadDpasteCom:
+    """Test dpaste upload path with fallback between dpaste.org and dpaste.com."""
+
+    def test_upload_dpaste_success_dpaste_org(self):
+        from clover_cli.debug import _upload_dpaste_com
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'"https://dpaste.org/abc123"\n'
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("clover_cli.debug.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            url = _upload_dpaste_com("hello world")
+
+        assert url == "https://dpaste.org/abc123"
+        _, kwargs = mock_open.call_args
+        assert kwargs.get("context") is not None
+
+    def test_upload_dpaste_falls_back_to_com(self):
+        from clover_cli.debug import _upload_dpaste_com
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"https://dpaste.com/xyz789\n"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch(
+            "clover_cli.debug.urllib.request.urlopen",
+            side_effect=[urllib.error.URLError("org down"), mock_resp],
+        ):
+            url = _upload_dpaste_com("hello world")
+
+        assert url == "https://dpaste.com/xyz789"
+
+
+class TestUploadPasteCNet:
+    """Test paste.c-net.org upload path."""
+
+    def test_upload_paste_c_net_success(self):
+        from clover_cli.debug import _upload_paste_c_net
+
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b"https://paste.c-net.org/abc123\n"
+        mock_resp.__enter__ = lambda s: s
+        mock_resp.__exit__ = MagicMock(return_value=False)
+
+        with patch("clover_cli.debug.urllib.request.urlopen", return_value=mock_resp) as mock_open:
+            url = _upload_paste_c_net("hello world")
+
+        assert url == "https://paste.c-net.org/abc123"
+        _, kwargs = mock_open.call_args
+        assert kwargs.get("context") is not None
 
 
 class TestUploadToPastebin:
     """Test the combined upload with fallback."""
-
 
     def test_falls_back_to_dpaste_com(self):
         from clover_cli.debug import upload_to_pastebin
@@ -91,13 +156,29 @@ class TestUploadToPastebin:
         assert url == "https://dpaste.com/TEST"
         dp.assert_called_once()
 
+    def test_falls_back_to_paste_c_net(self):
+        from clover_cli.debug import upload_to_pastebin
+
+        with patch("clover_cli.debug._upload_paste_rs",
+                    side_effect=Exception("down1")), \
+             patch("clover_cli.debug._upload_dpaste_com",
+                    side_effect=Exception("down2")), \
+             patch("clover_cli.debug._upload_paste_c_net",
+                    return_value="https://paste.c-net.org/XYZ") as cnet:
+            url = upload_to_pastebin("content")
+
+        assert url == "https://paste.c-net.org/XYZ"
+        cnet.assert_called_once()
+
     def test_raises_when_both_fail(self):
         from clover_cli.debug import upload_to_pastebin
 
         with patch("clover_cli.debug._upload_paste_rs",
                     side_effect=Exception("err1")), \
              patch("clover_cli.debug._upload_dpaste_com",
-                    side_effect=Exception("err2")):
+                    side_effect=Exception("err2")), \
+             patch("clover_cli.debug._upload_paste_c_net",
+                    side_effect=Exception("err3")):
             with pytest.raises(RuntimeError, match="Failed to upload"):
                 upload_to_pastebin("content")
 
@@ -866,6 +947,23 @@ class TestBuildDebugShare:
         assert "Report" in result.urls
         assert len(result.failures) == 1
         assert "paste service hiccup" in result.failures[0]
+
+    def test_build_debug_share_saves_local_bundle_on_upload_failure(self, clover_home):
+        from clover_cli.debug import build_debug_share
+
+        with patch("clover_cli.dump.run_dump"), patch(
+            "clover_cli.debug.upload_to_pastebin", side_effect=RuntimeError("all paste services down")
+        ):
+            with pytest.raises(RuntimeError) as exc_info:
+                build_debug_share(log_lines=50, redact=True)
+
+            assert "all paste services down" in str(exc_info.value)
+            local_path = getattr(exc_info.value, "local_path", None)
+            assert local_path is not None
+            assert local_path.is_file()
+            content = local_path.read_text(encoding="utf-8")
+            assert "log content redacted at upload time" in content
+            assert "agent.log" in content
 
 
 
