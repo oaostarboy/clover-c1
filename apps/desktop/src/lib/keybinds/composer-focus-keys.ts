@@ -143,5 +143,5 @@ export function composerFocusKeysAllowed(event: KeyboardEvent, combo: string): b
     return false
   }
 
-  return !(combo === 'enter' && isActivateOnEnterTarget(event.target))
+  return !((combo === 'enter' || (combo === 'type' && event.key === ' ')) && isActivateOnEnterTarget(event.target))
 }

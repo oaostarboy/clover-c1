@@ -15,6 +15,12 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 2.0.0 | Clover C2.0 | 2026-10-29
+- Interactive first-run desktop tour guides you through chat, preview, terminal, and shortcuts.
+- Apple Liquid Glass onboarding with live ASCII clovers and native blur across macOS, Windows, and Linux.
+- Smooth conversation continuation and calm particle animations dissolve gracefully into chat.
+- Full accessibility support for reduced motion, high contrast mode, and transparent window fallbacks.
+
 ## 1.5.9.1 | Clover C1.5.9.1 | 2026-10-25
 - Long handoff replies and drafts stay complete, including spacing between message chunks.
 - Concurrent requests cannot launch the same helper twice.

@@ -1800,6 +1800,8 @@ export interface Translations {
 
   sidebar: {
     nav: Record<string, string>
+    expandNavigation: string
+    collapseNavigation: string
     searchAria: string
     searchPlaceholder: string
     clearSearch: string

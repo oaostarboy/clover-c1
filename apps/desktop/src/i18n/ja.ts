@@ -1846,6 +1846,8 @@ export const ja = defineLocale({
       artifacts: 'アーティファクト',
       cron: 'スケジュール済みジョブ'
     },
+    expandNavigation: 'セッションとプロジェクト',
+    collapseNavigation: 'ナビゲーションを折りたたむ',
     searchAria: 'セッションを検索',
     searchPlaceholder: 'セッションを検索…',
     clearSearch: '検索をクリア',

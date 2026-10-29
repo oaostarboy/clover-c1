@@ -585,6 +585,7 @@ export function TreeSplit({ node, root, rootRow }: { node: SplitNode; root?: boo
         return (
           <div
             className="relative flex min-h-0 min-w-0"
+            data-tree-panes={child.type === 'group' ? child.panes.join(' ') : undefined}
             key={child.id}
             style={
               collapsed

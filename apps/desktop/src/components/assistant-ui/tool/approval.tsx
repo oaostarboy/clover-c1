@@ -196,10 +196,13 @@ const ApprovalBar: FC<{ request: ApprovalRequest; surface: 'floating' | 'inline'
 
   return (
     <div
-      className={cn(surface === 'inline' ? 'mt-1 ps-5' : 'mt-2')}
+      className={cn(surface === 'inline' ? 'mt-1 ms-5 max-w-md rounded-lg border border-primary/25 bg-primary/5 px-2 py-1.5' : 'mt-2')}
       data-slot={surface === 'inline' ? 'tool-approval-inline' : 'tool-approval-actions'}
     >
-      <div className="flex items-center gap-2.5">
+      {surface === 'inline' && request.description && (
+        <p className="mb-1.5 break-words text-xs text-(--ui-text-secondary)">{request.description}</p>
+      )}
+      <div className="flex flex-wrap items-center gap-2.5">
         <div className="inline-flex h-6 items-stretch overflow-hidden rounded-md border border-primary/25 bg-primary/10 text-primary">
           <Button
             className="h-full gap-1 rounded-none px-2 text-xs font-medium text-primary hover:bg-primary/15 hover:text-primary"

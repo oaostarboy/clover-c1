@@ -1,0 +1,64 @@
+/* One quiet frosted plane; controls and text are never filtered. */
+[data-chat-surface] [data-slot='composer-surface'] {
+  background: color-mix(in srgb, var(--ui-bg-chrome) 20%, transparent);
+  background-image: linear-gradient(135deg, rgb(235 248 241 / 0.07), rgb(235 248 241 / 0.025));
+  border: 1px solid color-mix(in srgb, var(--ui-text-primary) 12%, transparent);
+  border-radius: 14px;
+  box-shadow: 0 8px 24px rgb(0 0 0 / 0.14);
+  -webkit-backdrop-filter: blur(20px) saturate(115%);
+  backdrop-filter: blur(20px) saturate(115%);
+}
+
+/* The opaque fade must not hide the scene before backdrop sampling. */
+[data-chat-surface] [data-slot='composer-backdrop-fade'] { background: transparent !important; }
+
+/* The legacy underlay must not add a second opaque or blurred layer. */
+[data-chat-surface] [data-slot='composer-surface'] > [aria-hidden='true']:first-child {
+  background: transparent;
+  -webkit-backdrop-filter: none;
+  backdrop-filter: none;
+}
+
+[data-chat-surface] .landing-history,
+[data-chat-surface] .landing-suggestion {
+  background: transparent;
+  border-color: transparent;
+  box-shadow: none;
+}
+[data-chat-surface] .landing-suggestion:hover,
+[data-chat-surface] .landing-history:hover {
+  background: color-mix(in srgb, var(--ui-text-primary) 8%, transparent);
+}
+[data-chat-surface] .landing-suggestion:focus-visible,
+[data-chat-surface] .landing-history:focus-visible {
+  outline: 2px solid var(--ui-accent);
+  outline-offset: 2px;
+}
+
+[data-chat-surface] [data-slot='composer-surface']:focus-within {
+  outline: none;
+  border-color: color-mix(in srgb, var(--ui-accent) 55%, var(--ui-text-secondary));
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  [data-chat-surface] [data-slot='composer-surface'] { background: var(--ui-bg-chrome); }
+}
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  [data-chat-surface] [data-slot='composer-surface'] {
+    background: var(--ui-bg-chrome);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+    border-color: var(--ui-text-secondary);
+  }
+}
+@media (forced-colors: active) {
+  [data-chat-surface] [data-slot='composer-surface'] {
+    background: Canvas;
+    color: CanvasText;
+    border-color: ButtonText;
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+    box-shadow: none;
+  }
+}

@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256">
+  <defs>
+    <linearGradient id="leaf" x1="0" y1="0" x2="1" y2="1">
+      <stop stop-color="#92f2ba"/>
+      <stop offset="1" stop-color="#24aa6d"/>
+    </linearGradient>
+    <path id="petal" d="M128 122 C116 108 76 88 76 60 C76 38 102 28 116 47 C121 53 125 60 128 68 C131 60 135 53 140 47 C154 28 180 38 180 60 C180 88 140 108 128 122 Z"/>
+  </defs>
+  <g fill="url(#leaf)">
+    <use href="#petal"/>
+    <use href="#petal" transform="rotate(90 128 128)"/>
+    <use href="#petal" transform="rotate(180 128 128)"/>
+    <use href="#petal" transform="rotate(270 128 128)"/>
+  </g>
+  <circle cx="128" cy="128" r="5" fill="#b9f9d3"/>
+</svg>

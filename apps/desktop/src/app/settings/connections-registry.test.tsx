@@ -108,6 +108,7 @@ describe('ConnectionsRegistrySection', () => {
     render(<ConnectionsRegistrySection />)
 
     await waitFor(() => expect(screen.getByText('Homelab')).toBeTruthy())
+    expect(screen.getByText('Manage this device and Clover gateways reached through remote or SSH connections.')).toBeTruthy()
     fireEvent.click(screen.getByText('Add connection'))
 
     const localKind = screen.getByRole('button', { name: 'Local' }) as HTMLButtonElement

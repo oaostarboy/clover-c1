@@ -73,6 +73,8 @@ export interface DesktopOnboardingState {
    *  custom endpoint"). Forces the API-key form with the local option
    *  preselected instead of the OAuth picker. */
   localEndpoint: boolean
+  /** True when the first-run desktop superpower tour has been completed or dismissed. */
+  desktopTourCompleted?: boolean
 }
 
 export interface OnboardingContext {
@@ -83,10 +85,60 @@ export interface OnboardingContext {
 
 const CONFIGURED_CACHE_KEY = 'clover-desktop-onboarded-v1'
 const SKIP_CACHE_KEY = 'clover-onboarding-skipped-v1'
+export const DESKTOP_TOUR_CACHE_KEY = 'clover-desktop-tour-v1'
 const POLL_MS = 2000
 const COPY_FLASH_MS = 1500
 export const DEFAULT_ONBOARDING_REASON = 'No inference provider is configured.'
 export const DEFAULT_MANUAL_ONBOARDING_REASON = 'Add or switch inference provider.'
+
+function isE2ETestEnvironment(): boolean {
+  if (typeof window === 'undefined') return false
+  try {
+    if (window.localStorage.getItem('clover-force-tour') === '1') {
+      return false
+    }
+    if (window.localStorage.getItem('clover-e2e') === '1' || window.localStorage.getItem('clover-skip-tour') === '1') {
+      return true
+    }
+    if ((window as unknown as { __playwright?: unknown }).__playwright) {
+      return true
+    }
+  } catch {
+    // ignore
+  }
+  return false
+}
+
+export function readCachedDesktopTour(): boolean {
+  if (typeof window === 'undefined') {
+    return false
+  }
+
+  try {
+    if (isE2ETestEnvironment()) {
+      return true
+    }
+    return window.localStorage.getItem(DESKTOP_TOUR_CACHE_KEY) === '1'
+  } catch {
+    return false
+  }
+}
+
+export function writeCachedDesktopTour(value: boolean) {
+  if (typeof window === 'undefined') {
+    return
+  }
+
+  try {
+    if (value) {
+      window.localStorage.setItem(DESKTOP_TOUR_CACHE_KEY, '1')
+    } else {
+      window.localStorage.removeItem(DESKTOP_TOUR_CACHE_KEY)
+    }
+  } catch {
+    // localStorage unavailable — degrade silently.
+  }
+}
 
 function readCachedConfigured(): boolean | null {
   if (typeof window === 'undefined') {
@@ -153,7 +205,8 @@ const INITIAL: DesktopOnboardingState = {
   requested: false,
   firstRunSkipped: readCachedSkipped(),
   manual: false,
-  localEndpoint: false
+  localEndpoint: false,
+  desktopTourCompleted: readCachedDesktopTour()
 }
 
 export const $desktopOnboarding = atom<DesktopOnboardingState>(INITIAL)
@@ -483,7 +536,8 @@ export function completeDesktopOnboarding() {
     requested: false,
     firstRunSkipped: false,
     manual: false,
-    localEndpoint: false
+    localEndpoint: false,
+    desktopTourCompleted: $desktopOnboarding.get().desktopTourCompleted ?? readCachedDesktopTour()
   })
 }
 
@@ -497,6 +551,19 @@ export function dismissFirstRunOnboarding() {
   clearPoll()
   writeCachedSkipped(true)
   patch({ firstRunSkipped: true, requested: false, manual: false, localEndpoint: false, flow: { status: 'idle' } })
+}
+
+export function completeDesktopTour() {
+  writeCachedDesktopTour(true)
+  patch({ desktopTourCompleted: true })
+}
+
+export function dismissDesktopTour() {
+  completeDesktopTour()
+}
+
+export function startDesktopTour() {
+  patch({ desktopTourCompleted: false })
 }
 
 export function setOnboardingMode(mode: OnboardingMode) {

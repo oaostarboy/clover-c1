@@ -29,10 +29,14 @@ export function isFileEditTool(toolName: string): boolean {
 //
 // Everything else is ephemeral activity — reads, searches, commands — which is
 // what a run summarizes and what the live ticker cycles through.
-const CARD_TOOL_NAMES = new Set(['clarify', 'delegate_task', 'image_generate', 'setup_mcp'])
+const CARD_TOOL_NAMES = new Set(['clarify', 'delegate_task', 'image_generate', 'setup_mcp', 'comparison_card', 'openui_card'])
 
-export function isCardTool(toolName: string): boolean {
-  return CARD_TOOL_NAMES.has(toolName) || isFileEditTool(toolName)
+export function isComparisonTool(toolName: string, args?: unknown): boolean {
+  return toolName === 'comparison_card' || toolName === 'openui_card' || (toolName === 'tool_call' && !!args && typeof args === 'object' && !Array.isArray(args) && ((args as Record<string, unknown>).name === 'comparison_card' || (args as Record<string, unknown>).name === 'openui_card'))
+}
+
+export function isCardTool(toolName: string, args?: unknown): boolean {
+  return CARD_TOOL_NAMES.has(toolName) || isFileEditTool(toolName) || isComparisonTool(toolName,args)
 }
 
 // Activity tools that render nothing at all: `todo` parts are hoisted to a

@@ -1,0 +1,105 @@
+/* Compact navigation reuses the live sidebar rather than duplicating its actions.
+   A mixed custom zone containing chat keeps its own sizing. Expanding restores
+   the saved tree width; no persisted layout is rewritten. */
+:is([data-tree-panes='sessions'], [data-tree-panes='sessions clover-bots:pane']):has([data-compact-navigation='true']) {
+  flex: 0 0 54px !important;
+  min-width: 54px !important;
+  max-width: 54px !important;
+}
+:is([data-tree-panes='sessions'], [data-tree-panes='sessions clover-bots:pane']):has([data-compact-navigation='true']) [data-zone-tabstrip] {
+  display: none;
+}
+.clover-rail-heading { display: none; }
+:is([data-tree-panes='sessions'], [data-tree-panes='sessions clover-bots:pane']) .clover-rail-heading { display: flex; justify-content: center; padding: 14px 0 10px; }
+:is([data-tree-panes='sessions'], [data-tree-panes='sessions clover-bots:pane']) [data-compact-navigation='true'] [data-slot='sidebar-content'] { padding-inline: 8px; }
+:is([data-tree-panes='sessions'], [data-tree-panes='sessions clover-bots:pane']) [data-compact-navigation='true'] [data-slot='sidebar-content'] > :not(:first-child) { display: none; }
+:is([data-tree-panes='sessions'], [data-tree-panes='sessions clover-bots:pane']) [data-compact-navigation='true'] [data-slot='sidebar-content'] > :first-child { padding-top: 0; }
+:is([data-tree-panes='sessions'], [data-tree-panes='sessions clover-bots:pane']) [data-compact-navigation='true'] [data-sidebar='menu-button'] { justify-content: center; height: 36px; padding: 0; margin-block: 3px; }
+:is([data-tree-panes='sessions'], [data-tree-panes='sessions clover-bots:pane']) [data-compact-navigation='true'] [data-sidebar='menu-button'] > :not(:first-child) { display: none; }
+
+/* Fresh-draft composition. Conversations and pop-out composers keep their
+   existing layout and controls. Theme colors remain owned by the active skin. */
+[data-chat-surface][data-landing] [data-slot='composer-dock']:not([data-popped-out]) {
+  bottom: 35%;
+  width: min(38rem, calc(100% - 2rem));
+}
+
+/* The reference uses a fine, low-contrast technical grid behind the content.
+   Keep it within the fresh chat only, and derive its ink from the active skin. */
+[data-chat-surface][data-landing] [data-slot='composer-bounds'] {
+  background-image:
+    linear-gradient(to right, color-mix(in srgb, var(--ui-text-primary) 3%, transparent) 1px, transparent 1px),
+    linear-gradient(to bottom, color-mix(in srgb, var(--ui-text-primary) 3%, transparent) 1px, transparent 1px);
+  background-size: 12px 12px;
+}
+
+[data-chat-surface][data-landing] [data-slot='aui_intro'] {
+  transform: translateY(-5.5rem);
+}
+
+[data-chat-surface][data-landing] [data-slot='composer-surface'] {
+  min-height: 6rem;
+}
+
+.landing-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 0.45rem;
+  padding: 0.7rem 0.3rem 0;
+}
+
+.landing-suggestion {
+  border: 1px solid var(--ui-stroke-tertiary);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ui-text-secondary);
+  cursor: pointer;
+  font-size: 0.72rem;
+  padding: 0.4rem 0.7rem;
+}
+
+.landing-suggestion span {
+  color: var(--ui-accent);
+  margin-right: 0.2rem;
+}
+
+.landing-suggestion:hover,
+.landing-suggestion:focus-visible {
+  background: var(--chrome-action-hover);
+  color: var(--ui-text-primary);
+}
+
+.landing-history {
+  position: absolute;
+  top: 3.5rem;
+  right: 1rem;
+  z-index: 35;
+}
+
+.landing-art {
+  position: absolute;
+  z-index: 2;
+  pointer-events: none;
+  color: #8fcbad;
+  opacity: 0.38;
+  font: 0.75rem/1.2 monospace;
+  user-select: none;
+}
+
+.landing-art-left {
+  left: 1%;
+  bottom: 2%;
+}
+
+.landing-art-right {
+  right: 1%;
+  top: 11%;
+  font-size: 0.57rem;
+}
+
+@media (max-width: 700px), (max-height: 600px) {
+  .landing-art { display: none; }
+  [data-chat-surface][data-landing] [data-slot='composer-dock']:not([data-popped-out]) { bottom: 18%; }
+  [data-chat-surface][data-landing] [data-slot='aui_intro'] { transform: translateY(-5rem); }
+}

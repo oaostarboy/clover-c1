@@ -1784,6 +1784,8 @@ export const zhHant = defineLocale({
       artifacts: '成品',
       cron: '排程工作'
     },
+    expandNavigation: '工作階段與專案',
+    collapseNavigation: '收合導覽',
     searchAria: '搜尋工作階段',
     searchPlaceholder: '搜尋工作階段…',
     clearSearch: '清除搜尋',

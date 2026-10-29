@@ -1,6 +1,8 @@
 import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
+import { $accentOverride, setAccentOverride } from './accent-override'
+import { contrastRatio } from './color'
 import { __resetBackendSkinSync, ingestBackendSkin } from './backend-sync'
 import { skinPref, ThemeProvider, useTheme } from './context'
 import { everforestTheme } from './presets'
@@ -93,6 +95,18 @@ describe('ThemeProvider highlight preview', () => {
         <Probe />
       </ThemeProvider>
     )
+
+  it('selecting Clover clears a scratch override and paints green tokens', () => {
+    renderProbe()
+    act(() => setAccentOverride('#0053fd'))
+    expect($accentOverride.get()).toBe('#0053fd')
+    act(() => ctx.setTheme('clover'))
+    expect($accentOverride.get()).toBeNull()
+    expect(cssVar('--theme-primary')).toBe(ctx.theme.colors.primary)
+    expect(cssVar('--dt-ring')).toBe(ctx.theme.colors.ring)
+    expect(cssVar('--dt-composer-ring')).toBe(ctx.theme.colors.composerRing)
+    expect(contrastRatio(cssVar('--dt-primary-solid'), cssVar('--dt-primary-solid-foreground'))).toBeGreaterThanOrEqual(4.5)
+  })
 
   it('paints the previewed theme without persisting it', () => {
     renderProbe()

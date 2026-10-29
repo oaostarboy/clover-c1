@@ -1,0 +1,5 @@
+name: openui-card
+version: 1.0.0
+description: Standalone OpenUI-compatible bounded UI component producer.
+source: isolated-candidate
+key: openui-card

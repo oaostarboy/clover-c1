@@ -1678,6 +1678,8 @@ export const ar = defineLocale({
       cron: 'المهام المجدولة',
       agents: 'الوكلاء'
     },
+    expandNavigation: 'الجلسات والمشاريع',
+    collapseNavigation: 'طي التنقل',
     searchAria: 'البحث في الجلسات',
     searchPlaceholder: 'البحث في الجلسات...',
     clearSearch: 'مسح البحث',

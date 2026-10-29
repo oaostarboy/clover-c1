@@ -47,6 +47,10 @@ function openContextMenu(target: HTMLElement) {
 }
 
 describe('statusbar item visibility', () => {
+  it('names icon-only actions for assistive technology', () => {
+    bar([{ id: 'command-center', title: 'Open command center', lockedVisible: true, variant: 'action' }])
+    expect(screen.getByRole('button', { name: 'Open command center' })).toBeTruthy()
+  })
   it('hides the route/toggle items out of the box and keeps status items', () => {
     bar([
       item('cron', 'Cron'),

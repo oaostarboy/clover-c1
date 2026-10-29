@@ -10,14 +10,17 @@ import { useI18n } from '@/i18n'
 import { Check, ChevronLeft, KeyRound, Loader2 } from '@/lib/icons'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { cn } from '@/lib/utils'
+import { LandingBloom } from '@/app/chat/landing-bloom'
 import { $desktopBoot, type DesktopBootState } from '@/store/boot'
 import {
   $desktopOnboarding,
   clearPendingProviderOAuth,
   closeManualOnboarding,
+  completeDesktopTour,
   confirmOnboardingModel,
   DEFAULT_MANUAL_ONBOARDING_REASON,
   DEFAULT_ONBOARDING_REASON,
+  dismissDesktopTour,
   dismissFirstRunOnboarding,
   type OnboardingContext,
   peekPendingProviderOAuth,
@@ -28,9 +31,11 @@ import {
 } from '@/store/onboarding'
 import type { ModelOptionProvider, OAuthProvider } from '@/types/clover'
 
+import { DesktopTourOverlay } from './desktop-tour'
 import { DocsLink, FlowPanel, Status } from './flow'
 import { FireworksProviderRow, OpenRouterProviderRow, ProviderRow, sortProviders } from './providers'
 
+export { DesktopTourOverlay } from './desktop-tour'
 export {
   FireworksProviderRow,
   KeyProviderRow,
@@ -259,6 +264,9 @@ export function DesktopOnboardingOverlay({
   // EXCEPTION: manual mode (user opened the selector from a working app to
   // add/switch a provider) shows the overlay regardless of configured state.
   if (onboarding.configured === true && !onboarding.manual) {
+    if (onboarding.desktopTourCompleted !== true) {
+      return <DesktopTourOverlay onDismiss={() => ctx.onCompleted?.()} />
+    }
     return null
   }
 
@@ -295,7 +303,7 @@ export function DesktopOnboardingOverlay({
   return (
     <div
       className={cn(
-        'fixed inset-0 z-(--z-onboarding) flex items-center justify-center bg-(--ui-chat-surface-background) p-6 transition-opacity duration-[520ms] ease-out',
+        'fixed inset-0 z-(--z-onboarding) flex items-center justify-center overflow-hidden bg-(--ui-chat-surface-background) p-6 transition-opacity duration-[520ms] ease-out',
         // On the bare confirm screen, hold the surface (text-out + hold) so the
         // per-element exit plays before it dissolves.
         bare && leaving ? '[transition-delay:660ms]' : '',
@@ -306,12 +314,18 @@ export function DesktopOnboardingOverlay({
       // `[data-glass-opaque]` in styles.css.
       data-glass-opaque=""
     >
+      {/* 3D Botanical ASCII Clover Canvas Background */}
+      <div className="absolute inset-0 pointer-events-none overflow-hidden z-0">
+        <LandingBloom frosted={false} />
+        <div className="absolute inset-0 bg-radial-[circle_at_50%_30%] from-emerald-500/10 via-transparent to-transparent pointer-events-none" />
+      </div>
+
       <div
         className={cn(
-          'relative w-full max-w-[45rem] transition-all duration-500 ease-out',
+          'relative z-10 w-full max-w-[45rem] transition-all duration-500 ease-out',
           bare
             ? ''
-            : 'overflow-hidden rounded-xl border border-(--stroke-clover) bg-(--ui-chat-bubble-background) shadow-clover',
+            : 'overflow-hidden rounded-2xl border border-white/15 bg-(--ui-chat-bubble-background)/90 shadow-[0_24px_50px_rgba(0,0,0,0.6)] backdrop-blur-2xl',
           // Bare confirm screen orchestrates its own per-element exit; the
           // carded states use the simple lift/blur dissolve.
           leaving && !bare

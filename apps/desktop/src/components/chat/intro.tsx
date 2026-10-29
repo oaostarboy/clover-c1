@@ -3,7 +3,6 @@ import { useState } from 'react'
 import { capitalize, normalize } from '@/lib/text'
 
 import introCopyJsonl from './intro-copy.jsonl?raw'
-import { Wordmark } from './wordmark'
 
 type IntroCopy = {
   headline: string
@@ -17,31 +16,28 @@ type IntroCopyRecord = IntroCopy & {
 export type IntroProps = {
   personality?: string
   seed?: number
+  name?: string
 }
 
 const NEUTRAL_PERSONALITIES = new Set(['', 'default', 'none', 'neutral'])
 
 const FALLBACK_COPY: IntroCopy[] = [
-  {
-    headline: 'What are we moving today?',
-    body: "Send a bug, branch, plan, or rough idea. I'll inspect the repo and turn it into the next concrete step."
-  },
-  {
-    headline: "What's on your mind?",
-    body: "Bring the code, question, or stuck part. I'll read the room before making changes."
-  },
-  {
-    headline: 'What should Clover look at?',
-    body: "Send the task, failing path, or half-formed plan. I'll help turn it into action."
-  },
-  {
-    headline: 'Where should we start?',
-    body: "Bring the problem, goal, or file. I'll inspect first and keep the next step concrete."
-  },
-  {
-    headline: 'What needs attention?',
-    body: "Send the context you have. I'll help sort it into a plan or a fix."
-  }
+  { headline: "Well, aren’t you lucky?", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "Your luck just logged on.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "I’m your lucky exception.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "Who needs luck? You have me.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "Your lucky charm has opinions.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "Luck sent me. You’re welcome.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "The odds look better with me.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "You found me. Lucky you.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "I’m the upside of your odds.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "Even luck needs an accomplice.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "You had me at ‘what if.’", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "I like our chances.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "Your next lucky break says hi.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "I brought luck. What’s the plan?", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "Good thing you picked this leaf.", body: "Bring the idea. I'll bring the extra leaf." },
+  { headline: "Coincidence? I prefer credit.", body: "Bring the idea. I'll bring the extra leaf." },
 ]
 
 function normalizeKey(value?: string): string {
@@ -145,8 +141,6 @@ function pickCopy(copies: IntroCopy[], seed = 0): IntroCopy {
   return copies[Math.abs(seed) % copies.length] || FALLBACK_COPY[0]
 }
 
-const WORDMARK = 'CLOVER AGENT'
-
 function resolveCopy(personality?: string, seed?: number): IntroCopy {
   const personalityKey = normalizeKey(personality)
 
@@ -167,16 +161,7 @@ export function Intro({ personality, seed }: IntroProps) {
       data-slot="aui_intro"
     >
       <div className="w-full min-w-0">
-        <Wordmark className="mb-1" text={WORDMARK} />
-
-        <p
-          className="mx-auto mb-3 inline-flex items-center gap-1.5 rounded-full border border-amber-500/40 bg-amber-500/10 px-3 py-1 text-xs font-medium tracking-wide text-amber-400 uppercase"
-          data-slot="aui_intro_under_construction"
-        >
-          🚧 Under construction
-        </p>
-
-        <p className="m-0 text-center leading-normal tracking-tight">{copy.body}</p>
+        <h1 className="m-0 text-3xl font-medium tracking-tight text-foreground sm:text-4xl">{copy.headline}</h1>
       </div>
     </div>
   )

@@ -642,4 +642,38 @@ describe('saveOnboardingLocalEndpoint', () => {
     expect(result.message).toContain('No provider can serve the selected model.')
     expect($desktopOnboarding.get().configured).not.toBe(true)
   })
+
+  it('handles first-run desktop tour state and persistence', async () => {
+    const { completeDesktopTour, dismissDesktopTour, startDesktopTour, DESKTOP_TOUR_CACHE_KEY } = await import(
+      './onboarding'
+    )
+    startDesktopTour()
+    expect($desktopOnboarding.get().desktopTourCompleted).toBe(false)
+
+    completeDesktopTour()
+    expect($desktopOnboarding.get().desktopTourCompleted).toBe(true)
+    expect(window.localStorage.getItem(DESKTOP_TOUR_CACHE_KEY)).toBe('1')
+
+    startDesktopTour()
+    expect($desktopOnboarding.get().desktopTourCompleted).toBe(false)
+
+    dismissDesktopTour()
+    expect($desktopOnboarding.get().desktopTourCompleted).toBe(true)
+  })
+
+  it('completeDesktopOnboarding preserves desktopTourCompleted state', async () => {
+    const { completeDesktopOnboarding, completeDesktopTour, startDesktopTour } = await import('./onboarding')
+
+    // When tour is completed, completing onboarding must not wipe it out
+    completeDesktopTour()
+    expect($desktopOnboarding.get().desktopTourCompleted).toBe(true)
+    completeDesktopOnboarding()
+    expect($desktopOnboarding.get().desktopTourCompleted).toBe(true)
+
+    // When tour is not completed, completing onboarding preserves false
+    startDesktopTour()
+    expect($desktopOnboarding.get().desktopTourCompleted).toBe(false)
+    completeDesktopOnboarding()
+    expect($desktopOnboarding.get().desktopTourCompleted).toBe(false)
+  })
 })

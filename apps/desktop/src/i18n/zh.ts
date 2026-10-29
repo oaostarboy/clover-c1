@@ -950,7 +950,7 @@ export const zh: Translations = {
     // v2 多连接注册表：设置 → 网关。
     connections: {
       title: '已注册网关',
-      intro: '管理本机以及通过远程、SSH 或 Clover Cloud 连接可访问的每个 Clover 网关。',
+      intro: '管理本机以及通过远程或 SSH 连接可访问的 Clover 网关。',
       stagedNote:
         '可在“会话”侧边栏切换网关。配置档案、聊天、消息和定时任务归属于各自网关；其他网关上的工作会继续运行。',
       launchModeTitle: '启动时返回上次使用网关的会话视图',
@@ -2309,6 +2309,8 @@ export const zh: Translations = {
       artifacts: '产物',
       cron: '定时任务'
     },
+    expandNavigation: '会话和项目',
+    collapseNavigation: '折叠导航',
     searchAria: '搜索会话',
     searchPlaceholder: '搜索会话…',
     clearSearch: '清除搜索',

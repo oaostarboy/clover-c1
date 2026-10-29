@@ -24,6 +24,8 @@ import nodePath from 'node:path'
 export const MOCK_REPLY = 'Hello from the mock inference server! The full boot chain is working.'
 
 export interface MockServerOptions {
+  /** Authored structured-tool input for the real isolated consumer E2E. */
+  comparisonCard?: Record<string, unknown>
   /** Pause the matching stream after its first token for session-switch E2E coverage. */
   holdFirstStreamForPrompt?: string
 /** Pause the first completion whose request JSON contains this text. */
@@ -483,6 +485,14 @@ export function startMockServer(options: MockServerOptions = {}): Promise<MockSe
           if (userText) {
             _receivedUserTexts.push(userText)
           }
+          if (options.comparisonCard && userText.includes('E2E_COMPARISON_TRIGGER') && Array.isArray(parsed.tools) && parsed.tools.length > 0 && !messages.some(m => m.role === 'tool')) {
+            const { _toolName, ...cleanCard } = options.comparisonCard as any
+            const targetTool = _toolName || 'comparison_card'
+            const turn = { text: '', toolCalls: [{ name: 'tool_call', args: {name: targetTool, arguments: cleanCard} }] }
+            if (stream) streamScriptedTurn(res, model, turn)
+            else nonStreamingScriptedTurn(res, model, turn)
+            return
+          }
           const isInterimTrigger = userText.includes('E2E_INTERIM_TRIGGER')
           const isSidebarTrigger = userText.includes('E2E_SIDEBAR_TRIGGER')
           const isSidebarCrossTrigger = userText.includes('E2E_SIDEBAR_CROSS')
@@ -604,7 +614,9 @@ export function startMockServer(options: MockServerOptions = {}): Promise<MockSe
             return
           }
 
-          if (isInterimTrigger) {
+          // Auxiliary routing/title calls may contain the user's trigger too.
+          // Only a real tool-capable agent request advances this script.
+          if (isInterimTrigger && Array.isArray(parsed.tools) && parsed.tools.length > 0) {
             const turn = INTERIM_SCRIPT[_scriptIndex] ?? INTERIM_SCRIPT[INTERIM_SCRIPT.length - 1]
             _scriptIndex++
             if (stream) {

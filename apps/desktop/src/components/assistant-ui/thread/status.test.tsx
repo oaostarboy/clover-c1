@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { __resetElapsedTimerRegistryForTests } from '@/components/chat/activity-timer'
 import { I18nProvider } from '@/i18n'
+import { $compactingSessions, setSessionCompacting } from '@/store/compaction'
 import { $providerWaitSessions, setSessionProviderWait } from '@/store/provider-wait'
 import { $activeSessionId, $turnStartedAt } from '@/store/session'
 
@@ -32,6 +33,7 @@ describe('ResponseLoadingIndicator timer', () => {
     $activeSessionId.set(null)
     $turnStartedAt.set(null)
     $providerWaitSessions.set({})
+    $compactingSessions.set({})
     __resetElapsedTimerRegistryForTests()
     vi.restoreAllMocks()
     vi.useRealTimers()
@@ -59,6 +61,21 @@ describe('ResponseLoadingIndicator timer', () => {
     renderIndicator()
 
     expect(screen.getAllByText((_, node) => node?.textContent === '8s').length).toBeGreaterThan(0)
+  })
+
+  it('shows a real status label beside the formation without a duplicate pulse', () => {
+    const { container } = renderIndicator()
+    expect(container.querySelector('[data-clover-status-copy]')?.textContent).toContain('Clover is working')
+    expect(container.querySelector('[data-slot="aui_response-loading"] .dither')).toBeNull()
+  })
+
+  it('uses compaction as the formation state only when that session is compacting', () => {
+    $activeSessionId.set('session-a')
+    const { container } = renderIndicator()
+    expect(container.querySelector('canvas')?.getAttribute('data-clover-phase')).toBe('working')
+    act(() => setSessionCompacting('session-a', true))
+    expect(container.querySelector('canvas')?.getAttribute('data-clover-phase')).toBe('compacting')
+    expect(screen.getByText('Summarizing thread')).toBeTruthy()
   })
 
   it('names a prolonged provider wait in the existing response status row', () => {

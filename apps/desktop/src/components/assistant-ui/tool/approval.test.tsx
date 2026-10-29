@@ -73,6 +73,7 @@ describe('PendingToolApproval', () => {
 
     expect(screen.getByRole('button', { name: /Run/ })).toBeTruthy()
     expect(screen.getByRole('button', { name: /Reject/ })).toBeTruthy()
+    expect(screen.getByText('dangerous command')).toBeTruthy()
   })
 
   it.each(['patch', 'write_file'])('renders inline approval controls for protected %s writes', toolName => {

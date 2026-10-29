@@ -171,16 +171,16 @@
     color-scheme: light;
 
     --theme-foreground: #17171a;
-    --theme-primary: #0053fd;
-    --theme-secondary: color-mix(in srgb, #0053fd 7%, #ffffff);
-    --theme-accent-soft: color-mix(in srgb, #0053fd 10%, #ffffff);
-    --theme-midground: #0053fd;
+    --theme-primary: #196d31;
+    --theme-secondary: color-mix(in srgb, #196d31 7%, #ffffff);
+    --theme-accent-soft: color-mix(in srgb, #196d31 10%, #ffffff);
+    --theme-midground: #196d31;
     --theme-warm: #cf806d;
     --theme-background-seed: #f8faff;
     --theme-sidebar-seed: #f3f7ff;
     --theme-card-seed: #ffffff;
     --theme-elevated-seed: #ffffff;
-    --theme-bubble-seed: color-mix(in srgb, #0053fd 6%, #ffffff);
+    --theme-bubble-seed: color-mix(in srgb, #196d31 6%, #ffffff);
     --theme-neutral-chrome: #f3f3f3;
     --theme-neutral-sidebar: #f3f3f3;
     --theme-neutral-card: #fcfcfc;
@@ -436,19 +436,19 @@
     --dt-user-bubble-border: var(--ui-stroke-tertiary);
 
     --dt-font-sans:
-      'Segoe WPC', 'Segoe UI', -apple-system, BlinkMacSystemFont, 'SF Pro Text', system-ui, sans-serif,
+      -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'SF Pro Display',
+      'Geist', 'Inter', system-ui, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif,
       'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol', 'Noto Color Emoji', emoji;
     /* Key caps always use the native UI face — never theme typography overrides. */
     --dt-font-kbd: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI', system-ui, sans-serif;
-    /* Menlo/Monaco first — Apple's native monospace faces — so code/diff read
-       in the system mono on macOS, with SF Mono and bundled Courier Prime as
-       fallbacks. */
+    /* Bundled JetBrains Mono first, with Geist Mono, system mono and Courier Prime fallbacks. */
     --dt-font-mono:
-      Menlo, Monaco, 'SF Mono', 'Courier Prime', monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
+      'JetBrains Mono', 'Geist Mono', Menlo, Monaco, 'SF Mono', 'Cascadia Code', 'Fira Code',
+      Consolas, 'Courier Prime', monospace, 'Apple Color Emoji', 'Segoe UI Emoji', 'Segoe UI Symbol',
       'Noto Color Emoji', emoji;
     --dt-base-size: 1rem;
-    --dt-line-height: 1.5;
-    --dt-letter-spacing: 0;
+    --dt-line-height: 1.55;
+    --dt-letter-spacing: -0.011em;
     --dt-spacing-mul: 1;
 
     --radius: 0.75rem;
@@ -466,12 +466,12 @@
 
     --composer-shell-pad-block-end: 0.625rem;
     --message-text-indent: 0.75rem;
-    --conversation-text-font-size: 0.8125rem;
-    --conversation-tool-font-size: 0.6875rem;
-    --conversation-caption-font-size: 0.75rem;
-    --conversation-line-height: 1.125rem;
-    --conversation-caption-line-height: 1rem;
-    --conversation-turn-gap: 0.375rem;
+    --conversation-text-font-size: 0.9375rem;
+    --conversation-tool-font-size: 0.75rem;
+    --conversation-caption-font-size: 0.8125rem;
+    --conversation-line-height: 1.55;
+    --conversation-caption-line-height: 1.25rem;
+    --conversation-turn-gap: 0.875rem;
     /* Gap between top-level turn blocks (prose ↔ tools ↔ thinking) — enough air
        that scaffolding reads as separate from the reply, not crammed into it. */
     --turn-block-gap: 0.75rem;
@@ -698,6 +698,42 @@
     backdrop-filter: blur(0.5rem) !important;
   }
 
+  /* Desktop tour & liquid glass cross-platform graceful fallbacks */
+  @supports not (backdrop-filter: blur(1px)) {
+    [data-desktop-tour-card],
+    [data-desktop-tour-overlay] {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    [data-desktop-tour-card] {
+      background-color: #0e1812 !important;
+    }
+  }
+
+  @media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+    [data-desktop-tour-card],
+    [data-desktop-tour-overlay] {
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+    }
+    [data-desktop-tour-card] {
+      background-color: #0c150f !important;
+      border-color: rgba(255, 255, 255, 0.4) !important;
+      box-shadow: 0 12px 32px rgba(0, 0, 0, 0.8) !important;
+    }
+  }
+
+  @media (forced-colors: active) {
+    [data-desktop-tour-card] {
+      background-color: Canvas !important;
+      color: CanvasText !important;
+      border: 2px solid ButtonText !important;
+      backdrop-filter: none !important;
+      -webkit-backdrop-filter: none !important;
+      box-shadow: none !important;
+    }
+  }
+
   /* Translucency peek: while the user holds the intensity slider (or for a
      short pulse after a frost/area/mode click) the entire overlay layer —
      scrim, blur and near-opaque card as ONE group — ghosts down so the live
@@ -746,12 +782,15 @@
     background: var(--ui-chat-surface-background);
     color: var(--dt-foreground);
     font-family: var(--dt-font-sans);
-    font-size: 0.8125rem;
+    font-size: 0.875rem;
     line-height: var(--dt-line-height, 1.55);
-    letter-spacing: var(--dt-letter-spacing, 0);
+    letter-spacing: var(--dt-letter-spacing, -0.011em);
+    font-feature-settings: 'cv02', 'cv03', 'cv04', 'cv11';
     -webkit-user-select: none;
     user-select: none;
     -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
   }
 
   button,
@@ -941,6 +980,8 @@
    ───────────────────────────────────────────────────────────────────────── */
 [data-slot='composer-rich-input'] {
   position: relative;
+  font-size: var(--conversation-text-font-size);
+  line-height: var(--dt-line-height, 1.55);
 }
 
 [data-slot='composer-rich-input']:is(:empty, [data-empty])::before {
@@ -948,6 +989,7 @@
   position: absolute;
   inset: 0;
   padding: inherit;
+  line-height: inherit;
   overflow: hidden;
   color: color-mix(in srgb, var(--muted-foreground) 60%, transparent);
   /* One line, clipped — the hint states the field's purpose; it never reflows
@@ -1550,7 +1592,7 @@ body.guest-pointer-lock :is(webview, iframe) {
 
 [data-slot='aui_user-message-root'],
 [data-slot='aui_edit-composer-root'] {
-  --human-msg-line-height: 1.3;
+  --human-msg-line-height: 1.55;
   font-size: var(--conversation-text-font-size);
 }
 
@@ -1568,7 +1610,7 @@ body.guest-pointer-lock :is(webview, iframe) {
    swap) and fought stick-to-bottom when parked at the bottom. */
 .sticky-human-clamp {
   cursor: pointer;
-  max-height: calc(4 * var(--human-msg-line-height) * var(--conversation-text-font-size) + 0.15rem);
+  max-height: calc(4 * var(--human-msg-line-height) * var(--conversation-text-font-size) + 0.5rem);
   overflow: hidden;
 }
 

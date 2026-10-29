@@ -16,7 +16,7 @@
  * no-op.
  *
  * ONE color in, both modes out. A single hex can't serve both appearances
- * literally — Clover blue `#0053FD` is 5.4:1 on GitHub's light sidebar but only
+ * literally — blue `#0053FD` is 5.4:1 on GitHub's light sidebar but only
  * 3.6:1 on its dark one, i.e. unreadable section headers. Dark therefore gets
  * the same hue and chroma at whatever lightness clears AA, which keeps the
  * brand color recognizably itself instead of washing it toward white.

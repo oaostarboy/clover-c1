@@ -14,6 +14,7 @@ import { Intro, type IntroProps } from '@/components/chat/intro'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useI18n } from '@/i18n'
 import { notifyError } from '@/store/notifications'
+import { ThreadBackendContext } from '../tool/thread-backend-context'
 
 type ThreadLoadingState = 'response' | 'session'
 
@@ -169,6 +170,7 @@ export const Thread = memo(function Thread({
 
   return (
     <ThreadEditContext.Provider value={editContext}>
+      <ThreadBackendContext.Provider value={editContext}>
       <div className="relative grid h-full min-h-0 max-w-full grid-rows-[minmax(0,1fr)] overflow-hidden bg-transparent contain-[layout_paint]">
         <ThreadMessageList
           clampToComposer={clampToComposer}
@@ -189,6 +191,7 @@ export const Thread = memo(function Thread({
           title={copy.restoreTitle}
         />
       </div>
+      </ThreadBackendContext.Provider>
     </ThreadEditContext.Provider>
   )
 })
