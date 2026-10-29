@@ -13,30 +13,23 @@ const seedAt = (hue: number) => withHue(cloverTheme.colors.primary, hue)
 const CLOVER_BLUE = '#0053FD'
 
 describe('themeHue', () => {
-  it('reads the accent hue that ships', () => {
-    // Clover blue. Both palettes sit at this hue — light seeds `#0053fd` and dark
-    // `#4a84fe`, the same blue at two lightnesses, which is what lets one pick
-    // serve both appearances.
-    expect(themeHue(cloverTheme)).toBe(263)
-    expect(Math.round(hexToOklch(cloverTheme.darkColors!.primary)!.h)).toBe(263)
+  it('reads the green accent that ships', () => {
+    expect(themeHue(cloverTheme)).toBe(148)
+    expect(Math.round(hexToOklch(cloverTheme.darkColors!.primary)!.h)).toBe(148)
   })
 
   it('reads the upstream GitHub green from the unforked theme', () => {
-    // `github` keeps the original accent, so the fork's blue can move freely
-    // without redefining what upstream looks like.
+    // GitHub keeps its independently authored palette.
     expect(themeHue(githubTheme)).toBe(148)
     expect(Math.round(hexToOklch(githubTheme.darkColors!.primary)!.h)).toBe(148)
   })
 })
 
-// The two seeds are the whole point of the fork, and both are load-bearing:
-// `#0053FD` is the brand color and passes on the light sidebar, but only 3.6:1
-// on the near-black dark one — so dark carries a lifted twin rather than the
-// literal brand hex. Anything that re-derives these must keep both legible.
+// Both green seeds and their text must clear AA in their respective modes.
 describe('the shipped clover accents', () => {
   const cases = [
-    { appearance: 'light', colors: cloverTheme.colors, seed: '#0053fd' },
-    { appearance: 'dark', colors: cloverTheme.darkColors!, seed: '#4a84fe' }
+    { appearance: 'light', colors: cloverTheme.colors, seed: '#196d31' },
+    { appearance: 'dark', colors: cloverTheme.darkColors!, seed: '#4f9e5e' }
   ] as const
 
   it.each(cases)('$appearance seeds every accent slot from $seed', ({ colors, seed }) => {
@@ -53,7 +46,7 @@ describe('the shipped clover accents', () => {
     expect(contrastRatio(seed, colors.primaryForeground)).toBeGreaterThanOrEqual(4.5)
   })
 
-  it('is one blue at two lightnesses, not two blues', () => {
+  it('is one green at two lightnesses, not two greens', () => {
     const light = hexToOklch(cloverTheme.colors.primary)!
     const dark = hexToOklch(cloverTheme.darkColors!.primary)!
 
@@ -162,7 +155,7 @@ describe('retintTheme', () => {
     expect(retintTheme(cloverTheme, 'nonsense').colors).toEqual(cloverTheme.colors)
   })
 
-  // The real motivating case: Clover blue is legible on GitHub's light sidebar
+  // The motivating example: blue is legible on GitHub's light sidebar
   // (5.4:1) but NOT its dark one (3.6:1), so dark has to adapt or ship
   // invisible section headers.
   describe('a seed that only works in one mode', () => {

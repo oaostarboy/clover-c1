@@ -62,6 +62,7 @@ import { useEmojiCompletions } from './hooks/use-emoji-completions'
 import { useComposerMicroActions } from './hooks/use-micro-actions'
 import { useSlashCompletions } from './hooks/use-slash-completions'
 import { useSessionStatusPresence } from './hooks/use-status-presence'
+import { LandingSuggestions } from './landing-suggestions'
 import { ActionBadges } from './micro-actions'
 import { chipTypedPathOnSpace, pathifyRefs } from './path-refs'
 import { QueuePanel } from './queue-panel'
@@ -92,6 +93,7 @@ export function ChatBar({
   disabled,
   focusKey,
   gateway,
+  landing = false,
   maxRecordingSeconds = 120,
   queueSessionKey,
   sessionId,
@@ -1042,7 +1044,7 @@ export function ChatBar({
         autoCapitalize="off"
         autoCorrect="off"
         className={cn(
-          'min-h-[1.625rem] min-h-(--composer-input-min-height) max-h-(--composer-input-max-height) cursor-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] bg-transparent pb-1 pr-1 pt-1 leading-normal text-foreground outline-none disabled:cursor-not-allowed',
+          'min-h-[1.625rem] min-h-(--composer-input-min-height) max-h-(--composer-input-max-height) cursor-text overflow-y-auto whitespace-pre-wrap break-words [overflow-wrap:anywhere] bg-transparent pb-1 pr-1 pt-1 text-[length:var(--conversation-text-font-size)] leading-(--dt-line-height) tracking-[-0.011em] text-foreground outline-none disabled:cursor-not-allowed',
           '**:data-ref-text:cursor-default',
           stacked && 'pl-3',
           stacked ? 'w-full' : 'min-w-(--composer-input-inline-min-width) flex-1',
@@ -1052,7 +1054,7 @@ export function ChatBar({
           hudNativeDrag && '[-webkit-app-region:no-drag]'
         )}
         contentEditable={!inputDisabled}
-        data-placeholder={placeholder}
+        data-placeholder={landing && !disabled ? 'Ask Clover anything…' : placeholder}
         data-slot={RICH_INPUT_SLOT}
         onBeforeInput={handleEditorBeforeInput}
         onBlur={() => {
@@ -1274,6 +1276,7 @@ export function ChatBar({
             {!poppedOut && (
               <div
                 className="pointer-events-none absolute inset-0 rounded-[inherit]"
+                data-slot="composer-backdrop-fade"
                 style={{ background: COMPOSER_FADE_BACKGROUND }}
               />
             )}
@@ -1374,7 +1377,7 @@ export function ChatBar({
                   <div
                     className={cn(
                       'grid w-full',
-                      stacked
+                      stacked || landing
                         ? 'grid-cols-[auto_1fr] gap-(--composer-row-gap) [grid-template-areas:"input_input"_"menu_controls"]'
                         : 'grid-cols-[auto_1fr_auto] items-center gap-(--composer-control-gap) [grid-template-areas:"menu_input_controls"]'
                     )}
@@ -1394,6 +1397,7 @@ export function ChatBar({
               </div>
             </div>
           </ComposerPrimitive.Root>
+          {landing && !poppedOut && <LandingSuggestions target={scope.target} />}
           {/* Underside: chrome-free strip BELOW the composer. Outside the root
               for the same reason as the micro actions — it must not fall inside
               the pop-out drag region. Same px as the strip above, so the two

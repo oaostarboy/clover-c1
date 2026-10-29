@@ -3,6 +3,8 @@ import { useStore } from '@nanostores/react'
 import { type FC, type ReactNode, useEffect, useMemo, useState } from 'react'
 
 import { useSessionView } from '@/app/chat/session-view'
+import { ActivityPresence } from '@/components/assistant-ui/thread/activity-presence'
+import { CloverParticles } from '@/components/assistant-ui/thread/clover-particles'
 import { activitySignature, toolNarratesWait, TURN_QUIET_S } from '@/components/assistant-ui/thread/turn-activity'
 import { toolPresentVerb } from '@/components/assistant-ui/tool/run-summary'
 import { useElapsedSeconds } from '@/components/chat/activity-timer'
@@ -10,7 +12,6 @@ import { ActivityTimerText } from '@/components/chat/activity-timer-text'
 import { SCAFFOLD_LABEL_CLASS } from '@/components/chat/scaffold-row'
 import { Codicon } from '@/components/ui/codicon'
 import { Loader } from '@/components/ui/loader'
-import { StatusPulse } from '@/components/ui/status-pulse'
 import { useI18n } from '@/i18n'
 import { cn } from '@/lib/utils'
 import { $backgroundResume } from '@/store/background-delegation'
@@ -32,7 +33,7 @@ const StatusRow: FC<{ children: ReactNode; label: string } & React.ComponentProp
     aria-label={label}
     aria-live="polite"
     className={cn(
-      'flex min-w-0 max-w-full items-center gap-1.5 self-start leading-(--conversation-line-height)',
+      'clover-activity min-w-0 max-w-full self-start leading-(--conversation-line-height)',
       'text-(--conversation-scaffold-text)',
       className
     )}
@@ -48,7 +49,7 @@ const StatusRow: FC<{ children: ReactNode; label: string } & React.ComponentProp
 const COMPACTION_LABEL = 'Summarizing thread'
 
 const HintText: FC<{ children: ReactNode }> = ({ children }) => (
-  <span className={cn(SCAFFOLD_LABEL_CLASS, 'shimmer min-w-0 flex-1 truncate')}>{children}</span>
+  <span className={cn(SCAFFOLD_LABEL_CLASS, 'min-w-0')}>{children}</span>
 )
 
 /** These indicators render inside whichever transcript mounted them, so every
@@ -142,22 +143,26 @@ export const CenteredThreadSpinner: FC = () => {
   )
 }
 
-export const ResponseLoadingIndicator: FC = () => {
+export const ResponseLoadingIndicator: FC<{ active?: boolean }> = ({ active = true }) => {
   const { t } = useI18n()
-  const { compacting, drafting, providerWait, turnStartedAt } = useThreadSessionStatus()
-  const elapsed = useElapsedSeconds(true, undefined, turnStartedAt)
+  const { awaitingInput, compacting, drafting, providerWait, turnStartedAt } = useThreadSessionStatus()
+  const elapsed = useElapsedSeconds(!awaitingInput, undefined, turnStartedAt)
   const hint = useStatusHint(compacting, drafting, providerWait)
 
+  if (awaitingInput) return null
+
+  const phase = compacting ? 'compacting' : providerWait ? 'waiting' : drafting ? 'tool' : 'working'
+  const isPresent = active && !awaitingInput
+
   return (
-    <StatusRow data-slot="aui_response-loading" label={hint || t.assistant.thread.loadingResponse}>
-      <StatusPulse
-        aria-hidden="true"
-        className="dither inline-block size-3 rounded-[2px] text-midground/80"
-        kind="opacity"
-      />
-      {hint && <HintText>{hint}</HintText>}
-      <ActivityTimerText seconds={elapsed} />
-    </StatusRow>
+    <ActivityPresence active={isPresent} phase={phase}>
+      <StatusRow data-slot="aui_response-loading" label={hint || t.assistant.thread.loadingResponse}>
+        <div data-clover-status-copy="">
+          <HintText>{hint || 'Clover is working'}</HintText>
+          <ActivityTimerText seconds={elapsed} />
+        </div>
+      </StatusRow>
+    </ActivityPresence>
   )
 }
 
@@ -256,15 +261,16 @@ export const TurnActivityIndicator: FC = () => {
     return null
   }
 
+  const phase = compacting ? 'compacting' : providerWait ? 'waiting' : drafting ? 'tool' : 'working'
+
   return (
-    <StatusRow data-slot="aui_turn-activity" label={hint || 'Clover is working'}>
-      <StatusPulse
-        aria-hidden="true"
-        className="dither inline-block size-3 rounded-[2px] text-midground/80"
-        kind="opacity"
-      />
-      {hint && <HintText>{hint}</HintText>}
-      <ActivityTimerText seconds={elapsed} />
-    </StatusRow>
+    <ActivityPresence active={active} phase={phase}>
+      <StatusRow data-slot="aui_turn-activity" label={hint || 'Clover is working'}>
+        <div data-clover-status-copy="">
+          <HintText>{hint || 'Clover is working'}</HintText>
+          <ActivityTimerText seconds={elapsed} />
+        </div>
+      </StatusRow>
+    </ActivityPresence>
   )
 }

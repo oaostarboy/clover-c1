@@ -748,7 +748,7 @@ export const en: Translations = {
     // v2 multi-connection registry: Settings → Gateways.
     connections: {
       title: 'Registered gateways',
-      intro: 'Manage this device and every Clover gateway it can reach through remote, SSH, or Cloud connections.',
+      intro: 'Manage this device and Clover gateways reached through remote or SSH connections.',
       stagedNote:
         'Switch gateways from Sessions. Profiles, chats, messaging, and cron jobs stay with their gateway; work on other gateways keeps running.',
       launchModeTitle: 'At startup, return to Sessions on the last-used gateway',
@@ -2126,6 +2126,8 @@ export const en: Translations = {
       artifacts: 'Artifacts',
       cron: 'Scheduled jobs'
     },
+    expandNavigation: 'Sessions and projects',
+    collapseNavigation: 'Collapse navigation',
     searchAria: 'Search sessions',
     searchPlaceholder: 'Search sessions…',
     clearSearch: 'Clear search',

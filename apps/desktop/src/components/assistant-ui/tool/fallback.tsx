@@ -17,7 +17,11 @@ import {
 } from 'react'
 
 import { useSessionView } from '@/app/chat/session-view'
+import { OptionalComparison } from './optional-comparison'
+import { isComparisonTool } from '@/lib/tool-render-class'
 import { AnsiText } from '@/components/assistant-ui/ansi-text'
+import { CloverParticles } from '@/components/assistant-ui/thread/clover-particles'
+import { toolNarratesWait } from '@/components/assistant-ui/thread/turn-activity'
 import { TimelineTimestamp } from '@/components/assistant-ui/thread/timeline-timestamp'
 import { useElapsedSeconds } from '@/components/chat/activity-timer'
 import { ActivityTimerText } from '@/components/chat/activity-timer-text'
@@ -47,7 +51,7 @@ import { normalize } from '@/lib/text'
 import { useEnterAnimation } from '@/lib/use-enter-animation'
 import { cn } from '@/lib/utils'
 import { recordPreviewArtifact } from '@/store/preview-status'
-import { sessionApprovalRequest } from '@/store/prompts'
+import { sessionApprovalRequest, sessionAwaitingInput } from '@/store/prompts'
 import { $toolInlineDiff } from '@/store/tool-diffs'
 import { $toolRowDismissed, dismissToolRow } from '@/store/tool-dismiss'
 import { $anyToolDisclosureOpen, $toolDisclosureOpen, $toolViewMode, setToolDisclosureOpen } from '@/store/tool-view'
@@ -562,7 +566,7 @@ function ToolEntry({ part }: ToolEntryProps) {
           trailing={trailing}
         >
           <span
-            className="flex min-w-0 items-center gap-1.5"
+            className="flex min-w-0 items-center gap-1.5 rounded-md border border-(--ui-stroke-tertiary) bg-(--ui-chat-surface-background) px-1.5"
             title={isFileEdit && view.subtitle ? view.subtitle : undefined}
           >
             <ToolGlyph
@@ -599,6 +603,7 @@ function ToolEntry({ part }: ToolEntryProps) {
         </DisclosureRow>
       </div>
       {isPending && <PendingToolApproval part={part} />}
+      {isComparisonTool(toolName,args) && toolCallId && <OptionalComparison toolCallId={toolCallId} />}
       {open && (
         <div className="relative grid w-full min-w-0 max-w-full gap-1.5 overflow-hidden p-1.5">
           {copyAction.text && (
@@ -999,14 +1004,20 @@ export const ToolGroupSlot: FC<PropsWithChildren<{ endIndex: number; startIndex:
   const toolNameKey = useAuiState(state =>
     state.message.parts
       .slice(Math.max(0, startIndex), endIndex + 1)
-      .map(part => (part.type === 'tool-call' ? part.toolName : ''))
+      .map(part => (part.type === 'tool-call' ? (isComparisonTool(part.toolName,part.args) ? 'comparison_card' : part.toolName) : ''))
       .join('\u0000')
   )
 
   const items = useMemo(() => splitRunItems(toolNameKey.split('\u0000')), [toolNameKey])
   const rows = Children.toArray(children)
+  const sessionId = useStore(useSessionView().$runtimeId)
+  const awaitingInput = useStore(useMemo(() => sessionAwaitingInput(sessionId), [sessionId]))
+  const toolActive = useAuiState(state =>
+    selectMessageRunning(state) && endIndex >= state.message.parts.length - 1 &&
+    toolNarratesWait(state.message.content.slice(startIndex, endIndex + 1))
+  )
 
-  return (
+  const content = (
     <ToolEmbedContext.Provider value={false}>
       {items.map(item =>
         item.kind === 'card' ? (
@@ -1018,6 +1029,13 @@ export const ToolGroupSlot: FC<PropsWithChildren<{ endIndex: number; startIndex:
         )
       )}
     </ToolEmbedContext.Provider>
+  )
+
+  return (
+    <div className="flex min-w-0 items-center gap-1.5" data-particle-tool-activity={toolActive && !awaitingInput ? '' : undefined}>
+      {toolActive && !awaitingInput && <CloverParticles />}
+      <div className="min-w-0">{content}</div>
+    </div>
   )
 }
 

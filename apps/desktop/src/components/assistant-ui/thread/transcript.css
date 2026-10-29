@@ -1,0 +1,266 @@
+/* One reading track from the submitted question to the final answer. This is
+   deliberately scoped to populated transcripts: landing, chrome, HUD and tool
+   card primitives retain their own design and interaction contracts. */
+[data-slot='aui_thread-content'][data-editorial-thread] {
+  --conversation-text-font-size: 0.9375rem;
+  --dt-line-height: 1.55;
+  --conversation-turn-gap: 0.875rem;
+  width: min(var(--composer-width), calc(100% - 2rem));
+  max-width: min(var(--composer-width), calc(100% - 2rem));
+  margin-inline: auto;
+  padding-inline: 0;
+  text-align: start;
+}
+
+[data-editorial-thread] [data-slot='aui_user-message-root'][data-role='user'] {
+  margin-inline: 0;
+  width: 100%;
+  padding-inline: 0;
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  background: transparent;
+}
+
+[data-editorial-thread] [data-slot='aui_user-bubble-actions'] {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+[data-editorial-thread] .human-message-with-todos-wrapper {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  width: 100%;
+}
+
+[data-editorial-thread] .human-message-with-todos-wrapper > [data-context-menu-skip] {
+  display: flex;
+  justify-content: flex-end;
+  width: 100%;
+}
+
+/* User bubbles: compact, right-aligned frosted glass pills */
+[data-editorial-thread] .composer-human-message:not([data-slot='aui_edit-composer-root'] *) {
+  width: fit-content;
+  max-width: min(80%, 38rem);
+  margin-left: auto;
+  align-self: flex-end;
+  border-radius: 1.125rem;
+  padding: 0.625rem 1.125rem 0.625rem 1.25rem;
+  padding-right: 2.25rem;
+  background: color-mix(in srgb, var(--dt-user-bubble, #202722) 75%, transparent);
+  border: 1px solid color-mix(in srgb, var(--ui-text-primary) 12%, transparent);
+  backdrop-filter: blur(16px) saturate(120%);
+  -webkit-backdrop-filter: blur(16px) saturate(120%);
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.16);
+  text-align: start;
+  transition: border-color 150ms ease, background-color 150ms ease;
+}
+
+[data-editorial-thread] .composer-human-message:not([data-slot='aui_edit-composer-root'] *):hover {
+  border-color: color-mix(in srgb, var(--ui-text-primary) 22%, transparent);
+  background: color-mix(in srgb, var(--dt-user-bubble, #202722) 85%, transparent);
+}
+
+[data-editorial-thread] [data-slot='aui_edit-composer-root'] {
+  width: 100%;
+}
+
+[data-editorial-thread] [data-slot='aui_edit-composer-root'] .composer-human-message-container,
+[data-editorial-thread] [data-slot='aui_edit-composer-root'] .composer-human-message {
+  width: 100% !important;
+  max-width: 100% !important;
+}
+
+[data-editorial-thread] [data-slot='aui_assistant-message-root'],
+[data-editorial-thread] [data-slot='aui_assistant-message-content'] {
+  align-self: stretch;
+  text-align: start;
+  overflow: visible !important;
+}
+
+/* Live activity status: particle clover directly on the canvas without background enclosure */
+.clover-activity-anchor {
+  position: relative;
+  width: 100%;
+  display: flex;
+  align-items: center;
+  min-height: 2.25rem;
+  padding-block: 0.25rem;
+}
+
+.clover-activity-anchor[data-active] {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 0;
+  border-radius: 0;
+  background: transparent;
+  border: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+  margin-block: 0.375rem;
+}
+
+.clover-activity-anchor:not([data-active]) {
+  position: absolute;
+  top: 0;
+  left: 0;
+  pointer-events: none;
+  opacity: 0;
+  background: transparent;
+  border: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  box-shadow: none;
+}
+
+.clover-activity-art {
+  position: relative;
+  width: 68px;
+  height: 68px;
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  pointer-events: none;
+  z-index: 10;
+  transition: opacity 240ms cubic-bezier(0.16, 1, 0.3, 1), transform 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  will-change: transform, opacity;
+}
+
+.clover-activity-art > .clover-formation {
+  width: 68px !important;
+  height: 68px !important;
+}
+
+.clover-activity-art[data-state='present'] {
+  opacity: 1;
+  transform: scale(1);
+}
+
+.clover-activity-art[data-state='leaving'] {
+  opacity: 0;
+  transform: scale(0.9) translateY(-2px);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .clover-activity-art {
+    transition: none !important;
+  }
+}
+
+.clover-activity {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+.clover-formation {
+  color: color-mix(in srgb, var(--theme-primary, #6eb593) 75%, var(--ui-text-primary));
+  display: block;
+  max-width: 100%;
+  object-fit: contain;
+}
+
+[data-clover-status-copy] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+[data-slot='aui_turn-activity'].clover-activity {
+  padding-block: 0;
+}
+
+@media (max-width: 900px) {
+  .clover-activity-anchor[data-active] {
+    flex-direction: row;
+    align-items: center;
+  }
+
+  .clover-activity-art {
+    width: 48px;
+    height: 48px;
+  }
+
+  .clover-activity-art > .clover-formation {
+    width: 48px !important;
+    height: 48px !important;
+  }
+}
+
+/* This marker exists only for an actual in-flight tool group. */
+[data-editorial-thread] [data-particle-tool-activity] {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+}
+
+[data-editorial-thread] [data-particle-tool-activity] > .clover-formation {
+  width: 48px !important;
+  height: 48px !important;
+  flex-shrink: 0;
+}
+
+[data-editorial-thread] [data-particle-tool-activity] > div {
+  width: 100%;
+}
+
+@media (max-width: 560px) {
+  [data-slot='aui_thread-content'][data-editorial-thread] {
+    --conversation-text-font-size: 0.875rem;
+    --conversation-turn-gap: 0.625rem;
+    width: calc(100% - 1rem);
+    max-width: calc(100% - 1rem);
+  }
+
+  [data-clover-status-copy] {
+    flex-direction: row;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+  }
+}
+
+/* The compact heads-up surface has different density and a very small height.
+   Do not turn its thread into a desktop reading page. */
+[data-hud-shell] [data-slot='aui_thread-content'][data-editorial-thread] {
+  --conversation-text-font-size: 0.8125rem;
+  --conversation-turn-gap: 0.1875rem;
+  max-width: var(--composer-width);
+}
+
+[data-hud-shell] .clover-activity-art {
+  position: static;
+  transform: none !important;
+  width: 28px;
+  height: 28px;
+}
+
+[data-hud-shell] .clover-activity-anchor {
+  flex-direction: row;
+}
+
+[data-hud-shell] .clover-formation {
+  width: 28px !important;
+  height: 28px !important;
+}

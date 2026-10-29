@@ -160,21 +160,11 @@ export const githubTheme: DesktopTheme = {
 
 /** Catppuccin — Latte in light, Mocha in dark (Catppuccin.catppuccin-vsc). */
 
-/**
- * Clover — the canonical Clover desktop identity: GitHub's chrome carrying Clover
- * blue. Forked from github.github-vscode-theme (Light Default / Dark Default),
- * with only the accent family re-seeded; every neutral is upstream's.
- *
- * Two seeds, one blue. `#0053FD` is the brand color and reads at 5.4:1 on the
- * light sidebar, but only 3.6:1 on the near-black dark one — so dark carries
- * `#4a84fe`, the same hue (263°) lifted to clear AA at 5.9:1. The soft
- * surfaces below are mixed from those seeds in OKLab, which is what keeps a
- * saturated blue from drifting violet on its way to white.
- */
+/** Clover's green accent on GitHub-derived neutral chrome. */
 export const cloverTheme: DesktopTheme = {
   name: 'clover',
   label: 'Clover',
-  description: 'GitHub chrome, Clover blue accent',
+  description: 'GitHub chrome, Clover green accent',
   colors: {
     background: '#ffffff',
     foreground: '#1f2328',
@@ -184,23 +174,23 @@ export const cloverTheme: DesktopTheme = {
     mutedForeground: '#656d76',
     popover: '#ffffff',
     popoverForeground: '#1f2328',
-    primary: '#0053fd',
+    primary: '#196d31',
     primaryForeground: '#ffffff',
-    secondary: '#deeaff',
+    secondary: '#dfebe2',
     secondaryForeground: '#1f2328',
-    accent: '#e3edff',
+    accent: '#e3ede6',
     accentForeground: '#1f2328',
     border: '#d0d7de',
     input: '#ffffff',
-    ring: '#0053fd',
-    midground: '#0053fd',
+    ring: '#196d31',
+    midground: '#196d31',
     midgroundForeground: '#ffffff',
-    composerRing: '#0053fd',
+    composerRing: '#196d31',
     destructive: '#cf222e',
     destructiveForeground: '#ffffff',
     sidebarBackground: '#f6f8fa',
     sidebarBorder: '#d0d7de',
-    userBubble: '#dae7fd',
+    userBubble: '#dbe7e2',
     userBubbleBorder: '#d0d7de'
   },
   darkColors: {
@@ -212,23 +202,23 @@ export const cloverTheme: DesktopTheme = {
     mutedForeground: '#7d8590',
     popover: '#161b22',
     popoverForeground: '#e6edf3',
-    primary: '#4a84fe',
+    primary: '#4f9e5e',
     primaryForeground: '#161616',
-    secondary: '#1d2e4f',
+    secondary: '#1f382b',
     secondaryForeground: '#e6edf3',
-    accent: '#17243a',
+    accent: '#192a24',
     accentForeground: '#e6edf3',
     border: '#30363d',
     input: '#0d1117',
-    ring: '#4a84fe',
-    midground: '#4a84fe',
+    ring: '#4f9e5e',
+    midground: '#4f9e5e',
     midgroundForeground: '#161616',
-    composerRing: '#4a84fe',
+    composerRing: '#4f9e5e',
     destructive: '#f85149',
     destructiveForeground: '#ffffff',
     sidebarBackground: '#010409',
     sidebarBorder: '#30363d',
-    userBubble: '#07162c',
+    userBubble: '#0f2018',
     userBubbleBorder: '#30363d'
   },
   typography: {

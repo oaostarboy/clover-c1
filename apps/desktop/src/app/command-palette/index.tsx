@@ -72,6 +72,7 @@ import { $bindings, bindingsFor } from '@/store/keybinds'
 import { $dismissedAutoProjectIds, filterVisibleProjects } from '@/store/layout'
 import { openPetGenerate } from '@/store/pet-generate'
 import { openBrowserTab } from '@/store/preview'
+import { startDesktopTour } from '@/store/onboarding'
 import { $projectTree, goToProject, openFolderAsProject, requestStartWorkSession } from '@/store/projects'
 import { $connection } from '@/store/session'
 import { runGatewayRestart } from '@/store/system-actions'
@@ -976,6 +977,16 @@ function CommandPaletteBody({ onExited }: { onExited: () => void }) {
             keywords: ['pet', 'generate', 'create', 'make', 'new pet', 'mascot', 'hatch', 'ai'],
             label: cc.generatePet.title,
             run: () => openPetGenerate()
+          },
+          {
+            icon: Zap,
+            id: 'help-desktop-tour',
+            keywords: ['tour', 'onboarding', 'walkthrough', 'guide', 'welcome', 'superpowers'],
+            label: 'Start Desktop Tour',
+            run: () => {
+              closeCommandPalette()
+              startDesktopTour()
+            }
           }
         ]
       },

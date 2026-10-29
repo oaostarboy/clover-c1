@@ -153,6 +153,7 @@ describe('composerFocusKeysAllowed', () => {
     expect(composerFocusKeysAllowed(keydown({ key: 'Enter', code: 'Enter', target: button }), 'enter')).toBe(false)
     expect(composerFocusKeysAllowed(keydown({ key: '/', code: 'Slash', target: button }), '/')).toBe(true)
     expect(composerFocusKeysAllowed(keydown({ key: 'a', code: 'KeyA', target: button }), 'type')).toBe(true)
+    expect(composerFocusKeysAllowed(keydown({ key: ' ', code: 'Space', target: button }), 'type')).toBe(false)
   })
 
   it('refuses when a dialog is open', () => {

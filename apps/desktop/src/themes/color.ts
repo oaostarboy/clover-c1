@@ -371,7 +371,7 @@ export function withHue(hex: string, hue: number): string {
  * Make `hex` clear `min` contrast against `bg` by moving its LIGHTNESS only.
  *
  * The sRGB-mixing version of this (`ensureContrast`) blends toward white or
- * black, which drags chroma down with it — Clover blue `#0053FD` mixed 30% white
+ * black, which drags chroma down with it — blue `#0053FD` mixed 30% white
  * to pass AA on a dark surface loses a third of its colorfulness and reads
  * washed. Walking OKLCH lightness instead keeps hue and chroma intact, so a
  * brand color stays recognizably itself at whatever lightness the surface

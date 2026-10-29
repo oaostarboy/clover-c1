@@ -1,3 +1,5 @@
+import './transcript.css'
+
 import { ThreadPrimitive, useAuiEvent, useAuiState } from '@assistant-ui/react'
 import { useStore } from '@nanostores/react'
 import { atom } from 'nanostores'
@@ -783,7 +785,8 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
           </div>
         ) : (
           <div
-            className={cn('mx-auto flex w-full max-w-(--composer-width) min-w-0 flex-col px-6', threadContentTopPad)}
+            className={cn('mx-auto flex w-full min-w-0 flex-col', threadContentTopPad)}
+            data-editorial-thread=""
             data-slot="aui_thread-content"
             ref={contentRef as React.RefCallback<HTMLDivElement>}
           >

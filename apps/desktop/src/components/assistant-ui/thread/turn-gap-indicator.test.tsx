@@ -101,6 +101,44 @@ describe('the turn timer covers the gaps, not just the streaming', () => {
     act(() => vi.advanceTimersByTime(9_000))
 
     expect(container.querySelector('[data-slot="aui_turn-activity"]')).toBeNull()
+    expect(container.querySelector('[data-particle-tool-activity] canvas')).not.toBeNull()
+  })
+
+  it('removes the tool clover when the turn stops or errors', async () => {
+    const user = userMessage('u1', 'run it')
+    const running = assistant('a1', [toolCall('terminal', false)], true)
+    const { container, rerender } = render(<Harness messages={[user, running]} />)
+    expect(container.querySelector('[data-particle-tool-activity] canvas')).not.toBeNull()
+
+    await act(async () => {
+      $busy.set(false)
+      rerender(<Harness messages={[user, assistant('a1', [toolCall('terminal', false)], false)]} />)
+      await vi.advanceTimersByTimeAsync(100)
+    })
+    expect(container.querySelector('[data-particle-tool-activity] canvas')).toBeNull()
+
+    const failed = { ...running, status: { type: 'incomplete', reason: 'error', error: 'failed' } } as ThreadMessage
+    await act(async () => {
+      rerender(<Harness messages={[user, failed]} />)
+      await vi.advanceTimersByTimeAsync(100)
+    })
+    expect(container.querySelector('[data-particle-tool-activity] canvas')).toBeNull()
+  })
+
+  it.each(['error', 'completed'] as const)('removes a live tool clover on %s', async outcome => {
+    const user = userMessage('u1', 'run it')
+    const running = assistant('a1', [toolCall('terminal', false)], true)
+    const { container, rerender } = render(<Harness messages={[user, running]} />)
+    expect(container.querySelector('[data-particle-tool-activity] canvas')).not.toBeNull()
+    const ended = outcome === 'error'
+      ? { ...running, status: { type: 'incomplete', reason: 'error', error: 'failed' } } as ThreadMessage
+      : assistant('a1', [toolCall('terminal', true)], false)
+    await act(async () => {
+      $busy.set(false)
+      rerender(<Harness messages={[user, ended]} />)
+      await vi.advanceTimersByTimeAsync(100)
+    })
+    expect(container.querySelector('[data-particle-tool-activity] canvas')).toBeNull()
   })
 
   it('stops when the session stops working', () => {

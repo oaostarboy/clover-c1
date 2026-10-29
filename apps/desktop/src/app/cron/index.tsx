@@ -673,7 +673,7 @@ export function CronView({ onClose, onOpenSession, setStatusbarItemGroup: _setSt
                 onSelect={() => setSelectedJobId(job.id)}
               />
             ))}
-            {visibleJobs.length === 0 && (
+            {visibleJobs.length === 0 && (query.trim() || jobs.length > 0) && (
               <p className="px-2 py-4 text-center text-xs text-muted-foreground">
                 {query.trim() ? c.emptyTitleSearch : c.emptyTitleNew}
               </p>

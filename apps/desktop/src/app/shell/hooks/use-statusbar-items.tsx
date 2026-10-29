@@ -8,6 +8,7 @@ import { useApprovalModeStatusbarItem } from '@/app/shell/approval-mode-menu'
 import { ContextUsagePanel } from '@/app/shell/context-usage-panel'
 import { GatewayMenuPanel } from '@/app/shell/gateway-menu-panel'
 import { useContextBreakdown } from '@/app/shell/hooks/use-context-breakdown'
+import { showGatewayHealth, showUpdateStatus } from '@/app/shell/statusbar-attention'
 import { $paneVisible, togglePaneVisible } from '@/components/pane-shell/tree/store'
 import { Codicon } from '@/components/ui/codicon'
 import { GlyphSpinner } from '@/components/ui/glyph-spinner'
@@ -325,7 +326,7 @@ export function useStatusbarItems({
     return {
       className: status.hasUpdate ? 'text-primary hover:text-primary' : undefined,
       detail: status.detail,
-      hidden: status.unknown,
+      hidden: !showUpdateStatus(status.hasUpdate, applying),
       icon: applying ? <Loader2 className="size-3 animate-spin" /> : <Hash className="size-3" />,
       id: 'version-client',
       label: status.label,
@@ -371,7 +372,7 @@ export function useStatusbarItems({
 
     return {
       className: status.hasUpdate ? 'text-primary hover:text-primary' : undefined,
-      hidden: status.unknown,
+      hidden: !showUpdateStatus(status.hasUpdate, applying),
       icon: applying ? <Loader2 className="size-3 animate-spin" /> : <Hash className="size-3" />,
       id: 'version-backend',
       label: status.label,
@@ -415,7 +416,7 @@ export function useStatusbarItems({
       {
         className: gatewayRestarting ? undefined : gatewayClassName,
         detail: gatewayRestarting ? copy.gatewayRestarting : gatewayDetail,
-        hidden: botsShowing,
+        hidden: !showGatewayHealth(botsShowing, inferenceReady, gatewayRestarting),
         icon: gatewayRestarting ? (
           <GlyphSpinner ariaLabel={copy.gatewayRestarting} className="size-3" />
         ) : inferenceReady ? (

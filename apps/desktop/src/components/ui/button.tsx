@@ -38,6 +38,8 @@ const buttonVariants = cva(
         xs: "gap-1 px-2 py-0.5 text-[0.6875rem] leading-4 has-[>svg]:px-1.5 [&_svg:not([class*='size-'])]:size-3",
         sm: 'px-2.5 py-1 has-[>svg]:px-2',
         lg: 'px-5 py-2 text-sm leading-5 has-[>svg]:px-4',
+        // The legacy unlayered reset suppresses outlines; this accessible variant opts in explicitly.
+        touch: 'min-h-11 px-5 py-2 text-sm leading-5 has-[>svg]:px-4 focus-visible:outline-solid! focus-visible:outline-2! focus-visible:-outline-offset-2! focus-visible:outline-(--ui-text-primary)!',
         // Flush inline text action — no box padding/height. Pair with text/link
         // variants when the button must sit inline in a heading or sentence
         // (replaces ad-hoc `h-auto px-0 py-0` overrides).

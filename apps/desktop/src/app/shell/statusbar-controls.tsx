@@ -343,6 +343,7 @@ const StatusbarItemView = memo(function StatusbarItemView({
   return (
     <Tip label={tooltipLabel}>
       <button
+        aria-label={item.label ? undefined : item.title || item.toggleLabel}
         className={cn(STATUSBAR_ACTION_CLASS, item.className)}
         disabled={item.disabled}
         onClick={event => {

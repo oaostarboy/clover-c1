@@ -1,5 +1,10 @@
+import './landing.css'
+import './liquid-glass.css'
+import { LandingBloom } from './landing-bloom'
+
 import { type AppendMessage, AssistantRuntimeProvider, type ThreadMessage } from '@assistant-ui/react'
 import { useStore } from '@nanostores/react'
+import { useConversationContinuation } from './use-conversation-continuation'
 import { useQuery } from '@tanstack/react-query'
 import type { ReadableAtom } from 'nanostores'
 import type * as React from 'react'
@@ -46,6 +51,7 @@ import {
   resolveComposerSessionKey,
   sessionMatchesStoredId,
   sessionPinId,
+  setSessionPickerOpen,
   shouldMigrateComposerScope
 } from '@/store/session'
 import { $focusedStoredSessionId, sessionTileDelegate } from '@/store/session-states'
@@ -611,8 +617,10 @@ const ChatViewContent = memo(function ChatViewContent({
 
   const overlayKind: DragKind = dragKind === 'files' ? 'files' : sessionDragging && !sessionEdgeHover ? 'session' : null
 
+  const continuationRef = useConversationContinuation(showIntro)
   return (
     <div
+      ref={continuationRef}
       className={cn(
         'relative isolate flex h-full min-w-0 flex-col overflow-hidden bg-(--ui-chat-surface-background)',
         className
@@ -621,9 +629,15 @@ const ChatViewContent = memo(function ChatViewContent({
       data-chat-unfocused={surfaceFocused ? undefined : ''}
       data-composer-surface-id={composerSurfaceId}
       data-composer-target={composerScope.target}
+      data-landing={showIntro ? '' : undefined}
       data-session-anchor={sessionAnchor}
     >
       <Backdrop />
+      {showIntro && (
+        <Button className="landing-history" onClick={() => setSessionPickerOpen(true)} size="sm" type="button" variant="outline">
+          History
+        </Button>
+      )}
       {/* Tiles get their chrome from the layout zone (chip strip); the modal
           prompt overlays stay active-session-scoped in the primary surface. */}
       {isPrimary && (
@@ -654,6 +668,7 @@ const ChatViewContent = memo(function ChatViewContent({
           data-slot="composer-bounds"
           {...dropHandlers}
         >
+          <LandingBloom frosted={!showIntro} />
           <Thread
             clampToComposer={showChatBar}
             cwd={currentCwd}
@@ -719,6 +734,7 @@ const ChatViewContent = memo(function ChatViewContent({
               disabled={!gatewayOpen}
               focusKey={activeSessionId}
               gateway={gateway}
+              landing={showIntro}
               maxRecordingSeconds={maxVoiceRecordingSeconds}
               onAddContextRef={onAddContextRef}
               onAddUrl={onAddUrl}

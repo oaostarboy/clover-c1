@@ -5,7 +5,7 @@ import { Codicon } from '@/components/ui/codicon'
 import { Tip, TipKeybindLabel } from '@/components/ui/tooltip'
 import { useI18n } from '@/i18n'
 import { triggerHaptic } from '@/lib/haptics'
-import { AudioLines, Ear, EarOff, iconSize, Layers3, Loader2, Square, Volume2, VolumeX } from '@/lib/icons'
+import { AudioLines, Ear, EarOff, iconSize, Layers3, Loader2, Square, SteeringWheel, Volume2, VolumeX } from '@/lib/icons'
 import { cn } from '@/lib/utils'
 import { $hudMode, closeHud, resetHudLayout } from '@/store/hud'
 import { $wakeWord, toggleWakeWord } from '@/store/wake-word'
@@ -73,8 +73,8 @@ export function ComposerControls({
   }
 
   const showVoicePrimary = !busy && !hasComposerPayload
-  // Steer is just send: a payload keeps the Send affordance mid-turn. Stop
-  // only when the composer is empty and a turn is running.
+  // Name the actual action so a correction is not mistaken for a new turn.
+  const showSteer = busy && hasComposerPayload && busyAction === 'steer'
   const showStop = busy && !hasComposerPayload
   const showQueueButton = busyAction !== 'stop' && hasComposerPayload
   // The HUD is a Spotlight bar a few hundred pixels wide, so the four separate
@@ -148,18 +148,20 @@ export function ComposerControls({
             showStop ? (
               <TipKeybindLabel actionId="composer.send" text={c.stop} />
             ) : (
-              <TipKeybindLabel actionId="composer.send" text={c.send} />
+              <TipKeybindLabel actionId="composer.send" text={showSteer ? c.steer : c.send} />
             )
           }
         >
           <Button
-            aria-label={showStop ? c.stop : c.send}
+            aria-label={showStop ? c.stop : showSteer ? c.steer : c.send}
             className={PRIMARY_ICON_BTN}
             disabled={disabled || !canSubmit}
             type="submit"
           >
             {showStop ? (
               <span className="block size-2.5 rounded-[0.1875rem] bg-current" />
+            ) : showSteer ? (
+              <SteeringWheel className={iconSize.sm} />
             ) : (
               <Codicon name="arrow-up" size="0.875rem" />
             )}

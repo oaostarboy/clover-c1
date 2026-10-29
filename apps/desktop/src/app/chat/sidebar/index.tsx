@@ -190,7 +190,7 @@ const SIDEBAR_NAV: SidebarNavItem[] = [
   {
     id: 'new-session',
     label: '',
-    icon: props => <Codicon name="robot" {...props} />,
+    icon: props => <Codicon name="add" {...props} />,
     action: 'new-session',
     keybindActionId: 'session.new'
   },
@@ -431,6 +431,10 @@ export function ChatSidebar({
   const newSessionCombo = useStore($bindings)['session.new']?.[0]
   const newSessionKbd = newSessionCombo ? comboTokens(newSessionCombo) : []
   const [searchQuery, setSearchQuery] = useState('')
+  // Window-local presentation only: expanding the rail retains the same
+  // sessions, projects, filters and contributed navigation underneath it.
+  const [compactNavigation, setCompactNavigation] = useState(true)
+  const [showManagement, setShowManagement] = useState(false)
   const [serverMatches, setServerMatches] = useState<SessionSearchResult[]>([])
   const [searchPending, setSearchPending] = useState(false)
   const [newSessionKbdFlash, setNewSessionKbdFlash] = useState(false)
@@ -444,7 +448,10 @@ export function ChatSidebar({
 
   // Hotkey (session.focusSearch) → focus the field once it's mounted.
   useEffect(() => {
-    const onFocus = () => searchInputRef.current?.focus({ preventScroll: true })
+    const onFocus = () => {
+      setCompactNavigation(false)
+      window.requestAnimationFrame(() => searchInputRef.current?.focus({ preventScroll: true }))
+    }
 
     window.addEventListener(SESSION_SEARCH_FOCUS_EVENT, onFocus)
 
@@ -1465,14 +1472,28 @@ export function ChatSidebar({
         'border-(--sidebar-edge-border) bg-(--ui-sidebar-surface-background) opacity-100'
       )}
       collapsible="none"
+      data-compact-navigation={compactNavigation ? 'true' : 'false'}
       data-tip-region=""
       data-tour="sessions-sidebar"
     >
+      <div className="clover-rail-heading">
+        <Tip label={compactNavigation ? s.expandNavigation : s.collapseNavigation}>
+          <Button
+            aria-expanded={!compactNavigation}
+            aria-label={compactNavigation ? s.expandNavigation : s.collapseNavigation}
+            onClick={() => setCompactNavigation(value => !value)}
+            size="icon"
+            variant="ghost"
+          >
+            <Codicon name={compactNavigation ? 'layout-sidebar-left' : 'chevron-left'} />
+          </Button>
+        </Tip>
+      </div>
       <SidebarContent className="gap-0 overflow-hidden bg-transparent px-2.5">
         <SidebarGroup className="shrink-0 p-0 pb-2 pt-[calc(var(--titlebar-height)+0.375rem)]">
           <SidebarGroupContent>
             <SidebarMenu className="gap-px">
-              {[...SIDEBAR_NAV, ...contributedNav].map(item => {
+              {[...SIDEBAR_NAV, ...contributedNav].filter(item => item.id === 'new-session' || showManagement || Boolean(item.route && pathname === item.route)).map(item => {
                 const isInteractive = Boolean(item.action) || Boolean(item.route)
 
                 const active =
@@ -1488,6 +1509,7 @@ export function ChatSidebar({
                 const button = (
                   <SidebarMenuButton
                     aria-disabled={!isInteractive}
+                    aria-label={s.nav[item.id] ?? item.label}
                     className={cn(
                       // no-drag: these rows sit directly under the titlebar's
                       // [-webkit-app-region:drag] strips (app-shell.tsx), with only
@@ -1500,7 +1522,9 @@ export function ChatSidebar({
                       active &&
                         'border-(--ui-stroke-tertiary) bg-(--ui-control-active-background) text-foreground shadow-none hover:border-(--ui-stroke-tertiary)!',
                       !isInteractive &&
-                        'cursor-default hover:border-transparent hover:bg-transparent hover:text-inherit'
+                        'cursor-default hover:border-transparent hover:bg-transparent hover:text-inherit',
+                      isNewSession &&
+                        'font-medium text-foreground hover:bg-(--ui-control-hover-background)'
                     )}
                     // A tip anchored to the label points at the end of the
                     // word; the row is what it's actually about.
@@ -1519,15 +1543,16 @@ export function ChatSidebar({
                     tooltip={
                       item.keybindActionId
                         ? {
+                            hidden: !compactNavigation,
                             children: (
                               <TipKeybindLabel actionId={item.keybindActionId} text={s.nav[item.id] ?? item.label} />
                             )
                           }
-                        : (s.nav[item.id] ?? item.label)
+                        : { children: s.nav[item.id] ?? item.label, hidden: !compactNavigation }
                     }
                     type="button"
                   >
-                    <item.icon className="size-4 shrink-0 text-[color-mix(in_srgb,currentColor_72%,transparent)]" />
+                    <item.icon className={cn('size-4 shrink-0', isNewSession ? 'text-foreground' : 'text-[color-mix(in_srgb,currentColor_72%,transparent)]')} />
                     {/* Shrink-to-fit, not flex-1: the label carries the row's
                         `data-tour` handle, and anything anchored to it should
                         land at the end of the WORD, not out at the sidebar's
@@ -1577,6 +1602,14 @@ export function ChatSidebar({
                   </SidebarMenuItem>
                 )
               })}
+              <SidebarMenuItem>
+                <SidebarMenuButton aria-label="More tools and channels" aria-expanded={showManagement}
+                  onClick={() => { setShowManagement(value => !value); setCompactNavigation(false) }}
+                  tooltip={{ children: 'More tools and channels', hidden: !compactNavigation }}>
+                  <span aria-hidden className="inline-flex size-4 items-center justify-center">···</span>
+                  {!compactNavigation && <span>{showManagement ? 'Less' : 'More'}</span>}
+                </SidebarMenuButton>
+              </SidebarMenuItem>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -1628,7 +1661,7 @@ export function ChatSidebar({
               />
             )}
 
-            {!trimmedQuery && (
+            {!trimmedQuery && pinnedSessions.length > 0 && (
               <SidebarSessionsSection
                 activeSessionId={activeSidebarSessionId}
                 contentClassName="flex flex-col gap-px rounded-lg pb-2 pt-1"
@@ -1772,7 +1805,7 @@ export function ChatSidebar({
                           <Tip label={agentsGrouped ? s.projects.newButton : s.nav['new-session']}>
                             <Button
                               aria-label={agentsGrouped ? s.projects.newButton : s.nav['new-session']}
-                              className={HEADER_ACTION_BTN}
+                              className={cn(HEADER_ACTION_BTN, 'opacity-70 hover:opacity-100! group-hover/section:opacity-100')}
                               onClick={event => {
                                 event.stopPropagation()
 
@@ -1842,7 +1875,7 @@ export function ChatSidebar({
 
             {!trimmedQuery &&
               !worktreeGroupingActive &&
-              messagingGroups.map(group => {
+              messagingGroups.filter(group => showManagement || group.sessions.some(session => session.id === activeSidebarSessionId)).map(group => {
                 const visible = messagingVisible[group.sourceId] ?? NON_SESSION_INITIAL_ROWS
                 const shownSessions = group.sessions.slice(0, visible)
                 // More to show if rows are hidden behind the cap, or the backend
@@ -1886,7 +1919,7 @@ export function ChatSidebar({
                 )
               })}
 
-            {!trimmedQuery && !worktreeGroupingActive && cronJobs.length > 0 && (
+            {showManagement && !trimmedQuery && !worktreeGroupingActive && cronJobs.length > 0 && (
               <SidebarCronJobsSection
                 jobs={cronJobs}
                 label={s.cronJobs}

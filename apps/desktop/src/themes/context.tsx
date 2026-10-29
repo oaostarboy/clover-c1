@@ -18,7 +18,7 @@ import { persistString, persistStringRecord, storedString, storedStringRecord } 
 import { $activeGatewayProfile, normalizeProfileKey } from '@/store/profile'
 import { setAppearance } from '@/store/translucency'
 
-import { $accentOverride } from './accent-override'
+import { $accentOverride, setAccentOverride } from './accent-override'
 import { $backendThemes, $pendingSkinApply } from './backend-sync'
 import { ensureContrast, harmonize, hexToRgb, mix, readableOn } from './color'
 import { BUILTIN_THEME_LIST, cloverTheme, DEFAULT_SKIN_NAME, DEFAULT_TYPOGRAPHY } from './presets'
@@ -469,6 +469,8 @@ export function ThemeProvider({ children }: { children: ReactNode }) {
   const setTheme = useCallback((name: string) => {
     const next = normalizeSkin(name)
     setPreview(null)
+    // A scratch accent must not silently override a deliberately selected skin.
+    setAccentOverride(null)
     setThemeNameState(next)
     skinPref.assign(liveProfile(), next)
   }, [])

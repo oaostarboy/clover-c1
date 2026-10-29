@@ -35,6 +35,7 @@ export interface ChatBarProps {
   busy: boolean
   disabled: boolean
   focusKey?: string | null
+  landing?: boolean
   maxRecordingSeconds?: number
   state: ChatBarState
   gateway?: CloverGateway | null
