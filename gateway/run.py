@@ -35268,6 +35268,16 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
         finally:
             _shutdown_gateway_health_export(runner)
 
+    # Lightweight, non-blocking check on gateway startup: if updating from an
+    # older version (1.5.x / 2.0.0) left the desktop app unbuilt or uninstalled,
+    # auto-provision it in the background now that the gateway is alive.
+    try:
+        from clover_cli.desktop_app_entry import maybe_auto_provision_desktop_on_startup
+
+        maybe_auto_provision_desktop_on_startup()
+    except Exception:
+        logger.debug("Desktop auto-provision on gateway startup check failed", exc_info=True)
+
     # Start the background cron scheduler via the resolved provider so
     # scheduled jobs fire automatically. The built-in provider is the
     # historical in-process 60s ticker; an external provider may arm a

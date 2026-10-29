@@ -273,3 +273,140 @@ def register_desktop_entries(
         entry = install_linux_desktop_entry(project_root)
         if entry:
             print(f"✓ Desktop launcher entry installed: {entry}")
+
+
+def is_desktop_provisioned(
+    desktop_dir: Optional[Path] = None,
+    project_root: Optional[Path] = None,
+) -> bool:
+    """Return True if Clover Desktop or its system launchers are already provisioned."""
+    root = project_root
+    if root is None:
+        try:
+            from clover_cli.main import PROJECT_ROOT
+            root = PROJECT_ROOT
+        except Exception:
+            root = Path(__file__).resolve().parents[1]
+
+    d_dir = desktop_dir if desktop_dir is not None else (root / "apps" / "desktop")
+
+    # Check packaged executable in release dir
+    try:
+        from clover_cli.main import _desktop_packaged_executable
+        if _desktop_packaged_executable(d_dir) is not None:
+            return True
+    except Exception:
+        pass
+
+    if is_macos():
+        if Path("/Applications/Clover.app").exists():
+            return True
+        if (Path.home() / "Applications" / "Clover.app").exists():
+            return True
+        release_dir = d_dir / "release"
+        if release_dir.is_dir() and any(release_dir.glob("mac*/Clover.app")):
+            return True
+    elif is_windows():
+        appdata = os.environ.get("APPDATA")
+        if appdata and (Path(appdata) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / "Clover.lnk").exists():
+            return True
+        if (Path.home() / "Desktop" / "Clover.lnk").exists():
+            return True
+        release_dir = d_dir / "release"
+        if release_dir.is_dir() and (release_dir / "win-unpacked" / "Clover.exe").exists():
+            return True
+    else:
+        if (Path.home() / ".local" / "share" / "applications" / "clover.desktop").exists():
+            return True
+        release_dir = d_dir / "release"
+        if release_dir.is_dir() and any(
+            (release_dir / f"{d}" / name).exists()
+            for d in ("linux-unpacked", "linux-arm64-unpacked")
+            for name in ("clover", "Clover")
+        ):
+            return True
+
+    return False
+
+
+def spawn_background_desktop_provision(
+    project_root: Optional[Path] = None,
+) -> Optional[subprocess.Popen]:
+    """Spawn a detached low-priority background process to build desktop and register launchers."""
+    try:
+        root = project_root
+        if root is None:
+            from clover_cli.main import PROJECT_ROOT
+            root = PROJECT_ROOT
+
+        from clover_constants import with_clover_node_path
+        build_env = with_clover_node_path()
+
+        cmd = [sys.executable, "-m", "clover_cli.main", "desktop", "--build-only"]
+        popen_kwargs = {
+            "cwd": root,
+            "env": build_env,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "stdin": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if sys.platform == "win32":
+            creationflags = (
+                getattr(subprocess, "DETACHED_PROCESS", 0)
+                | getattr(subprocess, "CREATE_NEW_PROCESS_GROUP", 0)
+                | 0x00004000  # BELOW_NORMAL_PRIORITY_CLASS
+            )
+            popen_kwargs["creationflags"] = creationflags
+        else:
+            popen_kwargs["start_new_session"] = True
+            def _low_prio():
+                try:
+                    os.nice(10)
+                except Exception:
+                    pass
+            popen_kwargs["preexec_fn"] = _low_prio
+
+        return subprocess.Popen(cmd, **popen_kwargs)
+    except Exception:
+        return None
+
+
+def maybe_auto_provision_desktop_on_startup(
+    project_root: Optional[Path] = None,
+) -> Optional[subprocess.Popen]:
+    """Lightweight, non-blocking check on gateway startup to auto-provision desktop.
+
+    If desktop auto-build is appropriate for the host environment and the
+    desktop app / launcher is not yet provisioned, spawn a detached
+    low-priority background process to build and register it without
+    blocking startup.
+    """
+    if os.environ.get("CLOVER_SKIP_AUTO_DESKTOP_BUILD") == "1":
+        return None
+    if "pytest" in sys.modules or os.environ.get("PYTEST_CURRENT_TEST"):
+        return None
+
+    try:
+        from clover_cli.update_cmd import _should_auto_build_desktop_on_update
+        if not _should_auto_build_desktop_on_update():
+            return None
+    except Exception:
+        return None
+
+    root = project_root
+    if root is None:
+        try:
+            from clover_cli.main import PROJECT_ROOT
+            root = PROJECT_ROOT
+        except Exception:
+            root = Path(__file__).resolve().parents[1]
+
+    desktop_dir = root / "apps" / "desktop"
+    if not (desktop_dir / "package.json").exists():
+        return None
+
+    if is_desktop_provisioned(desktop_dir, root):
+        return None
+
+    return spawn_background_desktop_provision(root)

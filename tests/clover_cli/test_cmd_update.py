@@ -142,9 +142,13 @@ def _patch_gateway_discovery():
     Discovery returning nothing makes the phase a clean no-op for every test
     in this module (none of them assert on gateway restarts).
     """
+    from clover_cli.update_inventory import UpdatePlan
+
     with patch("clover_cli.gateway.find_gateway_pids", return_value=[]), \
          patch("clover_cli.gateway.supports_systemd_services", return_value=False), \
-         patch("clover_cli.gateway.find_profile_gateway_processes", return_value=[]):
+         patch("clover_cli.gateway.find_profile_gateway_processes", return_value=[]), \
+         patch("clover_cli.update_inventory.collect_runtime_inventory", return_value=UpdatePlan()), \
+         patch("clover_cli.main._purge_stale_clover_modules"):
         yield
 
 

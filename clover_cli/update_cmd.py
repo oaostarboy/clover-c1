@@ -4348,7 +4348,7 @@ def _repair_node_deps_on_current_checkout(
     gateway_mode: bool = False,
     pre_update_snapshot_id: str | None = None,
     completion_message: str = "✓ Already up to date!",
-) -> None:
+) -> bool:
     """Repair Node deps on the ``commit_count == 0`` path (#77211).
 
     A current checkout does not imply healthy Node deps: a previous npm
@@ -4368,17 +4368,33 @@ def _repair_node_deps_on_current_checkout(
         print_completion(
             "⚠ Checkout is current, but Node.js dependencies could not be repaired."
         )
-        return
+        return False
     # Pair the refresh with the web build like every other
     # _update_node_dependencies call site; it staleness-checks internally,
     # so this is a no-op when nothing changed.
     _m()._build_web_ui(_m().PROJECT_ROOT / "web")
+    desktop_build_ok = _rebuild_desktop_after_update(
+        _m().PROJECT_ROOT / "apps" / "desktop",
+        had_desktop_app_before_update=_desktop_app_present(
+            _m().PROJECT_ROOT / "apps" / "desktop"
+        ),
+    )
     _check_and_apply_config_migration(
         assume_yes=assume_yes,
         gateway_mode=gateway_mode,
         pre_update_snapshot_id=pre_update_snapshot_id,
     )
+    if not desktop_build_ok:
+        _print_update_summary(
+            node_failures=[],
+            desktop_build_ok=False,
+            pre_update_version=None,
+        )
+        if gateway_mode:
+            _write_gateway_update_exit_code(False)
+        return False
     print_completion(completion_message)
+    return True
 
 
 def _update_node_dependencies() -> list[str]:
@@ -8368,12 +8384,22 @@ def _desktop_app_present(desktop_dir: Path) -> bool:
     )
 
 
+def _has_x11_display_socket() -> bool:
+    """Return True if an active X11 unix domain socket directory exists."""
+    try:
+        x11_dir = Path("/tmp/.X11-unix")
+        return x11_dir.is_dir() and any(x11_dir.iterdir())
+    except Exception:
+        return False
+
+
 def _should_auto_build_desktop_on_update() -> bool:
     """Return whether this host environment should automatically build desktop on update.
 
     Auto-builds on desktop operating systems (macOS, Windows, and Linux/BSD with
-    a DISPLAY or WAYLAND_DISPLAY) so users who updated via CLI or chat get the
-    desktop app ready to use without running manual build commands.
+    a DISPLAY, WAYLAND_DISPLAY, XDG_CURRENT_DESKTOP, or active X11 socket) so
+    users who updated via CLI or chat get the desktop app ready to use without
+    running manual build commands.
     """
     try:
         from clover_constants import is_termux
@@ -8399,7 +8425,12 @@ def _should_auto_build_desktop_on_update() -> bool:
     if sys.platform in ("darwin", "win32"):
         return True
     if sys.platform.startswith(("linux", "freebsd", "openbsd", "netbsd")):
-        return bool(os.environ.get("DISPLAY")) or bool(os.environ.get("WAYLAND_DISPLAY"))
+        return (
+            bool(os.environ.get("DISPLAY"))
+            or bool(os.environ.get("WAYLAND_DISPLAY"))
+            or bool(os.environ.get("XDG_CURRENT_DESKTOP"))
+            or _has_x11_display_socket()
+        )
     return False
 
 
@@ -8445,6 +8476,15 @@ def _rebuild_desktop_after_update(
         )
     except Exception:
         skip_desktop_build = False
+    # Build or register launchers using freshly pulled code.
+    try:
+        import importlib
+        for _mod_name in ("clover_cli.desktop_app_entry", "clover_cli.linux_desktop_entry"):
+            if _mod_name in sys.modules:
+                importlib.reload(sys.modules[_mod_name])
+    except Exception:
+        pass
+
     if skip_desktop_build:
         try:
             _m()._register_desktop_launchers(desktop_dir)

@@ -15,6 +15,12 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 2.0.2.1 | Clover C2.0.2.1 | 2026-10-29
+- Updates from earlier releases now create and install the Clover desktop application reliably.
+- Updating while already on the latest code automatically builds and installs the desktop app.
+- Gateway startups automatically provision the desktop app in the background if it is missing.
+- Linux desktop installations run from background services properly detect graphic environments.
+
 ## 2.0.2 | Clover C2.0.2 | 2026-10-29
 - Automatically detects if a configuration already exists on startup, bringing new users straight to onboarding.
 - Personalize your Clover agent during first-run onboarding by naming your AI companion directly.

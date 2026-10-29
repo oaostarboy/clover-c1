@@ -47,7 +47,27 @@ class TestShouldAutoBuildDesktopOnUpdate:
         monkeypatch.setattr("clover_constants.is_termux", lambda: False)
         monkeypatch.delenv("DISPLAY", raising=False)
         monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.delenv("XDG_CURRENT_DESKTOP", raising=False)
+        monkeypatch.setattr(update_cmd, "_has_x11_display_socket", lambda: False)
         assert update_cmd._should_auto_build_desktop_on_update() is False
+
+    def test_linux_with_xdg_current_desktop_auto_builds(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr("clover_constants.is_termux", lambda: False)
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.setenv("XDG_CURRENT_DESKTOP", "GNOME")
+        monkeypatch.setattr(update_cmd, "_has_x11_display_socket", lambda: False)
+        assert update_cmd._should_auto_build_desktop_on_update() is True
+
+    def test_linux_with_x11_socket_auto_builds(self, monkeypatch):
+        monkeypatch.setattr(sys, "platform", "linux")
+        monkeypatch.setattr("clover_constants.is_termux", lambda: False)
+        monkeypatch.delenv("DISPLAY", raising=False)
+        monkeypatch.delenv("WAYLAND_DISPLAY", raising=False)
+        monkeypatch.delenv("XDG_CURRENT_DESKTOP", raising=False)
+        monkeypatch.setattr(update_cmd, "_has_x11_display_socket", lambda: True)
+        assert update_cmd._should_auto_build_desktop_on_update() is True
 
     def test_termux_skips(self, monkeypatch):
         monkeypatch.setattr("clover_constants.is_termux", lambda: True)
@@ -271,3 +291,158 @@ class TestRegisterDesktopEntriesDispatcher:
         )
         register_desktop_entries(tmp_path, tmp_path)
         assert called == ["linux"]
+
+
+class TestDesktopProvisionCheck:
+    def test_provisioned_when_packaged_executable_found(self, tmp_path, monkeypatch):
+        desktop_dir = tmp_path / "apps" / "desktop"
+        monkeypatch.setattr(
+            "clover_cli.main._desktop_packaged_executable",
+            lambda d: tmp_path / "fake" / "clover",
+        )
+        assert desktop_app_entry.is_desktop_provisioned(desktop_dir, tmp_path) is True
+
+    def test_provisioned_macos_applications_app(self, tmp_path, monkeypatch):
+        desktop_dir = tmp_path / "apps" / "desktop"
+        monkeypatch.setattr("clover_cli.main._desktop_packaged_executable", lambda d: None)
+        monkeypatch.setattr(desktop_app_entry, "is_macos", lambda: True)
+        monkeypatch.setattr(desktop_app_entry, "is_windows", lambda: False)
+        monkeypatch.setattr(desktop_app_entry.Path, "exists", lambda p: True if "Clover.app" in str(p) else False)
+        assert desktop_app_entry.is_desktop_provisioned(desktop_dir, tmp_path) is True
+
+    def test_provisioned_windows_shortcut(self, tmp_path, monkeypatch):
+        desktop_dir = tmp_path / "apps" / "desktop"
+        monkeypatch.setattr("clover_cli.main._desktop_packaged_executable", lambda d: None)
+        monkeypatch.setattr(desktop_app_entry, "is_macos", lambda: False)
+        monkeypatch.setattr(desktop_app_entry, "is_windows", lambda: True)
+        monkeypatch.setattr(desktop_app_entry.Path, "exists", lambda p: True if "Clover.lnk" in str(p) else False)
+        assert desktop_app_entry.is_desktop_provisioned(desktop_dir, tmp_path) is True
+
+    def test_not_provisioned_when_nothing_exists(self, tmp_path, monkeypatch):
+        desktop_dir = tmp_path / "apps" / "desktop"
+        monkeypatch.setattr("clover_cli.main._desktop_packaged_executable", lambda d: None)
+        monkeypatch.setattr(desktop_app_entry, "is_macos", lambda: False)
+        monkeypatch.setattr(desktop_app_entry, "is_windows", lambda: False)
+        monkeypatch.setattr(desktop_app_entry.Path, "exists", lambda p: False)
+        assert desktop_app_entry.is_desktop_provisioned(desktop_dir, tmp_path) is False
+
+
+class TestMaybeAutoProvisionDesktopOnStartup:
+    def test_skips_when_env_skip_set(self, tmp_path, monkeypatch):
+        monkeypatch.setenv("CLOVER_SKIP_AUTO_DESKTOP_BUILD", "1")
+        assert desktop_app_entry.maybe_auto_provision_desktop_on_startup(tmp_path) is None
+
+    def test_skips_when_auto_build_not_appropriate(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLOVER_SKIP_AUTO_DESKTOP_BUILD", raising=False)
+        monkeypatch.setattr(update_cmd, "_should_auto_build_desktop_on_update", lambda: False)
+        assert desktop_app_entry.maybe_auto_provision_desktop_on_startup(tmp_path) is None
+
+    def test_skips_when_no_package_json(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("CLOVER_SKIP_AUTO_DESKTOP_BUILD", raising=False)
+        monkeypatch.setattr(update_cmd, "_should_auto_build_desktop_on_update", lambda: True)
+        # apps/desktop/package.json does not exist in tmp_path
+        assert desktop_app_entry.maybe_auto_provision_desktop_on_startup(tmp_path) is None
+
+    def test_skips_when_already_provisioned(self, tmp_path, monkeypatch):
+        desktop_dir = tmp_path / "apps" / "desktop"
+        desktop_dir.mkdir(parents=True)
+        (desktop_dir / "package.json").write_text("{}", encoding="utf-8")
+        monkeypatch.delenv("CLOVER_SKIP_AUTO_DESKTOP_BUILD", raising=False)
+        monkeypatch.setattr(update_cmd, "_should_auto_build_desktop_on_update", lambda: True)
+        monkeypatch.setattr(desktop_app_entry, "is_desktop_provisioned", lambda d, r: True)
+        assert desktop_app_entry.maybe_auto_provision_desktop_on_startup(tmp_path) is None
+
+    def test_spawns_background_process_when_needed(self, tmp_path, monkeypatch):
+        desktop_dir = tmp_path / "apps" / "desktop"
+        desktop_dir.mkdir(parents=True)
+        (desktop_dir / "package.json").write_text("{}", encoding="utf-8")
+        monkeypatch.delenv("CLOVER_SKIP_AUTO_DESKTOP_BUILD", raising=False)
+        monkeypatch.setattr(update_cmd, "_should_auto_build_desktop_on_update", lambda: True)
+        monkeypatch.setattr(desktop_app_entry, "is_desktop_provisioned", lambda d, r: False)
+
+        spawned_cmd = []
+
+        def fake_spawn(root):
+            spawned_cmd.append(root)
+            return type("_Proc", (), {"pid": 9999})()
+
+        monkeypatch.setattr(desktop_app_entry, "spawn_background_desktop_provision", fake_spawn)
+        # Bypass pytest check for this specific test
+        monkeypatch.setattr(desktop_app_entry.sys, "modules", {})
+        monkeypatch.delenv("PYTEST_CURRENT_TEST", raising=False)
+
+        proc = desktop_app_entry.maybe_auto_provision_desktop_on_startup(tmp_path)
+        assert proc is not None
+        assert spawned_cmd == [tmp_path]
+
+
+class TestRepairNodeDepsRebuildDesktop:
+    def test_repair_node_deps_rebuilds_desktop_clean(self, tmp_path, monkeypatch):
+        completions = []
+        rebuild_calls = []
+
+        monkeypatch.setattr(update_cmd, "_update_node_dependencies", lambda: [])
+
+        class _FakeM:
+            PROJECT_ROOT = tmp_path
+            @staticmethod
+            def _build_web_ui(p): pass
+
+        monkeypatch.setattr(update_cmd, "_m", lambda: _FakeM)
+        monkeypatch.setattr(update_cmd, "_desktop_app_present", lambda d: False)
+        monkeypatch.setattr(
+            update_cmd,
+            "_rebuild_desktop_after_update",
+            lambda d, had_desktop_app_before_update: rebuild_calls.append(d) or True,
+        )
+        monkeypatch.setattr(update_cmd, "_check_and_apply_config_migration", lambda **kw: None)
+
+        res = update_cmd._repair_node_deps_on_current_checkout(
+            lambda msg: completions.append(msg),
+            completion_message="✓ Done!",
+        )
+        assert res is True
+        assert len(rebuild_calls) == 1
+        assert completions == ["✓ Done!"]
+
+    def test_repair_node_deps_rebuild_failure_withholds_banner(self, tmp_path, monkeypatch):
+        completions = []
+        summaries = []
+        exit_codes = []
+
+        monkeypatch.setattr(update_cmd, "_update_node_dependencies", lambda: [])
+
+        class _FakeM:
+            PROJECT_ROOT = tmp_path
+            @staticmethod
+            def _build_web_ui(p): pass
+
+        monkeypatch.setattr(update_cmd, "_m", lambda: _FakeM)
+        monkeypatch.setattr(update_cmd, "_desktop_app_present", lambda d: False)
+        monkeypatch.setattr(
+            update_cmd,
+            "_rebuild_desktop_after_update",
+            lambda d, had_desktop_app_before_update: False,
+        )
+        monkeypatch.setattr(update_cmd, "_check_and_apply_config_migration", lambda **kw: None)
+        monkeypatch.setattr(
+            update_cmd,
+            "_print_update_summary",
+            lambda **kw: summaries.append(kw),
+        )
+        monkeypatch.setattr(
+            update_cmd,
+            "_write_gateway_update_exit_code",
+            lambda code: exit_codes.append(code),
+        )
+
+        res = update_cmd._repair_node_deps_on_current_checkout(
+            lambda msg: completions.append(msg),
+            gateway_mode=True,
+            completion_message="✓ Done!",
+        )
+        assert res is False
+        assert len(completions) == 0  # Clean completion banner withheld!
+        assert len(summaries) == 1
+        assert summaries[0]["desktop_build_ok"] is False
+        assert exit_codes == [False]
