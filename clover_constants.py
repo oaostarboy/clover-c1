@@ -45,7 +45,7 @@ def reset_clover_home_override(token: Token) -> None:
 def get_clover_home_override() -> str | None:
     """Return the active context-local Clover home override, if any."""
     override = _CLOVER_HOME_OVERRIDE.get()
-    if override is _UNSET or not override:
+    if override is _UNSET or not override or not isinstance(override, (str, Path)):
         return None
     return str(override)
 
