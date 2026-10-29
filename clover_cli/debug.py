@@ -14,7 +14,9 @@ Currently supports:
 import io
 import json
 import logging
+import os
 import re
+import ssl
 import sys
 import time
 import urllib.request
@@ -43,11 +45,36 @@ _EMAIL_ADDRESS_RE = re.compile(
 
 
 # ---------------------------------------------------------------------------
-# Paste services — try paste.rs first, dpaste.com as fallback.
+# Paste services — try paste.rs, dpaste (dpaste.org / dpaste.com), paste.c-net.org
 # ---------------------------------------------------------------------------
 
 _PASTE_RS_URL = "https://paste.rs/"
+_DPASTE_ORG_URL = "https://dpaste.org/api/"
 _DPASTE_COM_URL = "https://dpaste.com/api/"
+_PASTE_CNET_URL = "https://paste.c-net.org/"
+_CURL_USER_AGENT = "curl/7.88.1"
+
+
+def _get_ssl_context() -> ssl.SSLContext:
+    """Return an SSLContext configured with certifi or CA bundle when available."""
+    for var_name in ("CLOVER_CA_BUNDLE", "SSL_CERT_FILE", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE"):
+        ca_path = os.environ.get(var_name, "").strip()
+        if ca_path:
+            p = Path(ca_path).expanduser()
+            if p.is_file():
+                try:
+                    return ssl.create_default_context(cafile=str(p))
+                except Exception:
+                    pass
+
+    try:
+        import certifi
+
+        return ssl.create_default_context(cafile=certifi.where())
+    except Exception:
+        pass
+
+    return ssl.create_default_context()
 
 # Maximum bytes to read from a single log file for upload.
 # paste.rs caps at ~1 MB; we stay under that with headroom.
@@ -239,9 +266,9 @@ def delete_paste(url: str) -> bool:
     target = f"{_PASTE_RS_URL}{paste_id}"
     req = urllib.request.Request(
         target, method="DELETE",
-        headers={"User-Agent": "clover-c1/debug-share"},
+        headers={"User-Agent": _CURL_USER_AGENT},
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, context=_get_ssl_context(), timeout=30) as resp:
         return 200 <= resp.status < 300
 
 
@@ -272,10 +299,10 @@ def _upload_paste_rs(content: str) -> str:
         _PASTE_RS_URL, data=data, method="POST",
         headers={
             "Content-Type": "text/plain; charset=utf-8",
-            "User-Agent": "clover-c1/debug-share",
+            "User-Agent": _CURL_USER_AGENT,
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, context=_get_ssl_context(), timeout=30) as resp:
         url = resp.read().decode("utf-8").strip()
     if not url.startswith("http"):
         raise ValueError(f"Unexpected response from paste.rs: {url[:200]}")
@@ -283,9 +310,9 @@ def _upload_paste_rs(content: str) -> str:
 
 
 def _upload_dpaste_com(content: str, expiry_days: int = 7) -> str:
-    """Upload to dpaste.com.  Returns the paste URL.
+    """Upload to dpaste (trying dpaste.org then dpaste.com). Returns the paste URL.
 
-    dpaste.com uses multipart form data.
+    dpaste uses multipart form data.
     """
     boundary = "----CloverDebugBoundary9f3c"
 
@@ -304,42 +331,107 @@ def _upload_dpaste_com(content: str, expiry_days: int = 7) -> str:
         + f"--{boundary}--\r\n"
     ).encode("utf-8")
 
+    errors: list[str] = []
+    for endpoint in (_DPASTE_ORG_URL, _DPASTE_COM_URL):
+        req = urllib.request.Request(
+            endpoint, data=body, method="POST",
+            headers={
+                "Content-Type": f"multipart/form-data; boundary={boundary}",
+                "User-Agent": _CURL_USER_AGENT,
+            },
+        )
+        try:
+            with urllib.request.urlopen(req, context=_get_ssl_context(), timeout=30) as resp:
+                raw = resp.read().decode("utf-8").strip()
+                url = raw.strip('"')
+            if url.startswith("http"):
+                return url
+            errors.append(f"{endpoint}: unexpected response: {raw[:200]}")
+        except Exception as exc:
+            errors.append(f"{endpoint}: {exc}")
+
+    raise RuntimeError("; ".join(errors))
+
+
+def _upload_paste_c_net(content: str) -> str:
+    """Upload to paste.c-net.org.  Returns the paste URL."""
+    data = content.encode("utf-8")
     req = urllib.request.Request(
-        _DPASTE_COM_URL, data=body, method="POST",
+        _PASTE_CNET_URL, data=data, method="POST",
         headers={
-            "Content-Type": f"multipart/form-data; boundary={boundary}",
-            "User-Agent": "clover-c1/debug-share",
+            "Content-Type": "text/plain; charset=utf-8",
+            "User-Agent": _CURL_USER_AGENT,
         },
     )
-    with urllib.request.urlopen(req, timeout=30) as resp:
+    with urllib.request.urlopen(req, context=_get_ssl_context(), timeout=30) as resp:
         url = resp.read().decode("utf-8").strip()
     if not url.startswith("http"):
-        raise ValueError(f"Unexpected response from dpaste.com: {url[:200]}")
+        raise ValueError(f"Unexpected response from paste.c-net.org: {url[:200]}")
     return url
 
 
 def upload_to_pastebin(content: str, expiry_days: int = 7) -> str:
-    """Upload *content* to a paste service, trying paste.rs then dpaste.com.
+    """Upload *content* to a paste service, trying paste.rs, dpaste, then paste.c-net.org.
 
     Returns the paste URL on success, raises on total failure.
     """
     errors: list[str] = []
 
-    # Try paste.rs first (simple, fast)
+    # 1. Try paste.rs first (simple, fast)
     try:
         return _upload_paste_rs(content)
     except Exception as exc:
         errors.append(f"paste.rs: {exc}")
 
-    # Fallback: dpaste.com (supports expiry)
+    # 2. Fallback: dpaste (supports expiry, tries dpaste.org then dpaste.com)
     try:
         return _upload_dpaste_com(content, expiry_days=expiry_days)
     except Exception as exc:
-        errors.append(f"dpaste.com: {exc}")
+        errors.append(f"dpaste: {exc}")
+
+    # 3. Fallback: paste.c-net.org
+    try:
+        return _upload_paste_c_net(content)
+    except Exception as exc:
+        errors.append(f"paste.c-net.org: {exc}")
 
     raise RuntimeError(
         "Failed to upload to any paste service:\n  " + "\n  ".join(errors)
     )
+
+
+def format_local_bundle(bundle: dict[str, str]) -> str:
+    """Format full bundle text for local saving or viewing."""
+    parts = [bundle.get("report", "")]
+    for title, label in (
+        ("FULL agent.log", "agent.log"),
+        ("FULL gateway.log", "gateway.log"),
+        ("FULL gui.log", "gui.log"),
+        ("FULL desktop.log", "desktop.log"),
+    ):
+        body = bundle.get(label)
+        if body:
+            parts.append(f"\n\n{'=' * 60}\n{title}\n{'=' * 60}\n\n{body}")
+    return "".join(parts)
+
+
+def save_debug_bundle_local(
+    bundle: dict[str, str],
+    *,
+    dest_dir: Optional[Path] = None,
+    filename_prefix: str = "debug_report",
+) -> Path:
+    """Save redacted debug bundle to a local timestamped text file.
+
+    Returns the Path to the saved file.
+    """
+    out_dir = dest_dir if dest_dir is not None else (get_clover_home() / "pastes")
+    out_dir.mkdir(parents=True, exist_ok=True)
+    timestamp = time.strftime("%Y%m%d_%H%M%S")
+    file_path = out_dir / f"{filename_prefix}_{timestamp}.txt"
+    formatted = format_local_bundle(bundle)
+    file_path.write_text(formatted, encoding="utf-8")
+    return file_path
 
 
 # ---------------------------------------------------------------------------
@@ -755,7 +847,15 @@ def build_debug_share(
     failures: list[str] = []
 
     # 1. Summary report (required — raises on failure so callers can fall back)
-    urls["Report"] = upload_to_pastebin(report, expiry_days=expiry)
+    try:
+        urls["Report"] = upload_to_pastebin(report, expiry_days=expiry)
+    except Exception as exc:
+        local_path = save_debug_bundle_local(bundle)
+        err = RuntimeError(
+            f"{exc}\n(Debug report saved locally to: {local_path})"
+        )
+        setattr(err, "local_path", local_path)
+        raise err from exc
 
     # 2-5. Full logs (optional — failures are collected, not raised)
     for label in ("agent.log", "gateway.log", "gui.log", "desktop.log"):
@@ -854,7 +954,11 @@ def run_debug_share(args):
         )
     except RuntimeError as exc:
         print(f"\nUpload failed: {exc}", file=sys.stderr)
-        print("\nRun `clover debug share --local` to print the report instead.\n")
+        local_path = getattr(exc, "local_path", None)
+        if local_path:
+            print(f"\nDebug report saved locally to:\n  {local_path}\n")
+        else:
+            print("\nRun `clover debug share --local` to print the report instead.\n")
         sys.exit(1)
 
     # Print results
