@@ -1,0 +1,4 @@
+<!doctype html><meta charset="utf-8"><script type="module">
+import {botanicalRaster,drawBotanical} from './candidate.mjs';
+window.run=async()=>{const c=new OffscreenCanvas(400,300),ctx=c.getContext('2d');ctx.setTransform(1.25,0,0,1.25,0,0);let snapshots=[];for(let i=0;i<1800;i++){drawBotanical(ctx,320,240,i/60);if((i+1)%120===0){let r=botanicalRaster(ctx);snapshots.push({frame:i+1,masks:r.masks.size,locations:[...r.locations.values()].reduce((a,b)=>a+b.size,0),columns:r.washColumns.size,rows:r.washRows.size,maskBytes:[...r.masks.values()].reduce((n,m)=>n+m.offsets.byteLength+m.xs.byteLength+m.ys.byteLength+m.alpha.byteLength,0),imageBytes:r.image.data.byteLength})}}return {cases:[],cache:snapshots}};
+</script>
