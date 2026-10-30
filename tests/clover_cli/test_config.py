@@ -903,7 +903,7 @@ class TestConfigSupportFloor:
         "agent": {"verify_on_stop": False},
         "auxiliary": {"compression": {"model": "gpt-x"}},
         "compression": {},
-        "delegation": {"max_concurrent_children": 8},
+        "delegation": {"max_concurrent_children": 8, "reasoning_effort": "low"},
         "display": {
             "platforms": {"telegram": {"tool_progress": "verbose"}},
             "tool_progress_overrides": {"telegram": "verbose"},
@@ -1577,11 +1577,14 @@ class TestDelegationCapUnificationMigration:
 
 
     def test_no_delegation_section_is_noop(self, tmp_path):
+        from clover_cli.config_migrations import _migrate_to_33
+
         with patch.dict(os.environ, {"CLOVER_HOME": str(tmp_path)}):
             self._write(tmp_path, "_config_version: 32\nmodel:\n  provider: openrouter\n")
-            migrate_config(interactive=False, quiet=True)
+            results = {"env_added": [], "config_added": [], "warnings": []}
+            _migrate_to_33(results, quiet=True)
             raw = yaml.safe_load((tmp_path / "config.yaml").read_text())
-        # Migration must not materialize a delegation section it never had.
+        # Migration 33 must not materialize a delegation section it never had.
         assert "delegation" not in raw
 
 
@@ -1820,3 +1823,51 @@ class TestConfigCommandFailClosedSurface:
         assert excinfo.value.code == 1
         assert "not valid YAML" in capsys.readouterr().err
         assert config_path.read_text(encoding="utf-8") == original
+
+
+class TestDelegationReasoningEffortMigration:
+    """v41 → v42: delegation.reasoning_effort defaults to low."""
+
+    def test_default_config_has_low_reasoning_effort(self):
+        assert DEFAULT_CONFIG["delegation"]["reasoning_effort"] == "low"
+
+    def test_migrate_sets_low_reasoning_effort_when_no_delegation_section(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text("_config_version: 41\nmodel:\n  provider: openrouter\n", encoding="utf-8")
+        with patch.dict(os.environ, {"CLOVER_HOME": str(tmp_path)}):
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert raw["_config_version"] == 42
+        assert raw["delegation"]["reasoning_effort"] == "low"
+
+    def test_migrate_sets_low_reasoning_effort_when_unset_in_delegation(self, tmp_path):
+        config_path = tmp_path / "config.yaml"
+        config_path.write_text(
+            "_config_version: 41\ndelegation:\n  max_iterations: 100\n",
+            encoding="utf-8",
+        )
+        with patch.dict(os.environ, {"CLOVER_HOME": str(tmp_path)}):
+            migrate_config(interactive=False, quiet=True)
+            raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        assert raw["_config_version"] == 42
+        assert raw["delegation"]["max_iterations"] == 100
+        assert raw["delegation"]["reasoning_effort"] == "low"
+
+    def test_migrate_preserves_explicit_reasoning_effort(self, tmp_path):
+        for explicit_value in ["high", "none", False]:
+            config_path = tmp_path / "config.yaml"
+            dumped = yaml.safe_dump(
+                {
+                    "_config_version": 41,
+                    "delegation": {
+                        "max_iterations": 100,
+                        "reasoning_effort": explicit_value,
+                    },
+                }
+            )
+            config_path.write_text(dumped, encoding="utf-8")
+            with patch.dict(os.environ, {"CLOVER_HOME": str(tmp_path)}):
+                migrate_config(interactive=False, quiet=True)
+                raw = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+            assert raw["_config_version"] == 42
+            assert raw["delegation"]["reasoning_effort"] == explicit_value

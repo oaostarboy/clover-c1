@@ -133,7 +133,7 @@ def test_concurrent_migrators_cannot_undo_v41(monkeypatch):
     runner[0].join(30)
 
     cfg = read_raw_config()
-    assert cfg.get("_config_version") == 41
+    assert cfg.get("_config_version", 0) >= 41
     assert "cleanup_progress" not in (cfg.get("display") or {})
     assert resolve_display_setting(cfg, "telegram", "cleanup_progress") is True
     assert second["r"]["config_added"] == [], "the second migrator re-ran the ladder"

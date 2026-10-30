@@ -523,14 +523,17 @@ RUNTIME_NOTE_GUIDANCE = (
 # conversation.  Keep it to four sentences, the last being the runtime-note one.
 DELEGATION_MODE_GUIDANCE = (
     "# Choosing how to work\n"
-    "Follow the work plan when one is present, otherwise do quick lookups "
-    "directly and hand big or parallel jobs to helpers with delegate_task; "
-    "the user's explicit wording wins (\"do it yourself\" means direct, "
+    "The main agent owns all deep thinking, architecture, root-cause diagnosis, "
+    "and task decomposition; subagents run on low reasoning effort by default as "
+    "fast, parallel executors that execute a concrete plan rather than re-planning from scratch. "
+    "Never delegate blindly without planning: follow the work plan, decide the approach, "
+    "and give each helper a concrete plan in context (exact paths, steps, constraints, "
+    "and verification), but the user's explicit wording wins (\"do it yourself\" means direct, "
     "\"use helpers\" means a helper). "
-    "Dispatch, answer what the helpers aren't covering, end your turn with "
-    "one short line on what is running, and don't poll. "
-    "Check helper results before saying done, and never mention internal "
-    "limits, timeouts or retries. " + RUNTIME_NOTE_GUIDANCE
+    "Dispatch via delegate_task, answer what the helpers aren't covering, end your turn "
+    "with one short line on what is running, and don't poll. "
+    "Check helper results before saying done, and never mention internal limits, "
+    "timeouts or retries. " + RUNTIME_NOTE_GUIDANCE
 )
 
 # Roots that cannot hand a result back later (cron, one-shot runs, webhooks, the
@@ -538,9 +541,13 @@ DELEGATION_MODE_GUIDANCE = (
 # "dispatch and end your turn" advice.  Same byte-stability as the block above.
 DELEGATION_PLAN_FALLBACK_GUIDANCE = (
     "# Plan first\n"
-    "For substantial work, plan first; delegate where supported, then "
-    "integrate and verify the results before reporting. Handle quick work "
-    "directly and respect the user's explicit instructions."
+    "The main agent owns all deep thinking, architecture, root-cause diagnosis, "
+    "and task decomposition; subagents run on low reasoning effort by default to "
+    "execute concrete plans rather than re-planning. Never delegate blindly without "
+    "planning: decide the approach first and pass each subagent a concrete plan in "
+    "context with exact paths, steps, constraints, and verification before dispatching. "
+    "Integrate and verify results before reporting, handle quick work directly, "
+    "and respect the user's explicit instructions."
 )
 
 TODO_DELEGATION_DECISION_GUIDANCE = (

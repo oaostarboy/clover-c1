@@ -49,7 +49,8 @@ Run these in a terminal (the defaults are shown).
 | What | Command |
 | --- | --- |
 | Turn the whole decision off | `clover config set delegation.router.enabled false` |
-| How much it thinks: `none`, `low` (default), `medium`, `high` | `clover config set auxiliary.delegation_router.reasoning_effort low` |
+| Subagent thinking depth: `none`, `low` (default), `medium`, `high` | `clover config set delegation.reasoning_effort low` |
+| How much the router thinks: `none`, `low` (default), `medium`, `high` | `clover config set auxiliary.delegation_router.reasoning_effort low` |
 | Pick the small model yourself | `clover config set auxiliary.delegation_router.provider openai-codex` and `clover config set auxiliary.delegation_router.model gpt-6-luna` |
 | Wait time when it uses your main model (seconds, default 20) | `clover config set delegation.router.slow_model_timeout_seconds 20` |
 | Keep small talk out of the decision (default on) | `clover config set delegation.router.skip_small_talk false` to decide every message |

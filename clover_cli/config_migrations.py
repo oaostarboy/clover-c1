@@ -1132,6 +1132,41 @@ def _migrate_to_41(results: Dict[str, Any], quiet: bool) -> None:
             print(f"    • {note}")
 
 
+def _v42_rewrite_config(config: Dict[str, Any]) -> List[str]:
+    """Populate delegation.reasoning_effort: "low" if unset."""
+    raw_deleg = config.get("delegation")
+    if not isinstance(raw_deleg, dict):
+        raw_deleg = {}
+        config["delegation"] = raw_deleg
+    effort = raw_deleg.get("reasoning_effort")
+    if effort is None or effort == "":
+        raw_deleg["reasoning_effort"] = "low"
+        return ["delegation.reasoning_effort=low (subagent reasoning defaults to low)"]
+    return []
+
+
+def _migrate_to_42(results: Dict[str, Any], quiet: bool) -> None:
+    # ── Version 41 → 42: subagent reasoning effort defaults to low ──
+    # Subagents execute concrete plans rather than re-planning from scratch.
+    # Defaulting delegation.reasoning_effort to "low" keeps subagents fast and
+    # prevents them from inheriting the parent's high/xhigh reasoning effort.
+    _c = _cfg()
+    read_raw_config = _c.read_raw_config
+    _persist_migration = _c._persist_migration
+
+    config = read_raw_config()
+    notes = _v42_rewrite_config(config)
+    if not notes:
+        return
+    try:
+        _persist_migration(config, preserve_keys={("delegation", "reasoning_effort")})
+    except TypeError:
+        _persist_migration(config)
+    results["config_added"].extend(notes)
+    if not quiet:
+        print("  ✓ Set delegation.reasoning_effort to 'low' for subagent execution")
+
+
 #: Registry of (target_version, migration_fn), strictly ascending. The driver
 #: applies every entry whose target version is greater than the on-disk
 #: observe earlier steps' writes via read_raw_config() (filesystem state).
@@ -1161,6 +1196,7 @@ MIGRATIONS: Tuple[Tuple[int, Callable[[Dict[str, Any], bool], None]], ...] = (
     (39, _migrate_to_39),
     (40, _migrate_to_40),
     (41, _migrate_to_41),
+    (42, _migrate_to_42),
 )
 
 

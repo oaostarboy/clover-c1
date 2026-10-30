@@ -2378,7 +2378,10 @@ def warn_deprecated_cwd_env_vars() -> None:
         sys.stderr.write("\n".join(lines) + "\n\n")
 
 
-def _persist_migration(config: Dict[str, Any]) -> None:
+def _persist_migration(
+    config: Dict[str, Any],
+    preserve_keys: Optional[Set[Tuple[str, ...]]] = None,
+) -> None:
     """Persist a migrated config under the migration write invariant.
 
     THE INVARIANT (single source of truth for the whole migration pipeline):
@@ -2406,7 +2409,12 @@ def _persist_migration(config: Dict[str, Any]) -> None:
     on every version bump (``strip_managed=False``); the managed layer still
     wins at load time.
     """
-    save_config(config, preserve_comments=True, strip_managed=False)
+    save_config(
+        config,
+        preserve_comments=True,
+        strip_managed=False,
+        preserve_keys=preserve_keys,
+    )
 
 
 _MIGRATION_LOCK_TIMEOUT_SECONDS = 60.0

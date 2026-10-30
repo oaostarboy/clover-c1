@@ -133,9 +133,14 @@ def test_migrate_config_v39_to_v40_end_to_end(tmp_path, monkeypatch):
 
     raw = _read(config_path)
     assert raw.pop("_config_version") >= 40
-    # Earlier ladder steps may add their own keys; check ours field by field.
+    # Earlier/later ladder steps may add their own keys; check ours field by field.
     for key, value in EXPECTED_CONFIG.items():
-        assert raw[key] == value, key
+        if key == "delegation":
+            assert raw[key]["provider"] == value["provider"]
+            assert raw[key]["model"] == value["model"]
+            assert raw[key].get("reasoning_effort") == "low"
+        else:
+            assert raw[key] == value, key
     for removed in ("fallback_model", "tool_gateway_declined_tools", "sync"):
         assert removed not in raw
     assert "model.provider → auto" in results["config_added"]

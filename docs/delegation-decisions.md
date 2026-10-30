@@ -108,6 +108,7 @@ completions, multimodal messages, or a bare greeting / thank-you.
 
 ```yaml
 delegation:
+  reasoning_effort: low              # default for subagents; none | minimal | low | medium | high
   router:
     enabled: true
     timeout_seconds: 8
@@ -134,6 +135,11 @@ model and waits `slow_model_timeout_seconds` (default 20) instead of
 allow-list, never a length rule) skips the router entirely.
 
 ### Reasoning and the hand-off card
+
+Subagent reasoning defaults to `low`: `delegation.reasoning_effort` defaults to
+`low` instead of inheriting the parent's reasoning level. The main agent owns
+deep architectural thinking, root-cause diagnosis, and planning, while subagents
+act as fast, parallel executors of concrete plans.
 
 The router thinks a little: `auxiliary.delegation_router.reasoning_effort`
 defaults to `low`. With reasoning off, `gpt-6-luna` sized a three-part compare
