@@ -11,6 +11,7 @@ import { ChatBar } from '../../src/app/chat/composer'
 import { handleToolEvent } from '../../src/app/session/hooks/use-message-stream/gateway-event/tools'
 import type { CloverGateway } from '../../src/clover'
 import { Thread } from '../../src/components/assistant-ui/thread'
+import { $delegationAnchors, registerDelegationAnchor } from '../../src/components/assistant-ui/thread/delegation-anchor'
 import { Wordmark } from '../../src/components/chat/wordmark'
 import { $gateway } from '../../src/store/gateway'
 import { setSessionProviderWait } from '../../src/store/provider-wait'
@@ -101,7 +102,23 @@ function Fixture() {
         deps: { nativeSubagentSessionsRef, sessionInterrupted: () => false }
       } as any)
 
+    let savedAnchor: ReturnType<typeof $delegationAnchors.get>[string] | undefined
+    let removeSyntheticAnchor: (() => void) | undefined
+
     ;(window as any).delegationFixture = {
+      hideAnchor: () => {
+        const anchors = $delegationAnchors.get()
+        savedAnchor = anchors[sessionId]
+        const { [sessionId]: _removed, ...rest } = anchors
+        $delegationAnchors.set(rest)
+      },
+      restoreAnchor: () => {
+        if (savedAnchor) registerDelegationAnchor(sessionId, savedAnchor)
+      },
+      syntheticAnchor: (element: HTMLElement) => {
+        removeSyntheticAnchor = registerDelegationAnchor(sessionId, { element, turnStartedAt: $turnStartedAt.get() ?? undefined })
+      },
+      removeSyntheticAnchor: () => removeSyntheticAnchor?.(),
       phase: (phase: 'waiting' | 'tool' | 'working') => {
         setSessionProviderWait(sessionId, phase === 'waiting' ? 'Waiting on fixture provider' : '')
         setSessionDraftingTool(sessionId, phase === 'tool' ? 'terminal' : '')

@@ -88,6 +88,61 @@ test('two helpers around parent finish never fly from an unmeasured origin', asy
   expect((await fixture(page, 'state')).every((agent: any) => agent.status === 'running')).toBe(true)
 })
 
+test('cached split follows a nested scroll after its source disappears', async ({ page }) => {
+  await page.goto('/e2e/fixtures/delegation-particles.html')
+  await expect(page.locator('.clover-activity-art')).toBeVisible()
+  await page.evaluate(() => {
+    const scroller = document.createElement('div')
+    scroller.id = 'test-source-scroller'
+    scroller.style.cssText = 'position:fixed;left:100px;top:100px;width:150px;height:300px;overflow:auto;pointer-events:none'
+    scroller.innerHTML = '<div style="height:1000px;padding-top:150px"><div id="test-source" style="width:64px;height:64px"></div></div>'
+    document.body.append(scroller)
+    ;(window as any).delegationFixture.syntheticAnchor(scroller.querySelector('#test-source'))
+  })
+  await fixture(page, 'spawn', 'scroll-source')
+  const flight = page.locator('.delegation-flight')
+  await expect(flight).toHaveCSS('visibility', 'visible')
+  const before = await flight.evaluate(el => new DOMMatrixReadOnly((el as HTMLElement).style.transform).m42)
+  await page.evaluate(() => {
+    ;(window as any).delegationFixture.removeSyntheticAnchor()
+    document.querySelector<HTMLElement>('#test-source-scroller')!.scrollTop = 100
+  })
+  await page.waitForTimeout(70)
+  const after = await flight.evaluate(el => new DOMMatrixReadOnly((el as HTMLElement).style.transform).m42)
+  expect(after - before).toBeLessThan(-85)
+})
+
+test('late anchor registration starts a current live helper without origin flight', async ({ page }) => {
+  await page.goto('/e2e/fixtures/delegation-particles.html')
+  await expect(page.locator('.clover-activity-art')).toBeVisible()
+  await fixture(page, 'hideAnchor')
+  await fixture(page, 'spawn', 'late-anchor')
+  await expect(page.locator('[data-helper-berth]')).toHaveCount(1)
+  await expect(page.locator('.delegation-flight')).toHaveCSS('visibility', 'hidden')
+  await fixture(page, 'restoreAnchor')
+  await expect(page.locator('.delegation-flight')).toHaveCSS('visibility', 'visible')
+  const position = await page.locator('.delegation-flight').evaluate(el => new DOMMatrixReadOnly((el as HTMLElement).style.transform))
+  expect(position.m41).toBeGreaterThan(20)
+  expect(position.m42).toBeGreaterThan(20)
+})
+
+test('two measured helpers continue splitting after an early parent finish', async ({ page }) => {
+  await page.goto('/e2e/fixtures/delegation-particles.html')
+  await expect(page.locator('.clover-activity-art')).toBeVisible()
+  await fixture(page, 'spawn', 'first-early')
+  await fixture(page, 'spawn', 'second-early')
+  await expect(page.locator('.delegation-flight')).toHaveCount(2)
+  await expect(page.locator('.delegation-flight').nth(1)).toHaveCSS('visibility', 'visible')
+  await fixture(page, 'finish')
+  const positions = async () => page.locator('.delegation-flight').evaluateAll(els => els.map(el => new DOMMatrixReadOnly((el as HTMLElement).style.transform).m41))
+  const before = await positions()
+  await page.waitForTimeout(350)
+  const after = await positions()
+  expect(after[0] - before[0]).toBeGreaterThan(8)
+  expect(after[1] - before[1]).toBeGreaterThan(12)
+  expect((await fixture(page, 'state')).every((agent: any) => agent.status === 'running')).toBe(true)
+})
+
 test('live helper canvas animates internally after splitting settles', async ({ page }) => {
   await page.goto('/e2e/fixtures/delegation-particles.html')
   await expect(page.locator('.clover-activity-art')).toBeVisible()

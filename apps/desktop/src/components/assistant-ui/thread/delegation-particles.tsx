@@ -66,7 +66,14 @@ function ParticleJourney({
     y: 0,
     fromX: 0,
     fromY: 0,
-    sourcePose: null as null | { left: number; top: number; bottom: number; scrollX: number; scrollY: number }
+    sourcePose: null as null | {
+      left: number
+      top: number
+      bottom: number
+      scrollX: number
+      scrollY: number
+      ancestors: { element: HTMLElement; x: number; y: number }[]
+    }
   })
 
   const wakeRef = useRef<() => void>(() => {})
@@ -101,6 +108,7 @@ function ParticleJourney({
 
     const settle = () => {
       state.docked = true
+      state.sourcePose = null
       node.style.visibility = 'hidden'
       target.style.visibility = 'visible'
       stop()
@@ -145,7 +153,13 @@ function ParticleJourney({
 
       if (source?.isConnected && state.docking < 0) {
         const rect = source.getBoundingClientRect()
-        state.sourcePose = { left: rect.left, top: rect.top, bottom: rect.bottom, scrollX: window.scrollX, scrollY: window.scrollY }
+        const ancestors: { element: HTMLElement; x: number; y: number }[] = []
+
+        for (let element = source.parentElement; element && element !== document.body; element = element.parentElement) {
+          ancestors.push({ element, x: element.scrollLeft, y: element.scrollTop })
+        }
+
+        state.sourcePose = { left: rect.left, top: rect.top, bottom: rect.bottom, scrollX: window.scrollX, scrollY: window.scrollY, ancestors }
       }
 
       const pose = state.sourcePose
@@ -158,10 +172,13 @@ function ParticleJourney({
       }
 
       if (pose && state.docking < 0 && (source?.isConnected || state.elapsed < SPLIT_MS)) {
+        const dx = pose.ancestors.reduce((sum, ancestor) => sum + ancestor.x - ancestor.element.scrollLeft, 0)
+        const dy = pose.ancestors.reduce((sum, ancestor) => sum + ancestor.y - ancestor.element.scrollTop, 0)
+
         const rect = {
-          left: pose.left + pose.scrollX - window.scrollX,
-          top: pose.top + pose.scrollY - window.scrollY,
-          bottom: pose.bottom + pose.scrollY - window.scrollY
+          left: pose.left + pose.scrollX - window.scrollX + dx,
+          top: pose.top + pose.scrollY - window.scrollY + dy,
+          bottom: pose.bottom + pose.scrollY - window.scrollY + dy
         }
 
         // A reserved 64px-high lane, to the right of the stable main formation.
@@ -181,6 +198,7 @@ function ParticleJourney({
           state.docking = state.elapsed
           state.fromX = state.x
           state.fromY = state.y
+          state.sourcePose = null
         }
 
         const progress = Math.min(1, (state.elapsed - state.docking) / DOCK_MS)
