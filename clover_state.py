@@ -10666,6 +10666,27 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         return {"tokens": int(row[0] or 0), "cost_usd": float(row[1] or 0.0)}
 
+    def list_session_helpers(
+        self, parent_session_id: str, *, limit: int = 20, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Bounded explicit helpers of one conversation, never arbitrary children.
+
+        Include helpers launched before/after the owner's compression. Missing,
+        hidden or archived owners fail closed; historical unmarked CLI rows are
+        deliberately not recoverable through this interface.
+        """
+        lineage = self.get_compression_lineage(parent_session_id)
+        if not lineage:
+            return []
+        owner = self.get_session(lineage[0])
+        if not owner or owner.get("hidden") or owner.get("archived"):
+            return []
+        return self.list_sessions_rich(
+            limit=min(max(int(limit), 1), 100), offset=max(int(offset), 0),
+            compact_rows=True, project_compression_tips=False,
+            order_by_last_active=True, _helper_parent_ids=lineage,
+        )
+
     def list_sessions_rich(
         self,
         source: str = None,
@@ -10686,6 +10707,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         include_pinned: bool = False,
         session_key: str = None,
         include_hidden: bool = False,
+        _helper_parent_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """List sessions with preview (first user message) and last active timestamp.
 
@@ -10747,7 +10769,16 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         where_clauses = []
         params = []
 
-        if not include_children:
+        if _helper_parent_ids is not None:
+            if not _helper_parent_ids:
+                return []
+            placeholders = ",".join("?" for _ in _helper_parent_ids)
+            where_clauses.append(f"s.parent_session_id IN ({placeholders})")
+            params.extend(_helper_parent_ids)
+            where_clauses.append(
+                f"{_delegate_from_json('s.model_config')} = s.parent_session_id"
+            )
+        elif not include_children:
             # Show roots and user-visible branch/reset sessions, while still
             # hiding sub-agent runs and compression continuations. All four
             # carry parent_session_id, so the shared predicate classifies the

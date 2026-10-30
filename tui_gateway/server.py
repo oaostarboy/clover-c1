@@ -14901,6 +14901,8 @@ def _project_tree_row(r: dict) -> dict:
         # (flattenSessionsWithBranches keys on this); without it, lane rows can't
         # draw the └─ connector the flat Recents list shows.
         "parent_session_id": r.get("parent_session_id"),
+        "helpers": r.get("helpers", []),
+        "helpers_has_more": r.get("helpers_has_more", False),
         "title": r.get("title"),
         "preview": r.get("preview"),
         "started_at": r.get("started_at") or 0,
@@ -14948,6 +14950,8 @@ def _project_tree_inputs(
         # reads per build on a long-lived database.
         compact_rows=True,
     )
+    from clover_cli.session_helpers import attach_session_helpers
+    attach_session_helpers(db, rows)
     sessions = [_project_tree_row(r) for r in rows]
     # Parallel-warm the git cache so build_tree's resolver reads it instead of
     # cold-probing each cwd in sequence (matters on the drill-in path, which

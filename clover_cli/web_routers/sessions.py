@@ -57,6 +57,21 @@ _read_session_import_body = late("_read_session_import_body")
 _session_latest_descendant = late("_session_latest_descendant")
 _strip_session_list_rows = late("_strip_session_list_rows")
 
+@list_router.get("/api/sessions/{session_id}/helpers")
+def get_session_helpers(session_id: str, limit: int = Query(20, ge=1, le=99),
+                        offset: int = Query(0, ge=0), profile: Optional[str] = None):
+    from clover_cli.session_helpers import session_helper_page
+
+    db = _open_session_db_for_profile(profile, read_only=True)
+    try:
+        page = session_helper_page(db, session_id, limit=limit, offset=offset)
+        row_profile = _cron_profile_home(profile)[0] if profile else _cron_default_profile()
+        for row in page["sessions"]:
+            row["profile"] = row_profile
+        return page
+    finally:
+        db.close()
+
 
 @list_router.get("/api/sessions")
 def get_sessions(
@@ -152,6 +167,8 @@ def get_sessions(
             # with the serving profile even when the request wasn't explicitly
             # scoped, so default-profile rows never circulate unowned.
             row_profile = profile_name or _cron_default_profile()
+            from clover_cli.session_helpers import attach_session_helpers
+            attach_session_helpers(db, sessions)
             for s in sessions:
                 s["is_active"] = (
                     s.get("ended_at") is None

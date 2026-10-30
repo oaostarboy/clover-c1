@@ -14,6 +14,27 @@ import { capabilityScoped, cloverApi, getApiRequestConnection, type ProfileScope
 
 const SESSION_LIST_REQUEST_TIMEOUT_MS = 60_000
 
+export interface SessionHelpersPage {
+  sessions: SessionInfo[]
+  has_more: boolean
+  limit: number
+  offset: number
+}
+
+export function listSessionHelpers(parent: SessionInfo, offset = 0): Promise<SessionHelpersPage> {
+  const scope = { connectionId: parent.connection_id, profile: parent.profile }
+  const query = new URLSearchParams({ limit: '20', offset: String(offset) })
+
+  if (parent.profile) {
+    query.set('profile', parent.profile)
+  }
+
+  return cloverApi<SessionHelpersPage>({
+    ...sessionScoped(scope),
+    path: `/api/sessions/${encodeURIComponent(parent.id)}/helpers?${query}`
+  })
+}
+
 function sessionScoped(scope?: ProfileScope): { connectionId?: string; profile?: string } {
   if (scope === undefined || scope === null) {
     return {}

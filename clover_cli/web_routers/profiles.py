@@ -345,6 +345,8 @@ def get_profiles_sessions(
             )
             total += profile_total
             profile_totals[name] = profile_total
+            from clover_cli.session_helpers import attach_session_helpers
+            attach_session_helpers(db, rows)
             for s in rows:
                 s["profile"] = name
                 s["is_default_profile"] = name == "default"
@@ -458,7 +460,7 @@ def get_profiles_sessions_sidebar(
         return rows
 
     def _slice(db, *, source=None, exclude=None, cap):
-        return db.list_sessions_rich(
+        rows = db.list_sessions_rich(
             source=source,
             exclude_sources=exclude or None,
             limit=cap,
@@ -472,6 +474,8 @@ def get_profiles_sessions_sidebar(
             # aged past the window — otherwise its Pinned row renders empty.
             include_pinned=True,
         )
+        from clover_cli.session_helpers import attach_session_helpers
+        return attach_session_helpers(db, rows)
 
     scanned: List[Tuple[str, Path]] = []
     for name, home in targets:

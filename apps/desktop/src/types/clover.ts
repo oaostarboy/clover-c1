@@ -475,6 +475,9 @@ export interface SessionCreateResponse {
 }
 
 export interface SessionInfo {
+  /** Explicit delegates, scoped to this owning conversation (not branches). */
+  helpers?: SessionInfo[]
+  helpers_has_more?: boolean
   archived?: boolean
   cwd?: null | string
   /** Git branch checked out in {@link cwd} when the session started/resumed.
