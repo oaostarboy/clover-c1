@@ -7,7 +7,7 @@ import {
   useMessageRuntime
 } from '@assistant-ui/react'
 import { useStore } from '@nanostores/react'
-import { type FC, type ReactNode, useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { type FC, type ReactNode, useCallback, useMemo, useState } from 'react'
 import { useInRouterContext, useNavigate } from 'react-router'
 
 import { useSessionView } from '@/app/chat/session-view'
@@ -318,38 +318,12 @@ const AssistantStatusSlot: FC = () => {
     return s.message.status?.type === 'running' && s.message.content.length === 0 ? 'placeholder' : 'activity'
   })
 
-  // Keep a departing placeholder mounted through the 240ms presentation exit
-  // so the clover formation dissolves gracefully in the left rail while first-token
-  // text begins streaming in the reading line.
-  const [departingPlaceholder, setDepartingPlaceholder] = useState(false)
-  const lastSlotRef = useRef(slot)
-
-  // eslint-disable-next-line no-restricted-syntax -- previous presentation phase for edge detection, not an atom mirror
-  useEffect(() => {
-    if (lastSlotRef.current === 'placeholder' && slot !== 'placeholder') {
-      const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
-
-      if (!reduced) {
-        setDepartingPlaceholder(true)
-        const id = window.setTimeout(() => setDepartingPlaceholder(false), 240)
-
-        return () => window.clearTimeout(id)
-      }
-    }
-
-    lastSlotRef.current = slot
-  }, [slot])
-
-  if (slot === 'none' && !departingPlaceholder) {
+  if (slot === 'none') {
     return null
   }
 
   if (slot === 'placeholder') {
     return <ResponseLoadingIndicator />
-  }
-
-  if (departingPlaceholder) {
-    return <ResponseLoadingIndicator active={false} />
   }
 
   return <TurnActivityIndicator />

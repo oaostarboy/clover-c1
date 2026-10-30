@@ -36,6 +36,7 @@ import { isSecondaryWindow } from '@/store/windows'
 
 import { MessageRenderBoundary } from '../message-render-boundary'
 
+import { ThreadActivityPresence } from './status'
 import { resolveShowEarlierAction, useTranscriptWindow } from './transcript-window'
 
 type ThreadMessageComponents = ComponentProps<typeof ThreadPrimitive.MessageByIndex>['components']
@@ -832,6 +833,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
               </button>
             )}
             {rows}
+            <ThreadActivityPresence />
             {loadingIndicator}
             {clampToComposer && (
               <div

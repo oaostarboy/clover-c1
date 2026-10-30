@@ -70,6 +70,11 @@ export function CloverParticles({
       frame++
       const state = phaseRef.current
       const isDeparting = departingRef.current
+
+      if (!isDeparting) {
+        exitFrame = 0
+      }
+
       const still = motion.matches || state === 'waiting'
       const time = still ? 0 : frame / 24
 
@@ -203,7 +208,7 @@ export function CloverParticles({
     phaseRef.current = effectivePhase
     canvas.dataset.cloverPhase = effectivePhase
     canvas.dispatchEvent(new Event('clover-phase-change'))
-  }, [phase])
+  }, [phase, departing])
 
   return (
     <canvas
