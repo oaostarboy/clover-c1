@@ -20,3 +20,11 @@ it('keeps real thinking and Stop available without animation finishing the job',
   act(() => upsertSubagent('s', { subagent_id: 'a', status: 'failed', summary: 'Backend failure' }, false, 'subagent.complete'))
   expect(screen.getByText('Backend failure')).toBeTruthy()
 })
+it('distinguishes failed workers from those still running', () => {
+  upsertSubagent('s', { subagent_id: 'a', goal: 'One', status: 'running' })
+  upsertSubagent('s', { subagent_id: 'b', goal: 'Two', status: 'running' })
+  upsertSubagent('s', { subagent_id: 'b', status: 'failed' }, false, 'subagent.complete')
+  render(<SubagentStrip sessionId="s" />)
+  expect(screen.getByRole('button', { expanded: false }).textContent).toContain('1 Running')
+  expect(screen.getByRole('button', { expanded: false }).textContent).toContain('1 Failed')
+})

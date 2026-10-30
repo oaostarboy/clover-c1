@@ -61,12 +61,15 @@ export function SubagentStrip({ sessionId }: { sessionId: string }) {
   if (!agents.length) return null
   const attention = agents.filter(agent => agent.status === 'failed' || agent.status === 'interrupted')
   const summary = attention[0] ?? agents.find(agent => agent.status === 'running' || agent.status === 'queued') ?? agents.at(-1)!
+  const counts = (['running', 'queued', 'completed', 'failed', 'interrupted'] as const)
+    .map(status => ({ status, count: agents.filter(agent => agent.status === status).length }))
+    .filter(item => item.count > 0)
   return <section className="delegation-strip" data-slot="subagent-strip">
     <button className="delegation-strip-toggle" type="button" aria-expanded={expanded} onClick={() => setExpanded(value => !value)}>
       <DelegationBerths sessionId={sessionId} />
       <span className="shrink-0">{t.statusStack.subagents(agents.length)}</span>
       <span className="min-w-0 truncate text-muted-foreground">{summary.goal}</span>
-      <span className={attention.length ? 'text-destructive' : 'text-muted-foreground'}>{t.statusStack.delegation[summary.status]}</span>
+      <span className={attention.length ? 'text-destructive' : 'text-muted-foreground'}>{counts.map(({ status, count }) => `${count} ${t.statusStack.delegation[status]}`).join(' · ')}</span>
       <DisclosureCaret open={expanded} size="1em" />
     </button>
     {/* Failures never depend on an animation or an opened drawer. */}
