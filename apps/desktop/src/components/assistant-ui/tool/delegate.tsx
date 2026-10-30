@@ -3,8 +3,8 @@
 import { useStore } from '@nanostores/react'
 import { type FC, type ReactNode, useMemo } from 'react'
 
-import { ActivityPresence } from '@/components/assistant-ui/thread/activity-presence'
 import { useSessionView } from '@/app/chat/session-view'
+import { ActivityPresence } from '@/components/assistant-ui/thread/activity-presence'
 import { useElapsedSeconds } from '@/components/chat/activity-timer'
 import { ActivityTimerText } from '@/components/chat/activity-timer-text'
 import { SCAFFOLD_GLYPH_CLASS, SCAFFOLD_LABEL_CLASS, SCAFFOLD_META_CLASS } from '@/components/chat/scaffold-row'
@@ -155,13 +155,25 @@ export const DelegateTool: FC<Pick<ToolPart, 'args' | 'result' | 'toolCallId'>> 
 
   return (
     <div>
-    <ActivityPresence active={busy && rows.some(row => isDelegateRowLive(row.status))} phase="tool" sessionId={sessionId} turnStartedAt={turnStartedAt ?? undefined} />
-    <details className="min-w-0" data-delegate-card="" data-slot="tool-block" open={rows.some(row => row.status === 'failed' || row.status === 'interrupted') || undefined}>
-      <summary className="cursor-pointer text-xs text-muted-foreground">{t.statusStack.subagents(rows.length)}</summary>
-      {rows.map(row => (
-        <DelegateRowView key={row.id} row={row} />
-      ))}
-    </details>
+      <ActivityPresence
+        active={busy && rows.some(row => isDelegateRowLive(row.status))}
+        phase="tool"
+        sessionId={sessionId}
+        turnStartedAt={turnStartedAt ?? undefined}
+      />
+      <details
+        className="min-w-0"
+        data-delegate-card=""
+        data-slot="tool-block"
+        open={rows.some(row => row.status === 'failed' || row.status === 'interrupted') || undefined}
+      >
+        <summary className="cursor-pointer text-xs text-muted-foreground">
+          {t.statusStack.subagents(rows.length)}
+        </summary>
+        {rows.map(row => (
+          <DelegateRowView key={row.id} row={row} />
+        ))}
+      </details>
     </div>
   )
 }

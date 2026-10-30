@@ -1,6 +1,6 @@
 import { type ReactNode, useEffect, useRef, useState } from 'react'
-import { CloverParticles, type CloverPhase } from './clover-particles'
 
+import { CloverParticles, type CloverPhase } from './clover-particles'
 import { registerDelegationAnchor } from './delegation-anchor'
 
 /** A presentation lifetime, not a turn lifetime. No answer or control waits for
@@ -31,14 +31,20 @@ export function ActivityPresence({
   useEffect(() => {
     if (active) {
       setShown(true)
+
       return
     }
+
     const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
+
     if (reduced) {
       setShown(false)
+
       return
     }
+
     const id = window.setTimeout(() => setShown(false), departDuration)
+
     return () => window.clearTimeout(id)
   }, [active, departDuration])
 
@@ -47,15 +53,11 @@ export function ActivityPresence({
   }
 
   return (
-    <div ref={anchor} className="clover-activity-anchor" data-active={active ? '' : undefined}>
+    <div className="clover-activity-anchor" data-active={active ? '' : undefined} ref={anchor}>
       {active && children}
       {shown && (
-        <div
-          aria-hidden="true"
-          className="clover-activity-art"
-          data-state={active ? 'present' : 'leaving'}
-        >
-          <CloverParticles phase={phase} departing={!active} />
+        <div aria-hidden="true" className="clover-activity-art" data-state={active ? 'present' : 'leaving'}>
+          <CloverParticles departing={!active} phase={phase} />
         </div>
       )}
     </div>

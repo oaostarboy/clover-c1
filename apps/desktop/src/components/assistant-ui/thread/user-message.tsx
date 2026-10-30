@@ -7,7 +7,6 @@ import { ReactionBadge, ReactionPicker } from '@/components/assistant-ui/thread/
 import { MessageTimelineTimestamp } from '@/components/assistant-ui/thread/timeline-timestamp'
 import { type RestoreMessageTarget } from '@/components/assistant-ui/thread/types'
 import { useMessageReactions } from '@/components/assistant-ui/thread/use-message-reactions'
-import { isDelegationWakeup } from './presentation-noise'
 import { UserMessageText } from '@/components/assistant-ui/thread/user-message-text'
 import { Codicon } from '@/components/ui/codicon'
 import { useResizeObserver } from '@/hooks/use-resize-observer'
@@ -18,6 +17,8 @@ import { cn } from '@/lib/utils'
 import { $gateway } from '@/store/gateway'
 import { notifyThreadEditOpen } from '@/store/thread-scroll'
 import { isWatchWindow } from '@/store/windows'
+
+import { isDelegationWakeup } from './presentation-noise'
 
 /** True when the user has a live text highlight (drag-select / triple-click). */
 export function hasTextSelection(): boolean {
@@ -43,10 +44,10 @@ export function StickyHumanMessageContainer({
     <>
       <div
         className="group/user-message sticky z-40 -mx-4 flex w-[calc(100%+2rem)] min-w-0 max-w-none flex-col items-stretch gap-0 self-end overflow-visible bg-(--ui-chat-surface-background) px-4 pb-(--conversation-turn-gap) pt-1"
-        style={{ backgroundColor: 'var(--ui-bg-chrome)' }}
         data-message-id={messageId}
         data-role="user"
         data-slot="aui_user-message-root"
+        style={{ backgroundColor: 'var(--ui-bg-chrome)' }}
       >
         {children}
       </div>
@@ -374,7 +375,9 @@ export const UserMessage: FC<{
 
   // Injected background-process notification, not a human prompt — render the
   // compact system-style notice (after all hooks above have run).
-  if (isDelegationWakeup(messageText)) return null
+  if (isDelegationWakeup(messageText)) {
+    return null
+  }
 
   if (PROCESS_NOTIFICATION_RE.test(messageText.trim())) {
     return (

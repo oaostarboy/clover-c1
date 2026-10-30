@@ -32,15 +32,7 @@ import { CopyButton } from '@/components/ui/copy-button'
 import { useI18n } from '@/i18n'
 import { type ErrorSurface, formatErrorDiagnostics } from '@/lib/error-surface'
 import { triggerHaptic } from '@/lib/haptics'
-import {
-  AudioLines,
-  GitForkIcon,
-  Loader2Icon,
-  RefreshCwIcon,
-  SmilePlusIcon,
-  VolumeXIcon,
-  XIcon
-} from '@/lib/icons'
+import { AudioLines, GitForkIcon, Loader2Icon, RefreshCwIcon, SmilePlusIcon, VolumeXIcon, XIcon } from '@/lib/icons'
 import { extractPreviewTargets } from '@/lib/preview-targets'
 import { markAssistantIdSpoken } from '@/lib/spoken-reply'
 import { useEnterAnimation } from '@/lib/use-enter-animation'
@@ -81,6 +73,7 @@ interface AssistantMessageProps {
 
 export const AssistantMessage: FC<AssistantMessageProps> = props => {
   const silent = useAuiState(s => isSilentAssistant(s.message.content, s.message.status?.type === 'running'))
+
   // A reply to an inter-agent delivery is part of that exchange, not part of
   // the human conversation — collapse it under a compact notice ("Reply to
   // <sender>", expandable), mirroring the sender-side notice the previous
@@ -119,7 +112,9 @@ export const AssistantMessage: FC<AssistantMessageProps> = props => {
   // inter-agent reply can ever be collapsed. Dispatching on that first keeps
   // the status subscription out of the standard path entirely — the standard
   // message root now re-renders for content, never for a pending flip.
-  if (silent) return null
+  if (silent) {
+    return null
+  }
 
   return interAgentSender ? (
     <InterAgentAssistantMessage {...props} sender={interAgentSender} />
@@ -329,15 +324,19 @@ const AssistantStatusSlot: FC = () => {
   const [departingPlaceholder, setDepartingPlaceholder] = useState(false)
   const lastSlotRef = useRef(slot)
 
+  // eslint-disable-next-line no-restricted-syntax -- previous presentation phase for edge detection, not an atom mirror
   useEffect(() => {
     if (lastSlotRef.current === 'placeholder' && slot !== 'placeholder') {
       const reduced = window.matchMedia?.('(prefers-reduced-motion: reduce)')?.matches ?? false
+
       if (!reduced) {
         setDepartingPlaceholder(true)
         const id = window.setTimeout(() => setDepartingPlaceholder(false), 240)
+
         return () => window.clearTimeout(id)
       }
     }
+
     lastSlotRef.current = slot
   }, [slot])
 

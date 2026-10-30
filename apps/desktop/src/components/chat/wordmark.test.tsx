@@ -1,5 +1,6 @@
 import { cleanup, render, screen } from '@testing-library/react'
 import { afterEach, expect, it } from 'vitest'
+
 import { Wordmark } from './wordmark'
 afterEach(cleanup)
 it('renders a bot name once in standard UI typography, not fitted display lettering', () => {

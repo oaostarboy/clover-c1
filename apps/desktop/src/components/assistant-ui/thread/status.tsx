@@ -4,7 +4,6 @@ import { type FC, type ReactNode, useEffect, useMemo, useState } from 'react'
 
 import { useSessionView } from '@/app/chat/session-view'
 import { ActivityPresence } from '@/components/assistant-ui/thread/activity-presence'
-import { CloverParticles } from '@/components/assistant-ui/thread/clover-particles'
 import { activitySignature, toolNarratesWait, TURN_QUIET_S } from '@/components/assistant-ui/thread/turn-activity'
 import { toolPresentVerb } from '@/components/assistant-ui/tool/run-summary'
 import { useElapsedSeconds } from '@/components/chat/activity-timer'
@@ -150,7 +149,9 @@ export const ResponseLoadingIndicator: FC<{ active?: boolean }> = ({ active = tr
   const elapsed = useElapsedSeconds(!awaitingInput, undefined, turnStartedAt)
   const hint = useStatusHint(compacting, drafting, providerWait)
 
-  if (awaitingInput) return null
+  if (awaitingInput) {
+    return null
+  }
 
   const phase = compacting ? 'compacting' : providerWait ? 'waiting' : drafting ? 'tool' : 'working'
   const isPresent = active && !awaitingInput

@@ -27,7 +27,12 @@ interface UseComposerPlaceholderOptions {
  * keeps its starter so the text doesn't flip mid-stream. While the transport is
  * down, it swaps to a reconnecting / starting message instead.
  */
-export function useComposerPlaceholder({ disabled, landing = false, reconnecting, sessionId }: UseComposerPlaceholderOptions): string {
+export function useComposerPlaceholder({
+  disabled,
+  landing = false,
+  reconnecting,
+  sessionId
+}: UseComposerPlaceholderOptions): string {
   const { t } = useI18n()
   const focusedOwner = useStore($focusedBotOwner)
   // Subscribe to every input of the existing owner ladder, including runtime
@@ -43,11 +48,13 @@ export function useComposerPlaceholder({ disabled, landing = false, reconnecting
   const activeConnection = useStore(host.state.connectionId)
   const sessionOwner = sessionId ? knownOwnerForSession(sessionId) : undefined
 
-  const owner = focusedRosterOwner(sessionId
-    ? typeof sessionOwner === 'string'
-      ? { connectionId: activeConnection || '', profile: sessionOwner }
-      : sessionOwner || null
-    : focusedOwner)
+  const owner = focusedRosterOwner(
+    sessionId
+      ? typeof sessionOwner === 'string'
+        ? { connectionId: activeConnection || '', profile: sessionOwner }
+        : sessionOwner || null
+      : focusedOwner
+  )
 
   // Existing sessions own their text; only an unpersisted draft follows focus.
   // Never borrow an unqualified row for another connection.

@@ -863,8 +863,7 @@ export const zhHant = defineLocale({
       sshErrAuth:
         'SSH 驗證失敗。請將金鑰載入 ssh-agent（ssh-add），或在 ~/.ssh/config 中設定 IdentityFile——Clover 以非互動方式執行 ssh。',
       sshErrHostKey: '自上次連線以來主機金鑰已變更。請確認這是預期的，然後執行 ssh-keygen -R <host> 並重新連線。',
-      sshErrNotInstalled:
-        '遠端主機上未安裝 Clover。請在遠端安裝（curl -fsSL  | sh）或設定 Clover 路徑。',
+      sshErrNotInstalled: '遠端主機上未安裝 Clover。請在遠端安裝（curl -fsSL  | sh）或設定 Clover 路徑。',
       sshErrPlatform: '不支援的遠端平台。Clover Desktop 的 SSH 模式支援 Linux、macOS 和 Windows 遠端主機。',
       sshErrTimeout: 'SSH 連線逾時。主機可能無法存取或處於睡眠狀態。',
       sshErrUpdateRequired: '使用 Desktop SSH 連線前，請更新遠端主機上的 Clover。',
@@ -2070,16 +2069,16 @@ export const zhHant = defineLocale({
 
   statusStack: {
     delegation: {
-      completed: "已完成",
-      failed: "失敗",
-      interrupted: "已停止",
-      queued: "排隊中",
-      running: "執行中",
-      openSession: "開啟對話",
-      recentThinking: "最近的思考摘要",
-      activity: "最近活動",
-      stopUnavailable: "無法停止此助手。請開啟其對話檢查。",
-      tools: count => `${count} 工具`,
+      completed: '已完成',
+      failed: '失敗',
+      interrupted: '已停止',
+      queued: '排隊中',
+      running: '執行中',
+      openSession: '開啟對話',
+      recentThinking: '最近的思考摘要',
+      activity: '最近活動',
+      stopUnavailable: '無法停止此助手。請開啟其對話檢查。',
+      tools: count => `${count} 工具`
     },
     agents: '代理',
     background: count => `${count} 個背景任務`,

@@ -2466,16 +2466,16 @@ export const en: Translations = {
 
   statusStack: {
     delegation: {
-      completed: "Completed",
-      failed: "Failed",
-      interrupted: "Stopped",
-      queued: "Queued",
-      running: "Running",
-      openSession: "Open session",
-      recentThinking: "Recent thinking summaries",
-      activity: "Recent activity",
-      stopUnavailable: "Could not stop this helper. Open its session to inspect.",
-      tools: count => `${count} tools`,
+      completed: 'Completed',
+      failed: 'Failed',
+      interrupted: 'Stopped',
+      queued: 'Queued',
+      running: 'Running',
+      openSession: 'Open session',
+      recentThinking: 'Recent thinking summaries',
+      activity: 'Recent activity',
+      stopUnavailable: 'Could not stop this helper. Open its session to inspect.',
+      tools: count => `${count} tools`
     },
     agents: 'Agents',
     background: count => `${count} Background`,

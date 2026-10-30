@@ -10,13 +10,23 @@ vi.mock('@clover/plugin-sdk', async () => {
   return {
     atom,
     host: { state: { connectionId: stores.connection, focusedSessionOwner: stores.owner, profile: atom('default') } },
-    queryClient: {}, useQuery: vi.fn(), useValue: vi.fn()
+    queryClient: {},
+    useQuery: vi.fn(),
+    useValue: vi.fn()
   }
 })
-vi.mock('@/i18n', () => ({ useI18n: () => ({ t: { composer: {
-  newSessionPlaceholders: ['Give Clover a task'], followUpPlaceholders: ['Send a follow-up'],
-  placeholderStarting: 'Starting Clover...', placeholderReconnecting: 'Reconnecting to Clover…'
-} } }) }))
+vi.mock('@/i18n', () => ({
+  useI18n: () => ({
+    t: {
+      composer: {
+        newSessionPlaceholders: ['Give Clover a task'],
+        followUpPlaceholders: ['Send a follow-up'],
+        placeholderStarting: 'Starting Clover...',
+        placeholderReconnecting: 'Reconnecting to Clover…'
+      }
+    }
+  })
+}))
 
 import { $botMeta, $lastRoster } from '@/plugins/clover-bots/data'
 import { _resetSessionOwnerHintsForTests, setSessionOwnerHint } from '@/store/session'
@@ -24,7 +34,17 @@ import { $sessionTiles } from '@/store/session-states'
 
 import { useComposerPlaceholder } from './use-composer-placeholder'
 
-function Input({ landing = false, disabled = false, reconnecting = false, sessionId = null }: { landing?: boolean; disabled?: boolean; reconnecting?: boolean; sessionId?: null | string }) {
+function Input({
+  landing = false,
+  disabled = false,
+  reconnecting = false,
+  sessionId = null
+}: {
+  landing?: boolean
+  disabled?: boolean
+  reconnecting?: boolean
+  sessionId?: null | string
+}) {
   const placeholder = useComposerPlaceholder({ disabled, landing, reconnecting, sessionId })
 
   return <div contentEditable data-placeholder={placeholder} role="textbox" />
@@ -61,18 +81,42 @@ describe('composer identity follows the focused chat owner', () => {
       { storedSessionId: 'a', ownerRoute: { connectionId: 'source-a', profile: 'default' } },
       { storedSessionId: 'b', ownerRoute: { connectionId: 'source-b', profile: 'default' } }
     ])
-    render(<><Input landing sessionId="a" /><Input landing sessionId="b" /><Input landing /><Input landing sessionId="unknown" /></>)
+    render(
+      <>
+        <Input landing sessionId="a" />
+        <Input landing sessionId="b" />
+        <Input landing />
+        <Input landing sessionId="unknown" />
+      </>
+    )
     const inputs = screen.getAllByRole('textbox')
     const names = () => inputs.map(input => input.getAttribute('data-placeholder'))
-    expect(names()).toEqual(['Ask Zyra anything…', 'Ask Oracle anything…', 'Ask Zyra anything…', 'Ask Clover anything…'])
+    expect(names()).toEqual([
+      'Ask Zyra anything…',
+      'Ask Oracle anything…',
+      'Ask Zyra anything…',
+      'Ask Clover anything…'
+    ])
     act(() => stores.owner.set({ connectionId: 'source-b', profile: 'default' }))
-    expect(names()).toEqual(['Ask Zyra anything…', 'Ask Oracle anything…', 'Ask Oracle anything…', 'Ask Clover anything…'])
-    act(() => $sessionTiles.set([
-      { storedSessionId: 'a', ownerRoute: { connectionId: 'source-a', profile: 'worker' } },
-      { storedSessionId: 'b', ownerRoute: { connectionId: 'source-b', profile: 'default' } },
-      { storedSessionId: 'unknown', ownerRoute: { connectionId: 'source-a', profile: 'default' } }
-    ]))
-    expect(names()).toEqual(['Ask Suni anything…', 'Ask Oracle anything…', 'Ask Oracle anything…', 'Ask Zyra anything…'])
+    expect(names()).toEqual([
+      'Ask Zyra anything…',
+      'Ask Oracle anything…',
+      'Ask Oracle anything…',
+      'Ask Clover anything…'
+    ])
+    act(() =>
+      $sessionTiles.set([
+        { storedSessionId: 'a', ownerRoute: { connectionId: 'source-a', profile: 'worker' } },
+        { storedSessionId: 'b', ownerRoute: { connectionId: 'source-b', profile: 'default' } },
+        { storedSessionId: 'unknown', ownerRoute: { connectionId: 'source-a', profile: 'default' } }
+      ])
+    )
+    expect(names()).toEqual([
+      'Ask Suni anything…',
+      'Ask Oracle anything…',
+      'Ask Oracle anything…',
+      'Ask Zyra anything…'
+    ])
   })
   it('updates the actual input for profile and connection switches without borrowing another owner', () => {
     const { rerender } = render(<Input landing />)
