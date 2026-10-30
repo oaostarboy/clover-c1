@@ -130,6 +130,11 @@ function Fixture() {
       },
       messages: (text: string) =>
         setMessages([user('human', text), assistant('answer', 'The existing composer stays unchanged.')]),
+      scrollingMessages: () =>
+        setMessages([
+          user('human', 'Hello, I am testing normal scrolling.'),
+          assistant('answer', Array.from({ length: 35 }, (_, i) => `Paragraph ${i + 1}: The conversation scrolls naturally.`).join('\n\n'))
+        ]),
       requests: () => requests,
       state: () => $subagentsBySession.get()[sessionId]
     }
