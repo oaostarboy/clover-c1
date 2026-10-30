@@ -8,6 +8,8 @@ import { $botMeta, $lastRoster, isActiveRosterBot } from '@/plugins/clover-bots/
 import { displayName } from '@/plugins/clover-bots/labels'
 import { botRosterMeta } from '@/plugins/clover-bots/routing'
 import { resetBrowseState } from '@/store/composer-input-history'
+import { $cronSessions, $messagingSessions, $sessionOwnerHintsRevision, $sessions } from '@/store/session'
+import { $sessionStates, $sessionTiles, knownOwnerForSession } from '@/store/session-states'
 
 import { pickPlaceholder } from '../composer-utils'
 
@@ -27,13 +29,28 @@ interface UseComposerPlaceholderOptions {
  */
 export function useComposerPlaceholder({ disabled, landing = false, reconnecting, sessionId }: UseComposerPlaceholderOptions): string {
   const { t } = useI18n()
-  const owner = focusedRosterOwner(useStore($focusedBotOwner))
+  const focusedOwner = useStore($focusedBotOwner)
+  // Subscribe to every input of the existing owner ladder, including runtime
+  // to stored-id mapping and hints that may arrive after the surface mounts.
+  useStore($sessionTiles)
+  useStore($sessionStates)
+  useStore($sessions)
+  useStore($cronSessions)
+  useStore($messagingSessions)
+  useStore($sessionOwnerHintsRevision)
   const roster = useStore($lastRoster)
   const allMeta = useStore($botMeta)
   const activeConnection = useStore(host.state.connectionId)
+  const sessionOwner = sessionId ? knownOwnerForSession(sessionId) : undefined
 
-  // The focused session, not the last roster click or the active gateway,
-  // owns this text. Never borrow an unqualified row for another connection.
+  const owner = focusedRosterOwner(sessionId
+    ? typeof sessionOwner === 'string'
+      ? { connectionId: activeConnection || '', profile: sessionOwner }
+      : sessionOwner || null
+    : focusedOwner)
+
+  // Existing sessions own their text; only an unpersisted draft follows focus.
+  // Never borrow an unqualified row for another connection.
   const matches = owner
     ? roster.filter(bot => {
         const botConnection = String(bot.connectionId || bot.route?.connectionId || '').trim()

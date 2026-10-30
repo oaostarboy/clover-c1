@@ -19,16 +19,20 @@ vi.mock('@/i18n', () => ({ useI18n: () => ({ t: { composer: {
 } } }) }))
 
 import { $botMeta, $lastRoster } from '@/plugins/clover-bots/data'
+import { _resetSessionOwnerHintsForTests, setSessionOwnerHint } from '@/store/session'
+import { $sessionTiles } from '@/store/session-states'
 
 import { useComposerPlaceholder } from './use-composer-placeholder'
 
-function Input({ landing = false, disabled = false, reconnecting = false }: { landing?: boolean; disabled?: boolean; reconnecting?: boolean }) {
-  const placeholder = useComposerPlaceholder({ disabled, landing, reconnecting, sessionId: null })
+function Input({ landing = false, disabled = false, reconnecting = false, sessionId = null }: { landing?: boolean; disabled?: boolean; reconnecting?: boolean; sessionId?: null | string }) {
+  const placeholder = useComposerPlaceholder({ disabled, landing, reconnecting, sessionId })
 
   return <div contentEditable data-placeholder={placeholder} role="textbox" />
 }
 
 beforeEach(() => {
+  _resetSessionOwnerHintsForTests()
+  $sessionTiles.set([])
   stores.connection.set('local')
   stores.owner.set({ connectionId: 'source-a', profile: 'default' })
   $botMeta.set({})
@@ -42,6 +46,34 @@ beforeEach(() => {
 afterEach(cleanup)
 
 describe('composer identity follows the focused chat owner', () => {
+  it('reacts when an owner hint arrives late and becomes ambiguous', () => {
+    render(<Input landing sessionId="late" />)
+    const input = screen.getByRole('textbox')
+    expect(input.getAttribute('data-placeholder')).toBe('Ask Clover anything…')
+    act(() => setSessionOwnerHint('late', { connectionId: 'source-b', profile: 'default' }))
+    expect(input.getAttribute('data-placeholder')).toBe('Ask Oracle anything…')
+    act(() => setSessionOwnerHint('late', { connectionId: 'source-a', profile: 'default' }))
+    expect(input.getAttribute('data-placeholder')).toBe('Ask Clover anything…')
+  })
+
+  it('keeps each session scoped to its own owner as focus and routes change', () => {
+    $sessionTiles.set([
+      { storedSessionId: 'a', ownerRoute: { connectionId: 'source-a', profile: 'default' } },
+      { storedSessionId: 'b', ownerRoute: { connectionId: 'source-b', profile: 'default' } }
+    ])
+    render(<><Input landing sessionId="a" /><Input landing sessionId="b" /><Input landing /><Input landing sessionId="unknown" /></>)
+    const inputs = screen.getAllByRole('textbox')
+    const names = () => inputs.map(input => input.getAttribute('data-placeholder'))
+    expect(names()).toEqual(['Ask Zyra anything…', 'Ask Oracle anything…', 'Ask Zyra anything…', 'Ask Clover anything…'])
+    act(() => stores.owner.set({ connectionId: 'source-b', profile: 'default' }))
+    expect(names()).toEqual(['Ask Zyra anything…', 'Ask Oracle anything…', 'Ask Oracle anything…', 'Ask Clover anything…'])
+    act(() => $sessionTiles.set([
+      { storedSessionId: 'a', ownerRoute: { connectionId: 'source-a', profile: 'worker' } },
+      { storedSessionId: 'b', ownerRoute: { connectionId: 'source-b', profile: 'default' } },
+      { storedSessionId: 'unknown', ownerRoute: { connectionId: 'source-a', profile: 'default' } }
+    ]))
+    expect(names()).toEqual(['Ask Suni anything…', 'Ask Oracle anything…', 'Ask Oracle anything…', 'Ask Zyra anything…'])
+  })
   it('updates the actual input for profile and connection switches without borrowing another owner', () => {
     const { rerender } = render(<Input landing />)
     const input = screen.getByRole('textbox')
