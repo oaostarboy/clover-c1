@@ -2214,27 +2214,31 @@ def _build_child_agent(
         effective_requested_provider = "copilot-acp"
         effective_api_mode = "chat_completions"
 
-    # Resolve reasoning config: delegation override > parent inherit
-    parent_reasoning = getattr(parent_agent, "reasoning_config", None)
-    child_reasoning = parent_reasoning
+    # Resolve reasoning config: delegation defaults to "low" (not inheriting parent)
+    from clover_constants import parse_reasoning_effort
+
+    default_child_reasoning = parse_reasoning_effort("low")
+    child_reasoning = default_child_reasoning
     try:
         # Keep the raw value — ``str(x or "")`` would coerce a YAML boolean
-        # False (``reasoning_effort: false``) to "" and inherit the parent
+        # False (``reasoning_effort: false``) to "" and fall back to default
         # instead of disabling thinking for children.
         delegation_effort = delegation_cfg.get("reasoning_effort")
         if delegation_effort or delegation_effort is False:
-            from clover_constants import parse_reasoning_effort
-
             parsed = parse_reasoning_effort(delegation_effort)
             if parsed is not None:
                 child_reasoning = parsed
             else:
                 logger.warning(
-                    "Unknown delegation.reasoning_effort '%s', inheriting parent level",
+                    "Unknown delegation.reasoning_effort '%s', falling back to 'low'",
                     delegation_effort,
                 )
+                child_reasoning = default_child_reasoning
+        else:
+            child_reasoning = default_child_reasoning
     except Exception as exc:
         logger.debug("Could not load delegation reasoning_effort: %s", exc)
+        child_reasoning = default_child_reasoning
 
     # Inherit the parent's fallback provider chain so subagents can recover
     # from rate-limits and credential exhaustion exactly like the top-level
@@ -6367,10 +6371,11 @@ def _build_top_level_description(
         "While children run, `action` "
         "(list/steer/stop) controls them live — steer when a transcript shows "
         "a child drifting.\n\n"
-        "USE FOR: reasoning-heavy subtasks, work flooding your context with "
-        "intermediate data, independent parallel workstreams, long scripts, "
+        "USE FOR: independent parallel workstreams, work flooding your context with "
+        "intermediate data, executing well-specified plans, long scripts, "
         "many lookups.\n"
         "DO NOT USE FOR (use these instead):\n"
+        "- Deep architectural thinking or root-cause planning -> main agent owns all deep thinking, architecture, and task decomposition\n"
         "- Short mechanical steps (a few lines) -> execute_code\n"
         "- A single tool call -> call the tool directly\n"
         "- Tasks needing user interaction -> subagents cannot ask questions\n"
@@ -6378,6 +6383,8 @@ def _build_top_level_description(
         "terminal(background=True, notify=True); /stop, /new, or "
         "process exit discards running subagents.\n\n"
         "RULES:\n"
+        "- Main agent plans first: never delegate blindly without planning. Decide the approach and pass a concrete execution plan in `context`.\n"
+        "- Children run on low reasoning effort by default: they are fast parallel executors that execute concrete plans, not re-plan from scratch.\n"
         "- Children know nothing of this conversation: pass everything needed "
         "via 'context', including any required output language, tone, or "
         "style (e.g. \"respond in Chinese\").\n"
@@ -6388,16 +6395,22 @@ def _build_top_level_description(
         "yourself before telling the user the operation succeeded.\n"
         + restrictions_rule +
         "- Children inherit the parent model unless pinned via "
-        "delegation.provider / delegation.model in config.yaml."
+        "delegation.provider / delegation.model in config.yaml.\n"
+        "- Subagent reasoning effort defaults to 'low' unless configured via "
+        "delegation.reasoning_effort."
     )
 
     # Plan-first delegation guidance applies regardless of tiers; the
     # tier sentence only makes sense when at least one tier actually
     # resolves for this user (see _resolved_tiers).
     plan_first = (
-        "\n\nPLAN FIRST, THEN DELEGATE: decide the approach, then give each "
-        "child its plan in `context`: exact paths, steps, constraints, how "
-        "to verify done. Children execute, not re-plan."
+        "\n\nPLAN FIRST, THEN DELEGATE: The main agent owns all deep thinking, "
+        "architecture, root-cause diagnosis, and task decomposition. Subagents run on "
+        "low reasoning effort by default as fast, parallel executors — they execute a "
+        "concrete plan, they do not re-plan from scratch. Never delegate blindly without "
+        "planning: before calling delegate_task, decide the approach and pass each subagent "
+        "a concrete execution plan in `context` (exact target files/paths, specific steps, "
+        "constraints, and how to verify completion)."
     )
     if resolved_tiers:
         plan_first += (
@@ -6506,8 +6519,12 @@ DELEGATE_TASK_SCHEMA = {
     # redirect CLOVER_HOME.
     "description": (
         "Spawn one or more subagents in isolated contexts. "
-        "Description is rebuilt at every get_definitions() call to reflect "
-        "the user's current delegation limits."
+        "The main agent owns all deep thinking, architecture, root-cause diagnosis, and "
+        "task decomposition. Subagents run on low reasoning effort by default as fast, "
+        "parallel executors to execute concrete plans. Never delegate blindly without planning: "
+        "before calling delegate_task, decide the approach and pass each subagent a concrete "
+        "execution plan in `context` (exact target files/paths, specific steps, constraints, "
+        "and how to verify completion)."
     ),
     "parameters": {
         "type": "object",
@@ -6557,10 +6574,11 @@ DELEGATE_TASK_SCHEMA = {
                         "context": {
                             "type": "string",
                             "description": (
-                                "Background THIS child needs: file paths, "
-                                "error messages, constraints. Each child "
-                                "sees only its own context — repeat shared "
-                                "background in every task that needs it."
+                                "Concrete execution plan and background THIS child needs: "
+                                "exact target files/paths, specific steps, constraints, and "
+                                "how to verify completion. Subagents run on low reasoning effort "
+                                "and execute rather than re-plan. Each child sees only its own "
+                                "context — repeat shared background in every task that needs it."
                             ),
                         },
                         "output_schema": {

@@ -1020,3 +1020,43 @@ class TestParallelToolCallGuidance:
 # =========================================================================
 
 
+class TestMainAgentPlanningDelegationGuidance:
+    """Tests verifying prompt and tool schema enforce main-agent planning and low-effort subagents."""
+
+    def test_delegation_mode_guidance_enforces_planning_and_low_effort_subagents(self):
+        from agent.prompt_builder import DELEGATION_MODE_GUIDANCE
+
+        text = DELEGATION_MODE_GUIDANCE.lower()
+        assert "deep thinking" in text
+        assert "architecture" in text
+        assert "root-cause" in text or "root cause" in text
+        assert "task decomposition" in text
+        assert "low reasoning effort" in text
+        assert "never delegate blindly without planning" in text
+        assert "concrete plan" in text
+
+    def test_delegation_fallback_guidance_enforces_planning(self):
+        from agent.prompt_builder import DELEGATION_PLAN_FALLBACK_GUIDANCE
+
+        text = DELEGATION_PLAN_FALLBACK_GUIDANCE.lower()
+        assert "deep thinking" in text
+        assert "architecture" in text
+        assert "task decomposition" in text
+        assert "low reasoning effort" in text
+        assert "never delegate blindly without planning" in text
+
+    def test_delegate_tool_schema_enforces_main_agent_planning(self):
+        from tools.delegate_tool import DELEGATE_TASK_SCHEMA, _build_top_level_description
+
+        desc = _build_top_level_description().lower()
+        assert "main agent owns" in desc
+        assert "deep thinking" in desc
+        assert "never delegate blindly without planning" in desc
+        assert "low reasoning effort" in desc
+
+        schema_desc = DELEGATE_TASK_SCHEMA["description"].lower()
+        assert "main agent owns all deep thinking" in schema_desc
+        assert "low reasoning effort" in schema_desc
+        assert "never delegate blindly without planning" in schema_desc
+
+

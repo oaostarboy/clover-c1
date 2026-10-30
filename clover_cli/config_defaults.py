@@ -2235,8 +2235,8 @@ DEFAULT_CONFIG = {
                                      # (API, tools, iteration budget), never a delegation
                                      # stopwatch. Set a positive number of seconds
                                      # (floor 30s) to enforce a hard cap.
-        "reasoning_effort": "",  # subagent effort: "ultra", "max", "xhigh", "high",
-                                 # "medium", "low", "minimal", "none" (empty = inherit)
+        "reasoning_effort": "low",  # subagent effort: "ultra", "max", "xhigh", "high",
+                                    # "medium", "low", "minimal", "none" (default: "low")
         "max_concurrent_children": 10,  # unified concurrency cap: max parallel children per batch
                                        # AND max concurrent background (background=true)
                                        # delegation units. New async dispatches beyond the cap
@@ -4119,7 +4119,7 @@ DEFAULT_CONFIG = {
     },
 
     # Config schema version - bump this when adding new required fields
-    "_config_version": 41,
+    "_config_version": 42,
 }
 
 # Optional environment variables that enhance functionality

@@ -1701,6 +1701,8 @@ delegation:
   #                                           # delegation.model to an inexpensive one — children carry the
   #                                           # vast majority of tokens, so this is where spend is cut while
   #                                           # planning quality stays with the frontier parent.
+  # reasoning_effort: "low"                    # Subagent thinking depth: "ultra", "max", "xhigh", "high",
+                                              # "medium", "low" (default), "minimal", "none" / false.
   #
   # Value-routed model tiers (on by default): the parent can pass a per-task
   # `tier` to delegate_task instead of a fixed model. Each tier is an ordered

@@ -69,15 +69,15 @@ def _sentences(block: str) -> list:
 def test_block_is_short_and_has_no_numbers():
     block = _block()
     assert block.startswith(HEADING)
-    assert len(block.split()) <= 110
+    assert len(block.split()) <= 160
     assert not re.search(r'\d', block)
 
 
-def test_block_is_at_most_four_sentences_including_the_runtime_note_sentence():
+def test_block_is_at_most_five_sentences_including_the_runtime_note_sentence():
     from agent.prompt_builder import RUNTIME_NOTE_GUIDANCE
 
     sentences = _sentences(_block())
-    assert len(sentences) <= 4, sentences
+    assert len(sentences) <= 5, sentences
     assert RUNTIME_NOTE_GUIDANCE in _block()
 
 
@@ -225,7 +225,7 @@ def test_fallback_is_delivery_neutral_but_keeps_plan_and_verify():
 
     lowered = fallback.lower()
     assert fallback.startswith(FALLBACK_HEADING)
-    assert len(fallback.split()) <= 60
+    assert len(fallback.split()) <= 85
     for phrase in ('plan', 'verify', 'quick', 'explicit'):
         assert phrase in lowered, phrase
     for phrase in ('end your turn', 'poll', 'tell the user'):

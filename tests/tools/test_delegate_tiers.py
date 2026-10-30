@@ -230,7 +230,7 @@ class TestDynamicSchemaTierProperty:
             dt, "_provider_authenticated_cached", lambda p: p == "anthropic"
         )
         overrides = _build_dynamic_schema_overrides()
-        assert len(overrides["description"]) <= 2200
+        assert len(overrides["description"]) <= 3200
         assert "PLAN FIRST" in overrides["description"]
 
 
@@ -270,7 +270,7 @@ class TestTopLevelDescriptionPlanFirst:
         desc = dt._build_top_level_description(
             resolved_tiers=self._RESOLVED if tiers else {}
         )
-        assert len(desc) <= 2200
+        assert len(desc) <= 3200
 
     def test_long_scripts_and_many_lookups_are_a_reason_to_hand_off(self):
         desc = dt._build_top_level_description(resolved_tiers={})
