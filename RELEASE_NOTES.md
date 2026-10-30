@@ -15,6 +15,14 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 2.0.2.2 | Clover C2.0.2.2 | 2026-10-30
+- Desktop text input no longer overlaps assistant responses when streaming or completing answers.
+- Desktop background smoothly transitions into an elegant frosted-glass look on your first message.
+- Subagents now default to low reasoning effort for faster execution while the main agent plans.
+- Retired models were cleaned from provider catalogs to keep model pickers accurate and current.
+- Scheduled cron notifications are delivered in clean quote cards with job identifiers and hints.
+- Improved Linux desktop application launch and sandbox compatibility across desktop environments.
+
 ## 2.0.2.1 | Clover C2.0.2.1 | 2026-10-29
 - Updates from earlier releases now create and install the Clover desktop application reliably.
 - Updating while already on the latest code automatically builds and installs the desktop app.
