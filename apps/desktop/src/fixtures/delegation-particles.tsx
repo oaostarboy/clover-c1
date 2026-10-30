@@ -130,12 +130,6 @@ function Fixture() {
       },
       messages: (text: string) =>
         setMessages([user('human', text), assistant('answer', 'The existing composer stays unchanged.')]),
-      glassMessages: () => setMessages([
-        user('glass-one', 'First short prompt'), assistant('glass-answer-one', 'First answer.'),
-        user('glass-two', 'Second short prompt'), assistant('glass-answer-two', 'Second answer.'),
-        user('glass-three', 'Third short prompt'),
-        assistant('glass-answer-three', Array.from({ length: 90 }, () => 'UNDERLYING GLYPHS SHOULD NOT BLEED THROUGH THE GLASS BUBBLE '.repeat(5)).join('\n\n'))
-      ]),
       requests: () => requests,
       state: () => $subagentsBySession.get()[sessionId]
     }
