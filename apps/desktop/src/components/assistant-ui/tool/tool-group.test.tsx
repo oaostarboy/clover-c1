@@ -476,6 +476,8 @@ describe('live tool run', () => {
     await waitFor(() => {
       expect(container.querySelectorAll('[data-tool-row]').length).toBeGreaterThan(0)
     })
+    expect(container.querySelectorAll('canvas.clover-formation')).toHaveLength(1)
+    expect(container.querySelector('[data-tool-row] canvas')).toBeNull()
   })
 
   it('cannot be collapsed while a tool is still running', async () => {

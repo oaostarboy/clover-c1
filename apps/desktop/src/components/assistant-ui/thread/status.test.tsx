@@ -69,12 +69,11 @@ describe('ResponseLoadingIndicator timer', () => {
     expect(container.querySelector('[data-slot="aui_response-loading"] .dither')).toBeNull()
   })
 
-  it('uses compaction as the formation state only when that session is compacting', () => {
+  it('names compaction when that session is compacting', () => {
     $activeSessionId.set('session-a')
-    const { container } = renderIndicator()
-    expect(container.querySelector('canvas')?.getAttribute('data-clover-phase')).toBe('working')
+    renderIndicator()
     act(() => setSessionCompacting('session-a', true))
-    expect(container.querySelector('canvas')?.getAttribute('data-clover-phase')).toBe('compacting')
+
     expect(screen.getByText('Summarizing thread')).toBeTruthy()
   })
 

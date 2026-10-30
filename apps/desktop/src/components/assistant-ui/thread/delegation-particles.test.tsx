@@ -37,3 +37,19 @@ it('buds only new current-session helpers and docks without completing them', ()
   act(() => upsertSubagent('particle-session', { subagent_id: 'one', status: 'failed' }, false, 'subagent.complete'))
   expect(container.querySelector('[data-helper-berth]')?.getAttribute('data-status')).toBe('failed')
 })
+
+it('starts a current-turn journey when the anchor appears after the helper', () => {
+  vi.stubGlobal('matchMedia', () => ({ matches: false, addEventListener() {}, removeEventListener() {} }))
+  const turnStartedAt = Date.now() - 10
+  const { rerender } = render(<DelegationBerths sessionId="late-anchor-session" />)
+
+  act(() => upsertSubagent('late-anchor-session', { subagent_id: 'late-one', goal: 'Real task', status: 'running' }))
+  rerender(
+    <>
+      <ActivityPresence active phase="working" sessionId="late-anchor-session" turnStartedAt={turnStartedAt} />
+      <DelegationBerths sessionId="late-anchor-session" />
+    </>
+  )
+
+  expect((window.document.querySelector('.delegation-flight') as HTMLElement).style.visibility).toBe('visible')
+})

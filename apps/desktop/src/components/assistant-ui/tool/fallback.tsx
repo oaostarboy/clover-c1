@@ -17,11 +17,7 @@ import {
 } from 'react'
 
 import { useSessionView } from '@/app/chat/session-view'
-import { OptionalComparison } from './optional-comparison'
-import { isComparisonTool } from '@/lib/tool-render-class'
 import { AnsiText } from '@/components/assistant-ui/ansi-text'
-import { CloverParticles } from '@/components/assistant-ui/thread/clover-particles'
-import { toolNarratesWait } from '@/components/assistant-ui/thread/turn-activity'
 import { TimelineTimestamp } from '@/components/assistant-ui/thread/timeline-timestamp'
 import { useElapsedSeconds } from '@/components/chat/activity-timer'
 import { ActivityTimerText } from '@/components/chat/activity-timer-text'
@@ -48,10 +44,11 @@ import { useI18n } from '@/i18n'
 import { PrettyLink, LinkifiedText as SharedLinkifiedText, urlSlugTitleLabel } from '@/lib/external-link'
 import { AlertCircle, CheckCircle2 } from '@/lib/icons'
 import { normalize } from '@/lib/text'
+import { isComparisonTool } from '@/lib/tool-render-class'
 import { useEnterAnimation } from '@/lib/use-enter-animation'
 import { cn } from '@/lib/utils'
 import { recordPreviewArtifact } from '@/store/preview-status'
-import { sessionApprovalRequest, sessionAwaitingInput } from '@/store/prompts'
+import { sessionApprovalRequest } from '@/store/prompts'
 import { $toolInlineDiff } from '@/store/tool-diffs'
 import { $toolRowDismissed, dismissToolRow } from '@/store/tool-dismiss'
 import { $anyToolDisclosureOpen, $toolDisclosureOpen, $toolViewMode, setToolDisclosureOpen } from '@/store/tool-view'
@@ -76,6 +73,7 @@ import {
   type ToolStatus,
   type ToolTitleAction
 } from './fallback-model'
+import { OptionalComparison } from './optional-comparison'
 import { isToolCallPart, summarizeToolRun } from './run-summary'
 import { ToolRunTicker } from './run-ticker'
 
@@ -1010,12 +1008,6 @@ export const ToolGroupSlot: FC<PropsWithChildren<{ endIndex: number; startIndex:
 
   const items = useMemo(() => splitRunItems(toolNameKey.split('\u0000')), [toolNameKey])
   const rows = Children.toArray(children)
-  const sessionId = useStore(useSessionView().$runtimeId)
-  const awaitingInput = useStore(useMemo(() => sessionAwaitingInput(sessionId), [sessionId]))
-  const toolActive = useAuiState(state =>
-    selectMessageRunning(state) && endIndex >= state.message.parts.length - 1 &&
-    toolNarratesWait(state.message.content.slice(startIndex, endIndex + 1))
-  )
 
   const content = (
     <ToolEmbedContext.Provider value={false}>
@@ -1032,8 +1024,7 @@ export const ToolGroupSlot: FC<PropsWithChildren<{ endIndex: number; startIndex:
   )
 
   return (
-    <div className="flex min-w-0 items-center gap-1.5" data-particle-tool-activity={toolActive && !awaitingInput ? '' : undefined}>
-      {toolActive && !awaitingInput && <CloverParticles />}
+    <div className="flex min-w-0 items-center gap-1.5">
       <div className="min-w-0">{content}</div>
     </div>
   )

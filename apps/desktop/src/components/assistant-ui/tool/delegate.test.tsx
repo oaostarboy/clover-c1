@@ -9,11 +9,11 @@ afterEach(() => {
   $busy.set(false)
   $turnStartedAt.set(null)
 })
-it('keeps the main particle present while the parent dispatches helpers', () => {
+it('does not duplicate the thread-owned particle inside a delegation card', () => {
   $busy.set(true)
   $turnStartedAt.set(Date.now())
   const { container } = render(<DelegateTool args={{ goal: 'Actual work' }} toolCallId="d" />)
-  expect(container.querySelector('.clover-activity-anchor')).not.toBeNull()
+  expect(container.querySelector('.clover-activity-anchor')).toBeNull()
 })
 it('folds routine delegated tasks without deleting their details', () => {
   const { container } = render(
