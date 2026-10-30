@@ -1,6 +1,12 @@
 import { afterEach, describe, expect, it } from 'vitest'
 
-import { chatSurfaceRoot, clearSurfaceVar, COMPOSER_HEIGHT_VAR, setSurfaceVar } from './surface-vars'
+import {
+  chatSurfaceRoot,
+  clearSurfaceVar,
+  COMPOSER_DOCK_HEIGHT_VAR,
+  COMPOSER_HEIGHT_VAR,
+  setSurfaceVar
+} from './surface-vars'
 
 /**
  * Regression: the thread's bottom gap going randomly huge and staying huge.
@@ -18,6 +24,7 @@ import { chatSurfaceRoot, clearSurfaceVar, COMPOSER_HEIGHT_VAR, setSurfaceVar } 
 describe('surface measured-height vars', () => {
   afterEach(() => {
     document.documentElement.style.removeProperty(COMPOSER_HEIGHT_VAR)
+    document.documentElement.style.removeProperty(COMPOSER_DOCK_HEIGHT_VAR)
     document.body.replaceChildren()
   })
 
@@ -85,5 +92,16 @@ describe('surface measured-height vars', () => {
 
     expect(() => clearSurfaceVar(null, COMPOSER_HEIGHT_VAR)).not.toThrow()
     expect(document.documentElement.style.getPropertyValue(COMPOSER_HEIGHT_VAR)).toBe('')
+  })
+
+  it('publishes and clears dock height var onto the owning surface', () => {
+    const { publisher, root } = surface()
+    setSurfaceVar(publisher, COMPOSER_DOCK_HEIGHT_VAR, '216px')
+
+    expect(root.style.getPropertyValue(COMPOSER_DOCK_HEIGHT_VAR)).toBe('216px')
+    expect(document.documentElement.style.getPropertyValue(COMPOSER_DOCK_HEIGHT_VAR)).toBe('')
+
+    clearSurfaceVar(root, COMPOSER_DOCK_HEIGHT_VAR)
+    expect(root.style.getPropertyValue(COMPOSER_DOCK_HEIGHT_VAR)).toBe('')
   })
 })

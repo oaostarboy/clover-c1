@@ -2,6 +2,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import {
   buildGroups,
+  createViewportResizeHandler,
   firstVisibleGroupIndex,
   HIDDEN_TRANSCRIPT_RENDER_BUDGET,
   LIVE_TAIL_MIN_GROUPS,
@@ -84,6 +85,26 @@ describe('subscribeToThreadForeground', () => {
 
     expect(cancel).toHaveBeenCalledWith(9)
     expect(reanchor).not.toHaveBeenCalled()
+  })
+})
+
+describe('createViewportResizeHandler', () => {
+  it('calls onFollow when following the bottom during resize (dock grows/shrinks)', () => {
+    const onFollow = vi.fn()
+    let following = true
+    const handleResize = createViewportResizeHandler(() => following, onFollow)
+
+    handleResize()
+    expect(onFollow).toHaveBeenCalledOnce()
+  })
+
+  it('does not force scroll when user has scrolled away from the bottom', () => {
+    const onFollow = vi.fn()
+    let following = false
+    const handleResize = createViewportResizeHandler(() => following, onFollow)
+
+    handleResize()
+    expect(onFollow).not.toHaveBeenCalled()
   })
 })
 

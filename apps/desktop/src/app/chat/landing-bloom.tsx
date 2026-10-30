@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react'
 import { createRendererLoopPauseController } from '../../lib/renderer-loop-pause'
 import { cn } from '@/lib/utils'
 
+import './landing.css'
 import { drawBotanical } from './botanical-surface'
 export { drawBotanical } from './botanical-surface'
 
@@ -86,19 +87,14 @@ export function LandingBloom({
       aria-hidden="true"
       data-landing-bloom=""
       data-frosted={frosted ? 'true' : undefined}
-      className={cn(
-        'pointer-events-none absolute inset-0 z-0 overflow-hidden transition-all duration-700 ease-out',
-        frosted ? 'opacity-22 filter blur-[0.5px]' : 'opacity-100',
-        className
-      )}
+      className={cn('pointer-events-none absolute inset-0 z-0 overflow-hidden', className)}
     >
       <div ref={ref} aria-hidden="true" className="absolute inset-0 pointer-events-none" />
-      {frosted && (
-        <div
-          aria-hidden="true"
-          className="pointer-events-none absolute inset-0 backdrop-blur-[2px] bg-(--ui-chat-surface-background)/35"
-        />
-      )}
+      <div
+        aria-hidden="true"
+        data-slot="landing-bloom-veil"
+        className="pointer-events-none absolute inset-0"
+      />
     </div>
   )
 }

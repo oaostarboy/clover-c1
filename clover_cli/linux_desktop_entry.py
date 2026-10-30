@@ -66,23 +66,20 @@ def resolve_exec_command() -> str:
     """
     from clover_cli.relaunch import resolve_clover_bin
 
+    # Never call Path(sys.executable).resolve() here: on Linux/macOS a venv's
+    # `bin/python` is a symlink to the system interpreter (`/usr/bin/python3.12`),
+    # and resolving the symlink strips the venv context so the launched process
+    # dies with `ModuleNotFoundError: No module named 'yaml'`.
+    python_abspath = os.path.abspath(sys.executable)
     bin_path = resolve_clover_bin()
     if bin_path:
         resolved = Path(bin_path).resolve()
         if _needs_interpreter(resolved):
-            # The resolved launcher is a Python script whose shebang points at
-            # a NON-venv interpreter (e.g. the repo's `clover` script with
-            # `#!/usr/bin/env python3` when argv[0] came from the shell
-            # installer's bash wrapper). Launched from the .desktop entry that
-            # shebang resolves to the SYSTEM python and dies on the first
-            # third-party import (#90292) — silently, since Terminal=false.
-            # sys.executable is the interpreter actually running Clover (the
-            # venv one), so prefix it explicitly.
-            argv = [str(Path(sys.executable).resolve()), str(resolved), "desktop"]
+            argv = [python_abspath, str(resolved), "desktop"]
         else:
             argv = [str(resolved), "desktop"]
     else:
-        argv = [str(Path(sys.executable).resolve()), "-m", "clover_cli.main", "desktop"]
+        argv = [python_abspath, "-m", "clover_cli.main", "desktop"]
     return " ".join(_quote_exec_arg(a) for a in argv)
 
 
@@ -107,11 +104,10 @@ def _needs_interpreter(bin_path: Path) -> bool:
     # resolve to the running venv when launched from a desktop entry.
     if "/env " in shebang or shebang.startswith("#!/usr/bin/env"):
         return True
-    # A python shebang pointing INSIDE the running interpreter's environment
-    # already resolves correctly; anything else (a system path) would
-    # escape the venv when spawned by the DE.
-    exe_dir = str(Path(sys.executable).resolve().parent)
-    return exe_dir not in shebang
+    # Check both the unresolved venv bin directory and the resolved directory.
+    venv_dir = os.path.abspath(os.path.dirname(sys.executable)).lower()
+    exe_dir = str(Path(sys.executable).resolve().parent).lower()
+    return (venv_dir not in shebang) and (exe_dir not in shebang)
 
 
 def _quote_exec_arg(arg: str) -> str:

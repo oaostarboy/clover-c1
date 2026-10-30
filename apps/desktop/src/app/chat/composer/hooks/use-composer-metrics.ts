@@ -4,6 +4,7 @@ import { type RefObject, useCallback, useEffect, useRef, useState } from 'react'
 import {
   chatSurfaceRoot,
   clearSurfaceVar,
+  COMPOSER_DOCK_HEIGHT_VAR,
   COMPOSER_HEIGHT_VAR,
   COMPOSER_SURFACE_HEIGHT_VAR,
   setSurfaceVar
@@ -134,6 +135,7 @@ export function useComposerMetrics({
       lastBucketedHeightRef.current = 0
       lastBucketedSurfaceHeightRef.current = 0
       setSurfaceVar(composer, COMPOSER_HEIGHT_VAR, '0px')
+      setSurfaceVar(composer, COMPOSER_DOCK_HEIGHT_VAR, '0px')
       setSurfaceVar(composer, COMPOSER_SURFACE_HEIGHT_VAR, '0px')
 
       return
@@ -170,6 +172,7 @@ export function useComposerMetrics({
       if (bucket !== lastBucketedHeightRef.current) {
         lastBucketedHeightRef.current = bucket
         setSurfaceVar(composer, COMPOSER_HEIGHT_VAR, `${bucket}px`)
+        setSurfaceVar(composer, COMPOSER_DOCK_HEIGHT_VAR, `${bucket}px`)
       }
     }
 
@@ -201,6 +204,7 @@ export function useComposerMetrics({
 
     return () => {
       clearSurfaceVar(root, COMPOSER_HEIGHT_VAR)
+      clearSurfaceVar(root, COMPOSER_DOCK_HEIGHT_VAR)
       clearSurfaceVar(root, COMPOSER_SURFACE_HEIGHT_VAR)
     }
   }, [composerRef])

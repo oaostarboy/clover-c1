@@ -103,3 +103,93 @@
   [data-chat-surface][data-landing] [data-slot='composer-dock']:not([data-popped-out]) { bottom: 18%; }
   [data-chat-surface][data-landing] [data-slot='aui_intro'] { transform: translateY(-5rem); }
 }
+
+/* Decorative botanical ASCII background & frosted glass transition:
+   From crisp landing clover canvas to a softened, highly legible frosted-glass veil
+   as soon as the first chat message is sent. */
+[data-chat-surface] [data-landing-bloom],
+[data-landing-bloom] {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  z-index: 0;
+  overflow: hidden;
+  transition:
+    opacity 500ms cubic-bezier(0.22, 1, 0.36, 1),
+    filter 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+[data-chat-surface] [data-slot='landing-bloom-veil'],
+[data-landing-bloom] [data-slot='landing-bloom-veil'] {
+  pointer-events: none;
+  position: absolute;
+  inset: 0;
+  opacity: 0;
+  -webkit-backdrop-filter: blur(0px);
+  backdrop-filter: blur(0px);
+  background-color: transparent;
+  transition:
+    backdrop-filter 500ms cubic-bezier(0.22, 1, 0.36, 1),
+    -webkit-backdrop-filter 500ms cubic-bezier(0.22, 1, 0.36, 1),
+    background-color 500ms cubic-bezier(0.22, 1, 0.36, 1),
+    opacity 500ms cubic-bezier(0.22, 1, 0.36, 1);
+}
+
+/* Landing state: ASCII clover background remains crisp and visible as designed */
+[data-chat-surface][data-landing] [data-landing-bloom],
+[data-landing-bloom]:not([data-frosted='true']) {
+  opacity: 1;
+  filter: none;
+}
+
+[data-chat-surface][data-landing] [data-slot='landing-bloom-veil'],
+[data-landing-bloom]:not([data-frosted='true']) [data-slot='landing-bloom-veil'] {
+  opacity: 0;
+  -webkit-backdrop-filter: blur(0px);
+  backdrop-filter: blur(0px);
+  background-color: transparent;
+}
+
+/* Active conversation state: first chat message sent ([data-chat-surface]:not([data-landing])).
+   Background smoothly animates into a much more frosted-glass look with stronger blur,
+   higher-opacity dark/light frosted glass veil, and lower ASCII art contrast/opacity
+   so assistant answers have crisp, effortless legibility while keeping a subtle ambient hint. */
+[data-chat-surface]:not([data-landing]) [data-landing-bloom],
+[data-landing-bloom][data-frosted='true'] {
+  opacity: 0.16;
+  filter: blur(1.5px);
+}
+
+[data-chat-surface]:not([data-landing]) [data-slot='landing-bloom-veil'],
+[data-landing-bloom][data-frosted='true'] [data-slot='landing-bloom-veil'] {
+  opacity: 1;
+  -webkit-backdrop-filter: blur(16px) saturate(130%);
+  backdrop-filter: blur(16px) saturate(130%);
+  background-color: color-mix(in srgb, var(--ui-chat-surface-background) 78%, transparent);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  [data-chat-surface] [data-landing-bloom],
+  [data-landing-bloom],
+  [data-chat-surface] [data-slot='landing-bloom-veil'],
+  [data-landing-bloom] [data-slot='landing-bloom-veil'] {
+    transition: none !important;
+  }
+}
+
+@media (prefers-reduced-transparency: reduce), (prefers-contrast: more) {
+  [data-chat-surface]:not([data-landing]) [data-slot='landing-bloom-veil'],
+  [data-landing-bloom][data-frosted='true'] [data-slot='landing-bloom-veil'] {
+    background-color: var(--ui-chat-surface-background);
+    -webkit-backdrop-filter: none;
+    backdrop-filter: none;
+  }
+}
+
+@supports not (backdrop-filter: blur(1px)) {
+  [data-chat-surface]:not([data-landing]) [data-slot='landing-bloom-veil'],
+  [data-landing-bloom][data-frosted='true'] [data-slot='landing-bloom-veil'] {
+    background-color: color-mix(in srgb, var(--ui-chat-surface-background) 92%, transparent);
+  }
+}
+

@@ -9,6 +9,7 @@ import {
   type FC,
   memo,
   type ReactNode,
+  type RefObject,
   startTransition,
   useCallback,
   useEffect,
@@ -20,6 +21,7 @@ import {
 import { type GetTargetScrollTop, useStickToBottom } from 'use-stick-to-bottom'
 
 import { usePaneLifecycle } from '@/components/pane-shell/pane-visibility'
+import { useResizeObserver } from '@/hooks/use-resize-observer'
 import { useI18n } from '@/i18n'
 import { messagePaintWeight } from '@/lib/render-weight'
 import { cn } from '@/lib/utils'
@@ -180,6 +182,22 @@ export function subscribeToThreadForeground(shouldReanchor: () => boolean, onRea
 
     frameId = null
     framePending = false
+  }
+}
+
+/**
+ * Re-anchor scroller on viewport container resize when the thread was following the bottom.
+ * Keeps streamed or completed tokens in view when the composer dock expands with multi-line
+ * input, attachments, or status items.
+ */
+export function createViewportResizeHandler(
+  shouldFollow: () => boolean,
+  onFollow: () => void
+): () => void {
+  return () => {
+    if (shouldFollow()) {
+      onFollow()
+    }
   }
 }
 
@@ -601,6 +619,20 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
     [isAtBottom, scrollToBottom]
   )
 
+  const isAtBottomRef = useRef(isAtBottom)
+  isAtBottomRef.current = isAtBottom
+
+  const handleViewportResize = useMemo(
+    () =>
+      createViewportResizeHandler(
+        () => isAtBottomRef.current,
+        () => void scrollToBottom('instant')
+      ),
+    [scrollToBottom]
+  )
+
+  useResizeObserver(handleViewportResize, scrollRef as unknown as RefObject<HTMLElement | null>)
+
   const endEditHold = useCallback(() => {
     scrollRef.current?.removeAttribute('data-editing')
   }, [scrollRef])
@@ -751,7 +783,7 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
 
   return (
     <div
-      className="relative min-h-0 max-w-full overflow-hidden contain-[layout_paint]"
+      className="relative min-h-0 max-w-full self-start overflow-hidden contain-[layout_paint]"
       style={
         {
           height: clampToComposer ? 'var(--thread-viewport-height)' : '100%',

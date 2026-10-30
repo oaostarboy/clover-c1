@@ -42,4 +42,17 @@ describe('landing botanical canvas', () => {
     unmount()
     expect(media.removeEventListener).toHaveBeenCalledWith('change', expect.any(Function))
   })
+
+  it('renders persistent canvas host and veil element, toggling data-frosted', () => {
+    const { container, rerender } = render(<LandingBloom frosted={false} />)
+    const bloom = container.querySelector('[data-landing-bloom]')
+    expect(bloom).toBeTruthy()
+    expect(bloom?.getAttribute('data-frosted')).toBeNull()
+    const veil = container.querySelector('[data-slot="landing-bloom-veil"]')
+    expect(veil).toBeTruthy()
+
+    rerender(<LandingBloom frosted={true} />)
+    expect(bloom?.getAttribute('data-frosted')).toBe('true')
+    expect(container.querySelector('[data-slot="landing-bloom-veil"]')).toBe(veil)
+  })
 })

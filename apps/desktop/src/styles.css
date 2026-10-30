@@ -458,11 +458,8 @@
        to the value the app actually renders at. */
     --radius-scalar: 0.2;
 
-    /* Space under last message vs overlay composer — driven by the measured composer DOCK height (see
-       composer/index.tsx), which covers the micro-action strip, the status stack, the composer, and the
-       underside strip in one number.
-       This is the default; each chat surface re-declares the calc against its own measurement (see below). */
-    --thread-last-message-clearance: calc(var(--composer-measured-height) + 2rem);
+    /* Space under last message in thread scroller. */
+    --thread-last-message-clearance: 1.5rem;
 
     --composer-shell-pad-block-end: 0.625rem;
     --message-text-indent: 0.75rem;
@@ -505,10 +502,11 @@
     --composer-input-inline-min-width: 8rem;
     --composer-fallback-height: 2.75rem;
     --composer-measured-height: calc(0.5rem + var(--composer-shell-pad-block-end) + var(--composer-fallback-height));
+    --composer-dock-height: var(--composer-measured-height);
     --composer-surface-measured-height: var(--composer-fallback-height);
     --thread-viewport-height: max(
       0rem,
-      calc(100% - var(--composer-measured-height) + var(--composer-surface-measured-height))
+      calc(100% - var(--composer-dock-height, var(--composer-measured-height)))
     );
     --vsq: min(0.5vh, 0.5vw);
     --image-preview-max-width: 34rem;
@@ -2232,14 +2230,22 @@ button[data-slot='aui_msg-reactions'] svg {
   height: 0.875rem;
 }
 
-/* Re-declare the clearance calc on every chat surface. `:root` computes it
-   once against the ROOT measurement, so scoping only the input would leave
-   every thread reading the same substituted value. Redeclaring here makes each
-   surface resolve the calc against its own dock height, falling back to the
-   root default until this surface publishes its first measurement. See
-   surface-vars.ts. */
+/* Re-declare the viewport height and dock variables on every chat surface.
+   `:root` computes them once against the ROOT measurement, so scoping only the input
+   would leave every thread reading the same substituted value. Redeclaring here
+   makes each surface resolve the viewport height dynamically against its own measured
+   dock height, ensuring the composer dock never overlaps the thread viewport. */
 [data-chat-surface] {
-  --thread-last-message-clearance: calc(var(--composer-measured-height) + 2rem);
+  --composer-dock-height: var(--composer-measured-height, calc(0.5rem + var(--composer-shell-pad-block-end) + var(--composer-fallback-height)));
+  --thread-viewport-height: max(
+    0rem,
+    calc(100% - var(--composer-dock-height, var(--composer-measured-height)))
+  );
+  --thread-last-message-clearance: 1.5rem;
+}
+
+[data-chat-surface][data-landing] {
+  --thread-viewport-height: 100%;
 }
 
 /* A live tool run, shown as one line. `ToolRunTicker` stacks the run's rows

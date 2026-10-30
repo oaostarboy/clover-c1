@@ -7969,11 +7969,21 @@ def _desktop_linux_needs_no_sandbox() -> bool:
         return False
     if hasattr(os, "geteuid") and os.geteuid() == 0:
         return False
+    if not sys.stdin.isatty():
+        return True
     try:
         with open("/proc/sys/kernel/apparmor_restrict_unprivileged_userns", encoding="utf-8") as f:
-            return f.read().strip() == "1"
+            if f.read().strip() == "1":
+                return True
     except OSError:
-        return False
+        pass
+    try:
+        with open("/proc/sys/kernel/unprivileged_userns_clone", encoding="utf-8") as f:
+            if f.read().strip() == "1":
+                return True
+    except OSError:
+        pass
+    return False
 
 
 def _desktop_linux_sandbox_helper_is_regular_file(packaged_executable: Path) -> bool:
@@ -8013,6 +8023,9 @@ def _desktop_linux_sandbox_fixup(packaged_executable: Path) -> bool:
 
     if sandbox_lstat.st_uid == 0 and stat.S_IMODE(sandbox_lstat.st_mode) == 0o4755:
         return True
+
+    if not sys.stdin.isatty():
+        return False
 
     sudo = shutil.which("sudo")
     if not sudo:
