@@ -148,9 +148,9 @@ export function SubagentStrip({ sessionId }: { sessionId: string }) {
         type="button"
       >
         <DelegationBerths sessionId={sessionId} />
-        <span className="shrink-0">{t.statusStack.subagents(agents.length)}</span>
+        <span className="shrink-0 whitespace-nowrap">{t.statusStack.subagents(agents.length)}</span>
         <span className="min-w-0 truncate text-muted-foreground">{summary.goal}</span>
-        <span className={attention.length ? 'text-destructive' : 'text-muted-foreground'}>
+        <span className={`min-w-0 truncate ${attention.length ? 'text-destructive' : 'text-muted-foreground'}`}>
           {counts.map(({ status, count }) => `${count} ${t.statusStack.delegation[status]}`).join(' · ')}
         </span>
         <DisclosureCaret open={expanded} size="1em" />

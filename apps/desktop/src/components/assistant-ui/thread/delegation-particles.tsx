@@ -239,7 +239,7 @@ function ParticleJourney({
 
   return createPortal(
     <span aria-hidden="true" className="delegation-flight delegation-particle" ref={moving}>
-      <CloverParticles phase="waiting" />
+      <CloverParticles phase="waiting" static={agent.status !== 'running' && agent.status !== 'queued'} />
     </span>,
     document.body
   )
@@ -257,7 +257,7 @@ function Berth({ agent, index, sessionId }: { agent: SubagentProgress; index: nu
         data-status={agent.status}
         ref={ref}
       >
-        <CloverParticles phase="waiting" />
+        <CloverParticles phase="waiting" static={agent.status !== 'running' && agent.status !== 'queued'} />
       </span>
       <ParticleJourney agent={agent} berth={ref} index={index} sessionId={sessionId} />
     </>

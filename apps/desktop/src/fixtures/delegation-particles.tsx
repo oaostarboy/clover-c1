@@ -13,8 +13,10 @@ import type { CloverGateway } from '../../src/clover'
 import { Thread } from '../../src/components/assistant-ui/thread'
 import { Wordmark } from '../../src/components/chat/wordmark'
 import { $gateway } from '../../src/store/gateway'
+import { setSessionProviderWait } from '../../src/store/provider-wait'
 import { $activeSessionId, $busy, $turnStartedAt } from '../../src/store/session'
 import { $subagentsBySession } from '../../src/store/subagents'
+import { setSessionDraftingTool } from '../../src/store/tool-drafting'
 import { ThemeProvider, useTheme } from '../../src/themes/context'
 
 const requests: { method: string; params: unknown }[] = []
@@ -100,6 +102,10 @@ function Fixture() {
       } as any)
 
     ;(window as any).delegationFixture = {
+      phase: (phase: 'waiting' | 'tool' | 'working') => {
+        setSessionProviderWait(sessionId, phase === 'waiting' ? 'Waiting on fixture provider' : '')
+        setSessionDraftingTool(sessionId, phase === 'tool' ? 'terminal' : '')
+      },
       spawn: (id: string) =>
         event('subagent.start', {
           subagent_id: id,
