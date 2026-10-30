@@ -2136,6 +2136,18 @@ export const ja = defineLocale({
   },
 
   statusStack: {
+    delegation: {
+      completed: "完了",
+      failed: "失敗",
+      interrupted: "停止",
+      queued: "待機中",
+      running: "実行中",
+      openSession: "セッションを開く",
+      recentThinking: "最近の思考要約",
+      activity: "最近のアクティビティ",
+      stopUnavailable: "停止できませんでした。セッションを開いて確認してください。",
+      tools: count => `${count} ツール`,
+    },
     agents: 'エージェント',
     background: count => `バックグラウンド ${count} 件`,
     goalActive: '目標進行中',

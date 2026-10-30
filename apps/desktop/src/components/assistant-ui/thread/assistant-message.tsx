@@ -60,6 +60,8 @@ const EMPTY_PARTS: readonly unknown[] = []
 // (pending -> complete and back, N rows per stream flush) can no longer
 // descend into the parts subtree at all. Its props were already the module
 // constant MESSAGE_PARTS_COMPONENTS, so nothing per-message is captured here.
+import { isSilentAssistant } from './presentation-noise'
+
 const MESSAGE_PARTS = <MessagePrimitive.Parts components={MESSAGE_PARTS_COMPONENTS} />
 
 interface MessageActionProps {
@@ -78,6 +80,7 @@ interface AssistantMessageProps {
 }
 
 export const AssistantMessage: FC<AssistantMessageProps> = props => {
+  const silent = useAuiState(s => isSilentAssistant(s.message.content, s.message.status?.type === 'running'))
   // A reply to an inter-agent delivery is part of that exchange, not part of
   // the human conversation — collapse it under a compact notice ("Reply to
   // <sender>", expandable), mirroring the sender-side notice the previous
@@ -116,6 +119,8 @@ export const AssistantMessage: FC<AssistantMessageProps> = props => {
   // inter-agent reply can ever be collapsed. Dispatching on that first keeps
   // the status subscription out of the standard path entirely — the standard
   // message root now re-renders for content, never for a pending flip.
+  if (silent) return null
+
   return interAgentSender ? (
     <InterAgentAssistantMessage {...props} sender={interAgentSender} />
   ) : (

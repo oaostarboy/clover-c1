@@ -63,6 +63,15 @@ beforeEach(() => {
   indexAliasRoutes([])
 })
 
+it('uses a remote profile name ahead of its connection label, with title override', () => {
+  const zyra = { ...hostedRow, display_name: 'Zyra' }
+  expect(displayName(zyra, null)).toBe('Zyra')
+  expect(displayName(zyra, { title: 'My agent' })).toBe('My agent')
+  expect(displayName({ ...zyra, connectionId: 'other', display_name: 'Oracle' }, null)).toBe('Oracle')
+  expect(displayName(hostedRow, null)).toBe('cloud.example.com')
+  expect(displayName({ name: 'default' }, null)).toBe('Clover')
+})
+
 describe('alias identity survives the hosted handoff (#89131)', () => {
   it('names the backend row after the alias, through every meta generation', () => {
     indexAliasRoutes([

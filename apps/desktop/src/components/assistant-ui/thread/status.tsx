@@ -74,6 +74,7 @@ function useThreadSessionStatus() {
   const awaitingInput = useStore(useMemo(() => sessionAwaitingInput(sessionId), [sessionId]))
 
   return {
+    sessionId,
     awaitingInput,
     busy,
     compacting,
@@ -145,7 +146,7 @@ export const CenteredThreadSpinner: FC = () => {
 
 export const ResponseLoadingIndicator: FC<{ active?: boolean }> = ({ active = true }) => {
   const { t } = useI18n()
-  const { awaitingInput, compacting, drafting, providerWait, turnStartedAt } = useThreadSessionStatus()
+  const { sessionId, awaitingInput, compacting, drafting, providerWait, turnStartedAt } = useThreadSessionStatus()
   const elapsed = useElapsedSeconds(!awaitingInput, undefined, turnStartedAt)
   const hint = useStatusHint(compacting, drafting, providerWait)
 
@@ -155,7 +156,7 @@ export const ResponseLoadingIndicator: FC<{ active?: boolean }> = ({ active = tr
   const isPresent = active && !awaitingInput
 
   return (
-    <ActivityPresence active={isPresent} phase={phase}>
+    <ActivityPresence active={isPresent} phase={phase} sessionId={sessionId} turnStartedAt={turnStartedAt}>
       <StatusRow data-slot="aui_response-loading" label={hint || t.assistant.thread.loadingResponse}>
         <div data-clover-status-copy="">
           <HintText>{hint || 'Clover is working'}</HintText>
@@ -219,7 +220,7 @@ export const TurnActivityIndicator: FC = () => {
   // timer read "quiet for 12s" rather than the age of this component, which is
   // the whole turn so far.
   const [quietSince, setQuietSince] = useState<number | undefined>(undefined)
-  const { awaitingInput, busy, compacting, drafting, providerWait, turnStartedAt } = useThreadSessionStatus()
+  const { sessionId, awaitingInput, busy, compacting, drafting, providerWait, turnStartedAt } = useThreadSessionStatus()
   const hint = useStatusHint(compacting, drafting, providerWait)
 
   // A tool run at the tail already narrates the wait — its summary counts the
@@ -264,7 +265,7 @@ export const TurnActivityIndicator: FC = () => {
   const phase = compacting ? 'compacting' : providerWait ? 'waiting' : drafting ? 'tool' : 'working'
 
   return (
-    <ActivityPresence active={active} phase={phase}>
+    <ActivityPresence active={active} phase={phase} sessionId={sessionId} turnStartedAt={turnStartedAt}>
       <StatusRow data-slot="aui_turn-activity" label={hint || 'Clover is working'}>
         <div data-clover-status-copy="">
           <HintText>{hint || 'Clover is working'}</HintText>

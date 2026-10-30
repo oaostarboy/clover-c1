@@ -29,6 +29,7 @@ import { $threadScrolledUp } from '@/store/thread-scroll'
 import { openSessionInNewWindow } from '@/store/windows'
 
 import { PreviewStatusRow } from './preview-row'
+import { SubagentStrip } from './subagent-strip'
 import { StatusItemRow } from './status-row'
 
 // Slow safety-net poll for silent exits (processes without notify_on_complete
@@ -150,6 +151,10 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
   const sections: { key: string; node: ReactNode }[] = []
 
   for (const group of groups) {
+    if (group.type === 'subagent' && sessionId) {
+      sections.push({ key: group.type, node: <SubagentStrip key={sessionId} sessionId={sessionId} /> })
+      continue
+    }
     sections.push({
       key: group.type,
       node: (

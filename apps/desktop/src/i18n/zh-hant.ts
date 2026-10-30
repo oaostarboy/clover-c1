@@ -2069,6 +2069,18 @@ export const zhHant = defineLocale({
   },
 
   statusStack: {
+    delegation: {
+      completed: "已完成",
+      failed: "失敗",
+      interrupted: "已停止",
+      queued: "排隊中",
+      running: "執行中",
+      openSession: "開啟對話",
+      recentThinking: "最近的思考摘要",
+      activity: "最近活動",
+      stopUnavailable: "無法停止此助手。請開啟其對話檢查。",
+      tools: count => `${count} 工具`,
+    },
     agents: '代理',
     background: count => `${count} 個背景任務`,
     goalActive: '目標進行中',

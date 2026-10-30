@@ -7,6 +7,7 @@ import { ReactionBadge, ReactionPicker } from '@/components/assistant-ui/thread/
 import { MessageTimelineTimestamp } from '@/components/assistant-ui/thread/timeline-timestamp'
 import { type RestoreMessageTarget } from '@/components/assistant-ui/thread/types'
 import { useMessageReactions } from '@/components/assistant-ui/thread/use-message-reactions'
+import { isDelegationWakeup } from './presentation-noise'
 import { UserMessageText } from '@/components/assistant-ui/thread/user-message-text'
 import { Codicon } from '@/components/ui/codicon'
 import { useResizeObserver } from '@/hooks/use-resize-observer'
@@ -42,6 +43,7 @@ export function StickyHumanMessageContainer({
     <>
       <div
         className="group/user-message sticky z-40 -mx-4 flex w-[calc(100%+2rem)] min-w-0 max-w-none flex-col items-stretch gap-0 self-end overflow-visible bg-(--ui-chat-surface-background) px-4 pb-(--conversation-turn-gap) pt-1"
+        style={{ backgroundColor: 'var(--ui-bg-chrome)' }}
         data-message-id={messageId}
         data-role="user"
         data-slot="aui_user-message-root"
@@ -364,13 +366,16 @@ export const UserMessage: FC<{
     }
 
     outer.style.setProperty('--human-msg-full', `${fullHeight}px`)
-    setBodyClamped(fullHeight > lineHeightRef.current * 2 + 1)
+    const limit = parseFloat(getComputedStyle(outer).maxHeight)
+    setBodyClamped(Number.isFinite(limit) && fullHeight > limit + 1)
   }, [])
 
   useResizeObserver(measureClamp, clampInnerRef)
 
   // Injected background-process notification, not a human prompt — render the
   // compact system-style notice (after all hooks above have run).
+  if (isDelegationWakeup(messageText)) return null
+
   if (PROCESS_NOTIFICATION_RE.test(messageText.trim())) {
     return (
       <MessagePrimitive.Root

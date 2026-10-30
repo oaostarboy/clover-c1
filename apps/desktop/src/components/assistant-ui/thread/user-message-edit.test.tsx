@@ -75,6 +75,11 @@ function StockHarness({ onEdit }: { onEdit: () => Promise<void> }) {
 }
 
 describe('click-to-edit user message', () => {
+  it('backs sticky human prompts with opaque theme chrome', async () => {
+    const { container } = render(<StockHarness onEdit={async () => {}} />)
+    const root = container.querySelector('[data-slot="aui_user-message-root"]') as HTMLElement
+    expect(root.style.backgroundColor).toBe('var(--ui-bg-chrome)')
+  })
   it('opens the edit composer with the incremental runtime', async () => {
     const { container } = render(<IncrementalHarness onEdit={async () => {}} />)
 

@@ -17,6 +17,13 @@ const listFor = (sid: string) => $subagentsBySession.get()[sid] ?? []
 describe('subagent store', () => {
   beforeEach(() => $subagentsBySession.set({}))
 
+  it('keeps provider thinking text readable without flattening or truncating', () => {
+    const text = 'A complete paragraph.\n\n' + 'detail '.repeat(90)
+    upsertSubagent('thinking', { subagent_id: 'a', goal: 'Read source' })
+    upsertSubagent('thinking', { subagent_id: 'a', text }, false, 'subagent.thinking')
+    expect(listFor('thinking')[0].stream[0].text).toBe(text)
+  })
+
   it('upserts subagent progress and keeps terminal status stable', () => {
     upsertSubagent('s1', { goal: 'scan files', status: 'running', subagent_id: 'a1', task_index: 0 })
     upsertSubagent('s1', { goal: 'scan files', status: 'completed', subagent_id: 'a1', summary: 'done', task_index: 0 })

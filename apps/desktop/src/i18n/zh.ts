@@ -2646,6 +2646,18 @@ export const zh: Translations = {
   },
 
   statusStack: {
+    delegation: {
+      completed: "已完成",
+      failed: "失败",
+      interrupted: "已停止",
+      queued: "排队中",
+      running: "运行中",
+      openSession: "打开会话",
+      recentThinking: "最近的思考摘要",
+      activity: "最近活动",
+      stopUnavailable: "无法停止此助手。请打开其会话检查。",
+      tools: count => `${count} 工具`,
+    },
     agents: '代理',
     background: count => `${count} 个后台任务`,
     goalActive: '目标进行中',
