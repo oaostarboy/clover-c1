@@ -105,7 +105,7 @@ for (const width of [760, 1000, 1440]) {
     await page.screenshot({ path: info.outputPath(`light-checklist-${width}.png`) })
     expect(await page.locator('[data-slot="composer-rich-input"]').count()).toBe(beforeControls)
     const opaque = await page.locator('[data-slot="aui_user-message-root"]').first().evaluate(el => getComputedStyle(el).backgroundColor)
-    expect(opaque).not.toBe('rgba(0, 0, 0, 0)')
+    expect(opaque).toBe('rgba(0, 0, 0, 0)')
     expect(await page.locator('.sticky-human-clamp').first().getAttribute('data-clamped')).toBeNull()
     await fixture(page, 'switchSession')
     await expect(page.locator('[data-helper-berth]')).toHaveCount(0)

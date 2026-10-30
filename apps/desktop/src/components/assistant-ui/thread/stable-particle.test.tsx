@@ -9,6 +9,7 @@ import { clearApprovalRequest, setApprovalRequest } from '@/store/prompts'
 
 import { stubThreadEnvironment, ThreadRuntime, userMessage } from '../test-utils'
 
+import { setReasoningCollapsedByDefault } from '@/store/reasoning-disclosure'
 import { $delegationAnchors } from './delegation-anchor'
 
 import { Thread } from '.'
@@ -23,6 +24,7 @@ function assistant(id: string, content: unknown[], running = true): ThreadMessag
 }
 
 it('keeps one formation and anchor across reasoning, tools and interim messages until the session settles', async () => {
+  setReasoningCollapsedByDefault(false) // This test observes phase content, not the default disclosure policy.
   const busy = atom(true)
   const view = { ...PRIMARY_SESSION_VIEW, $runtimeId: atom('stable-session'), $busy: busy, $turnStartedAt: atom<number | null>(Date.now()) }
   const user = userMessage('u', 'work')
@@ -60,6 +62,8 @@ it('keeps one formation and anchor across reasoning, tools and interim messages 
   rerender(tree([user, assistant('a', [thought], false), assistant('b', [{ type: 'reasoning', text: 'next' }])]))
   await waitFor(() => expect(container.textContent).toContain('next'))
   check()
+  rerender(tree([user, assistant('b', [{ type: 'tool-call', toolName: 'delegate_task', toolCallId: 'delegate', args: { goal: 'Review code' } }])]))
+  await waitFor(check)
   act(() => setApprovalRequest({ sessionId: 'stable-session', command: 'pwd', description: 'approve' }))
   expect(anchor?.querySelector('.clover-activity-art')?.getAttribute('data-state')).toBe('leaving')
   act(() => clearApprovalRequest('stable-session'))
@@ -71,4 +75,4 @@ it('keeps one formation and anchor across reasoning, tools and interim messages 
   await waitFor(() => expect(container.querySelector('.clover-activity-anchor')).toBeNull())
 })
 
-afterEach(() => { cleanup(); clearApprovalRequest(); $compactingSessions.set({}); vi.useRealTimers() })
+afterEach(() => { setReasoningCollapsedByDefault(true); cleanup(); clearApprovalRequest(); $compactingSessions.set({}); vi.useRealTimers() })

@@ -47,7 +47,6 @@ export function StickyHumanMessageContainer({
         data-message-id={messageId}
         data-role="user"
         data-slot="aui_user-message-root"
-        style={{ backgroundColor: 'var(--ui-bg-chrome)' }}
       >
         {children}
       </div>
