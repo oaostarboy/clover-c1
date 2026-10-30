@@ -392,7 +392,7 @@ export function ChatBar({
 
   // Resting / reconnecting / starting placeholder text, re-rolled only on a real
   // conversation change.
-  const placeholder = useComposerPlaceholder({ disabled, reconnecting, sessionId })
+  const placeholder = useComposerPlaceholder({ disabled, landing, reconnecting, sessionId })
 
   // Trigger / completion engine: @// detection, the adapter-driven item list,
   // popover selection, and chip insertion. The keydown nav block below consumes
@@ -1054,7 +1054,7 @@ export function ChatBar({
           hudNativeDrag && '[-webkit-app-region:no-drag]'
         )}
         contentEditable={!inputDisabled}
-        data-placeholder={landing && !disabled ? 'Ask Clover anything…' : placeholder}
+        data-placeholder={placeholder}
         data-slot={RICH_INPUT_SLOT}
         onBeforeInput={handleEditorBeforeInput}
         onBlur={() => {
