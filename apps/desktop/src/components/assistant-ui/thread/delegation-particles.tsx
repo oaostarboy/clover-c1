@@ -13,7 +13,11 @@ import { $delegationAnchors } from './delegation-anchor'
 // progress update. Session + worker id survives remounts; bounded window memory.
 const presented = new Map<string, Set<string>>()
 const MAX_BERTHS = 4
-const FRAME_MS = 1000 / 24
+// Only travel needs display-rate updates. Keep the settled lane's geometry checks cheap.
+const IDLE_FRAME_MS = 1000 / 24
+const SPLIT_MS = 650
+const DOCK_MS = 850
+const smoothTravel = (progress: number) => progress ** 3 * (progress * (progress * 6 - 15) + 10)
 
 function claim(sessionId: string, agent: SubagentProgress, turn?: number) {
   let seen = presented.get(sessionId)
@@ -61,7 +65,8 @@ function ParticleJourney({
     x: 0,
     y: 0,
     fromX: 0,
-    fromY: 0
+    fromY: 0,
+    sourcePose: null as null | { left: number; top: number; bottom: number; scrollX: number; scrollY: number }
   })
 
   const wakeRef = useRef<() => void>(() => {})
@@ -78,13 +83,20 @@ function ParticleJourney({
     const state = journey.current
 
     let timer: number | undefined
+    let animationFrame: number | undefined
     let visible = true
     let last = performance.now()
     const motion = window.matchMedia('(prefers-reduced-motion: reduce)')
 
     const stop = () => {
       window.clearTimeout(timer)
+
+      if (animationFrame !== undefined) {
+        window.cancelAnimationFrame(animationFrame)
+      }
+
       timer = undefined
+      animationFrame = undefined
     }
 
     const settle = () => {
@@ -133,11 +145,30 @@ function ParticleJourney({
 
       if (source?.isConnected && state.docking < 0) {
         const rect = source.getBoundingClientRect()
+        state.sourcePose = { left: rect.left, top: rect.top, bottom: rect.bottom, scrollX: window.scrollX, scrollY: window.scrollY }
+      }
+
+      const pose = state.sourcePose
+
+      if (!pose && state.docking < 0) {
+        // No measured origin: never invent a flight from (0, 0).
+        settle()
+
+        return
+      }
+
+      if (pose && state.docking < 0 && (source?.isConnected || state.elapsed < SPLIT_MS)) {
+        const rect = {
+          left: pose.left + pose.scrollX - window.scrollX,
+          top: pose.top + pose.scrollY - window.scrollY,
+          bottom: pose.bottom + pose.scrollY - window.scrollY
+        }
+
         // A reserved 64px-high lane, to the right of the stable main formation.
-        const progress = Math.min(1, state.elapsed / 600)
-        const spring = 1 - Math.exp(-7 * progress) * Math.cos(7 * progress)
-        state.x = rect.left + 32 + (48 + index * 30) * spring
-        state.y = rect.top + 32 - Math.sin(progress * Math.PI) * 7
+        const progress = Math.min(1, state.elapsed / SPLIT_MS)
+        const ease = smoothTravel(progress)
+        state.x = rect.left + 32 + (48 + index * 30) * ease
+        state.y = rect.top + 32 - Math.sin(ease * Math.PI) * 7
 
         if (rect.bottom < 0 || rect.top > window.innerHeight) {
           node.style.visibility = 'hidden'
@@ -152,9 +183,9 @@ function ParticleJourney({
           state.fromY = state.y
         }
 
-        const progress = Math.min(1, (state.elapsed - state.docking) / 700)
-        const ease = progress * progress * (3 - 2 * progress)
-        state.x = state.fromX + (dest.left + dest.width / 2 - state.fromX) * ease - Math.sin(progress * Math.PI) * 18
+        const progress = Math.min(1, (state.elapsed - state.docking) / DOCK_MS)
+        const ease = smoothTravel(progress)
+        state.x = state.fromX + (dest.left + dest.width / 2 - state.fromX) * ease - Math.sin(ease * Math.PI) * 18
         state.y = state.fromY + (dest.top + dest.height / 2 - state.fromY) * ease
 
         if (progress >= 1) {
@@ -190,7 +221,14 @@ function ParticleJourney({
       node.style.transform = `translate3d(${state.x - 13}px,${state.y - 13}px,0)`
       node.style.visibility = occluded ? 'hidden' : 'visible'
       target.style.visibility = 'hidden'
-      timer = window.setTimeout(tick, FRAME_MS)
+
+      // Travel follows the display clock, not a 24fps timer. Do not run a
+      // permanent display-rate loop once the mini is hovering beside its parent.
+      if (state.elapsed < SPLIT_MS || state.docking >= 0) {
+        animationFrame = window.requestAnimationFrame(tick)
+      } else {
+        timer = window.setTimeout(tick, IDLE_FRAME_MS)
+      }
     }
 
     const wake = () => {

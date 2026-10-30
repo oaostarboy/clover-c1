@@ -1,9 +1,93 @@
 import { expect, test, type Page } from '@playwright/test'
 
 // Optional real Chromium recordings for this production-component fixture.
-test.use({ video: process.env.RECORD_PARTICLE_EVIDENCE === '1' ? 'on' : 'off' })
+test.use({ video: process.env.RECORD_PARTICLE_EVIDENCE === '1' ? { mode: 'on', size: { width: 1440, height: 900 } } : 'off' })
 const fixture = async (page: Page, method: string, ...args: unknown[]) =>
   page.evaluate(({ method, args }) => (window as any).delegationFixture[method](...args), { method, args })
+test('split and dock travel advance on display frames instead of stair-stepping', async ({ page }, info) => {
+  await page.goto('/e2e/fixtures/delegation-particles.html')
+  await expect(page.locator('.clover-activity-art')).toBeVisible()
+  const sample = async (method: 'spawn' | 'finish') => page.evaluate(async method => {
+    const samples: { time: number; x: number; y: number }[] = []
+    ;(window as any).delegationFixture[method](...(method === 'spawn' ? ['pacing'] : []))
+    const start = performance.now()
+    await new Promise<void>(resolve => {
+      const frame = (time: number) => {
+        const el = document.querySelector<HTMLElement>('.delegation-flight')
+        if (el?.style.visibility === 'visible' && el.style.transform) {
+          const matrix = new DOMMatrixReadOnly(el.style.transform)
+          samples.push({ time, x: matrix.m41, y: matrix.m42 })
+        }
+        if (time - start < 1300) requestAnimationFrame(frame)
+        else resolve()
+      }
+      requestAnimationFrame(frame)
+    })
+    // Ignore still frames before docking begins and after travel has settled.
+    const changes = samples.slice(1).map((sample, index) => Math.hypot(sample.x - samples[index].x, sample.y - samples[index].y))
+    const first = changes.findIndex(delta => delta > 0.01)
+    const last = changes.findLastIndex(delta => delta > 0.01)
+    const travel = changes.slice(first, last + 1)
+    return { samples, changes, travelFrames: travel.length, heldFrames: travel.filter(delta => delta <= 0.01).length }
+  }, method)
+  for (const method of ['spawn', 'finish'] as const) {
+    const result = await sample(method)
+    await info.attach(`${method}-frame-pacing`, { body: JSON.stringify(result), contentType: 'application/json' })
+    expect(result.travelFrames).toBeGreaterThan(15)
+    expect(result.heldFrames / result.travelFrames).toBeLessThan(0.2)
+  }
+})
+
+test('early parent finish preserves an in-progress split before docking', async ({ page }, info) => {
+  await page.setViewportSize({ width: 1440, height: 900 })
+  await page.goto('/e2e/fixtures/delegation-particles.html')
+  await expect(page.locator('.clover-activity-art')).toBeVisible()
+  const samples = await page.evaluate(async () => {
+    const f = (window as any).delegationFixture
+    const result: { t: number; x: number; y: number; main: boolean; visible: boolean }[] = []
+    const start = performance.now()
+    f.spawn('early')
+    setTimeout(() => f.finish(), 80)
+    await new Promise<void>(resolve => {
+      const frame = (time: number) => {
+        const el = document.querySelector<HTMLElement>('.delegation-flight')
+        if (el?.style.transform) {
+          const m = new DOMMatrixReadOnly(el.style.transform)
+          result.push({ t: time - start, x: m.m41, y: m.m42, main: !!document.querySelector('.clover-activity-art'), visible: el.style.visibility === 'visible' })
+        }
+        if (time - start < 1700) requestAnimationFrame(frame)
+        else resolve()
+      }
+      requestAnimationFrame(frame)
+    })
+    return result
+  })
+  await info.attach('early-finish-transforms', { body: JSON.stringify(samples), contentType: 'application/json' })
+  const after = samples.filter(s => !s.main && s.visible && s.t < 550)
+  expect(after.length).toBeGreaterThan(5)
+  expect(after.at(-1)!.x - after[0].x).toBeGreaterThan(20)
+  expect((await fixture(page, 'state'))[0].status).toBe('running')
+})
+
+test('two helpers around parent finish never fly from an unmeasured origin', async ({ page }) => {
+  await page.goto('/e2e/fixtures/delegation-particles.html')
+  await expect(page.locator('.clover-activity-art')).toBeVisible()
+  await fixture(page, 'spawn', 'before')
+  await expect(page.locator('.delegation-flight').first()).toHaveCSS('visibility', 'visible')
+  await fixture(page, 'finish')
+  await expect(page.locator('.clover-activity-art')).toHaveCount(0)
+  await fixture(page, 'spawn', 'after')
+  await expect(page.locator('[data-helper-berth]')).toHaveCount(2)
+  await page.waitForTimeout(150)
+  const flights = await page.locator('.delegation-flight').evaluateAll(els => els.map(el => ({
+    visible: getComputedStyle(el).visibility === 'visible',
+    transform: (el as HTMLElement).style.transform
+  })))
+  expect(flights[0].visible).toBe(true)
+  expect(flights[1].visible).toBe(false)
+  expect((await fixture(page, 'state')).every((agent: any) => agent.status === 'running')).toBe(true)
+})
+
 test('live helper canvas animates internally after splitting settles', async ({ page }) => {
   await page.goto('/e2e/fixtures/delegation-particles.html')
   await expect(page.locator('.clover-activity-art')).toBeVisible()
@@ -220,7 +304,7 @@ for (const width of [760, 1000, 1440]) {
     await fixture(page, 'finish')
     // Follow the complete handoff, including the main formation's departure.
     let sawDockFlight = false
-    for (let frame = 0; frame < 34; frame++) {
+    for (let frame = 0; frame < 50; frame++) {
       const sample = await page.evaluate(() => {
         const text = [
           ...document.querySelectorAll(
