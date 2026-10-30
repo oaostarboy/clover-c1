@@ -2093,9 +2093,15 @@ def build_assistant_message(agent, assistant_message, finish_reason: str) -> dic
     # directly in the content rather than returning separate API fields).
     if not reasoning_text:
         content = flatten_message_text(getattr(assistant_message, "content", None))
-        think_blocks = re.findall(r'<think>(.*?)</think>', content, flags=re.DOTALL)
+        think_blocks = re.findall(
+            r'(?:<think>(.*?)</think>|\[::(?:thought|thinking|reasoning)\b(.*?)::\])',
+            content,
+            flags=re.DOTALL | re.IGNORECASE,
+        )
         if think_blocks:
-            combined = "\n\n".join(b.strip() for b in think_blocks if b.strip())
+            combined = "\n\n".join(
+                (a or b).strip() for a, b in think_blocks if (a or b).strip()
+            )
             reasoning_text = combined or None
 
     if reasoning_text and agent.verbose_logging:

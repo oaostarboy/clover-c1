@@ -286,6 +286,18 @@ def _strip_reasoning_tags(text: str) -> str:
             cleaned,
             flags=re.IGNORECASE,
         )
+    cleaned = re.sub(
+        r"\[::(?:thought|thinking|reasoning)\b.*?::\]\s*",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
+    cleaned = re.sub(
+        r"(?:^|\n)[ \t]*\[::(?:thought|thinking|reasoning)\b.*$",
+        "",
+        cleaned,
+        flags=re.DOTALL | re.IGNORECASE,
+    )
     # Tool-call XML blocks (openclaw/openclaw#67318).
     for tc_tag in ("tool_call", "tool_calls", "tool_result",
                    "function_call", "function_calls"):
@@ -8172,8 +8184,8 @@ class CloverCLI(CLIAgentSetupMixin, CLICommandsMixin):
         # suppress them during streaming too — unless show_reasoning is
         # enabled, in which case we route the inner content to the
         # reasoning display box instead of discarding it.
-        _OPEN_TAGS = ("<REASONING_SCRATCHPAD>", "<think>", "<reasoning>", "<THINKING>", "<thinking>", "<thought>")
-        _CLOSE_TAGS = ("</REASONING_SCRATCHPAD>", "</think>", "</reasoning>", "</THINKING>", "</thinking>", "</thought>")
+        _OPEN_TAGS = ("<REASONING_SCRATCHPAD>", "<think>", "<reasoning>", "<THINKING>", "<thinking>", "<thought>", "[::thought", "[::thinking", "[::reasoning")
+        _CLOSE_TAGS = ("</REASONING_SCRATCHPAD>", "</think>", "</reasoning>", "</THINKING>", "</thinking>", "</thought>", "::]")
 
         # Append to a pre-filter buffer first
         self._stream_prefilt = getattr(self, "_stream_prefilt", "") + text

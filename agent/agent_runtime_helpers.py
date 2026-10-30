@@ -70,6 +70,8 @@ _TOOL_CALL_TAG_NAMES = ("tool_call", "tool_calls", "tool_result", "function_call
 _REASONING_BLOCK_PATTERNS = tuple(
     re.compile(rf"<{name}>.*?</{name}>", re.DOTALL | re.IGNORECASE)
     for name in _REASONING_TAG_NAMES
+) + (
+    re.compile(r"\[::(?:thought|thinking|reasoning)\b.*?::\]\s*", re.DOTALL | re.IGNORECASE),
 )
 
 _TOOL_CALL_BLOCK_PATTERNS = tuple(
@@ -88,7 +90,7 @@ _NAMED_FUNCTION_BLOCK_PATTERN = re.compile(
 )
 
 _UNTERMINATED_REASONING_BLOCK_PATTERN = re.compile(
-    rf'(?:^|\n)[ \t]*<(?:{"|".join(_REASONING_TAG_NAMES)})\b[^>]*>.*$',
+    rf'(?:^|\n)[ \t]*(?:<(?:{"|".join(_REASONING_TAG_NAMES)})\b[^>]*>|\[::(?:thought|thinking|reasoning)\b).*$',
     re.DOTALL | re.IGNORECASE,
 )
 

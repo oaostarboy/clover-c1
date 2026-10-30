@@ -455,10 +455,12 @@ class GatewayStreamConsumer:
     _OPEN_THINK_TAGS = (
         "<REASONING_SCRATCHPAD>", "<think>", "<reasoning>",
         "<THINKING>", "<thinking>", "<thought>",
+        "[::thought", "[::thinking", "[::reasoning",
     )
     _CLOSE_THINK_TAGS = (
         "</REASONING_SCRATCHPAD>", "</think>", "</reasoning>",
         "</THINKING>", "</thinking>", "</thought>",
+        "::]",
     )
 
     # Class-wide monotonic counter for native-streaming draft ids.  Telegram
