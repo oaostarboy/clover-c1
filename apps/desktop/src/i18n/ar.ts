@@ -1929,6 +1929,18 @@ export const ar = defineLocale({
     }
   },
   statusStack: {
+    delegation: {
+      completed: 'اكتمل',
+      failed: 'فشل',
+      interrupted: 'متوقف',
+      queued: 'في الانتظار',
+      running: 'قيد التشغيل',
+      openSession: 'فتح الجلسة',
+      recentThinking: 'ملخصات التفكير الأخيرة',
+      activity: 'النشاط الأخير',
+      stopUnavailable: 'تعذر إيقاف المساعد. افتح جلسته للفحص.',
+      tools: count => `${count} أدوات`
+    },
     agents: 'الوكلاء',
     background: count => `${count} في الخلفية`,
     subagents: count => `${count} ${count === 1 ? 'وكيل فرعي' : 'وكيل فرعي'}`,

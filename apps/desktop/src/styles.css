@@ -59,14 +59,6 @@
    (this variant) flatten everything into one shared scroll. See ChatSidebar. */
 @custom-variant compact (@media (max-height: 768px));
 
-@font-face {
-  font-family: 'Collapse';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('../../../node_modules/@clover/ui/dist/fonts/Collapse-Bold.woff2') format('woff2');
-}
-
 /* JetBrains Mono — bundled terminal font (Apache-2.0) so bold/italic share the
    regular face's metrics instead of squeezing against a system fallback. */
 @font-face {
@@ -1661,17 +1653,10 @@ body.guest-pointer-lock :is(webview, iframe) {
   container-type: inline-size;
 }
 
-/* The display lettering an empty chat is titled with. Kept here beside
-   `.fit-text` rather than as utilities on the element: the two always travel
-   together, and the face is the whole point of the treatment — it must not be
-   something a class-merge or a missed scan can quietly drop, leaving the
-   wordmark rendered in body text. */
+/* Bot identity is ordinary UI text; intentional code/editor fonts stay intact. */
 .wordmark {
-  font-family: 'Collapse', var(--font-sans);
-  font-weight: 700;
-  line-height: 0.9;
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font-family: var(--dt-font-sans);
+  line-height: 1.2;
 }
 
 .fit-text > [aria-hidden] {

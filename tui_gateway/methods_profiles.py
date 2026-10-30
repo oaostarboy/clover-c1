@@ -60,6 +60,23 @@ def _(rid, params: dict) -> dict:
             return text[:80] + "..."
         return text
 
+    def _profile_display_name(profile):
+        explicit = getattr(profile, "display_name", "") or ""
+        if explicit.strip():
+            return explicit.strip()
+        try:
+            from clover_cli.config import read_user_config_raw
+
+            cfg = read_user_config_raw(profile.path / "config.yaml")
+            if not isinstance(cfg, dict):
+                return ""
+            branding = cfg.get("branding") if isinstance(cfg.get("branding"), dict) else {}
+            agent = cfg.get("agent") if isinstance(cfg.get("agent"), dict) else {}
+            name = branding.get("agent_name") or agent.get("name") or ""
+            return name.strip() if isinstance(name, str) else ""
+        except Exception:
+            return ""
+
     def _open_profile_session_db(profile_path):
         """Read-only attach for roster previews, or None.
 
@@ -264,7 +281,7 @@ def _(rid, params: dict) -> dict:
                 "model": p.model,
                 "provider": p.provider,
                 "description": getattr(p, "description", "") or "",
-                "display_name": getattr(p, "display_name", "") or "",
+                "display_name": _profile_display_name(p),
                 "skill_count": getattr(p, "skill_count", 0) or 0,
             }
             if include_sessions:

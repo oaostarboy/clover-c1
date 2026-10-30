@@ -164,7 +164,7 @@ function streamFromPayload(
   }
 
   if (eventType === 'subagent.thinking' && text) {
-    out.push({ at, kind: 'thinking', text })
+    out.push({ at, kind: 'thinking', text: str(payload.text) || preview })
   }
 
   const summary = compact(str(payload.summary) || str(payload.text) || timeoutSummary(payload))

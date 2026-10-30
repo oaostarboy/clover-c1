@@ -752,6 +752,7 @@ export const $sessionResumeRequest = atom<SessionResumeRequest | null>(null)
 const SESSION_OWNER_HINT_LIMIT = 256
 const SESSION_OWNER_HINTS_KEY = 'clover.desktop.sessionOwnerHints.v1'
 const sessionOwnerHints = new Map<string, { id: string; route: SessionOwnerRoute }>()
+export const $sessionOwnerHintsRevision = atom(0)
 
 function sessionOwnerHintKey(sessionId: string, route: Pick<SessionOwnerRoute, 'connectionId' | 'profile'>): string {
   return JSON.stringify([route.connectionId.trim(), route.profile.trim() || 'default', sessionId])
@@ -833,6 +834,8 @@ export function hydrateSessionOwnerHints(): void {
       ...(candidate.mode === 'local' || candidate.mode === 'remote' ? { mode: candidate.mode } : {})
     })
   }
+
+  $sessionOwnerHintsRevision.set($sessionOwnerHintsRevision.get() + 1)
 }
 
 hydrateSessionOwnerHints()
@@ -840,6 +843,7 @@ hydrateSessionOwnerHints()
 export function setSessionOwnerHint(sessionId: string, route: SessionOwnerRoute): void {
   if (rememberSessionOwnerHint(sessionId, route)) {
     persistSessionOwnerHints()
+    $sessionOwnerHintsRevision.set($sessionOwnerHintsRevision.get() + 1)
   }
 }
 
@@ -864,12 +868,14 @@ export function forgetSessionOwnerHintsForConnection(connectionId: string): void
 
   if (changed) {
     persistSessionOwnerHints()
+    $sessionOwnerHintsRevision.set($sessionOwnerHintsRevision.get() + 1)
   }
 }
 
 /** @internal Tests: forget every in-memory hint (storage untouched unless asked). */
 export function _resetSessionOwnerHintsForTests({ storage = false }: { storage?: boolean } = {}): void {
   sessionOwnerHints.clear()
+  $sessionOwnerHintsRevision.set($sessionOwnerHintsRevision.get() + 1)
 
   if (storage) {
     writeJson(SESSION_OWNER_HINTS_KEY, null)

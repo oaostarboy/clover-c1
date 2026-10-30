@@ -18,6 +18,8 @@ import { $gateway } from '@/store/gateway'
 import { notifyThreadEditOpen } from '@/store/thread-scroll'
 import { isWatchWindow } from '@/store/windows'
 
+import { isDelegationWakeup } from './presentation-noise'
+
 /** True when the user has a live text highlight (drag-select / triple-click). */
 export function hasTextSelection(): boolean {
   const selection = window.getSelection()
@@ -45,6 +47,7 @@ export function StickyHumanMessageContainer({
         data-message-id={messageId}
         data-role="user"
         data-slot="aui_user-message-root"
+        style={{ backgroundColor: 'var(--ui-bg-chrome)' }}
       >
         {children}
       </div>
@@ -364,13 +367,18 @@ export const UserMessage: FC<{
     }
 
     outer.style.setProperty('--human-msg-full', `${fullHeight}px`)
-    setBodyClamped(fullHeight > lineHeightRef.current * 2 + 1)
+    const limit = parseFloat(getComputedStyle(outer).maxHeight)
+    setBodyClamped(Number.isFinite(limit) && fullHeight > limit + 1)
   }, [])
 
   useResizeObserver(measureClamp, clampInnerRef)
 
   // Injected background-process notification, not a human prompt — render the
   // compact system-style notice (after all hooks above have run).
+  if (isDelegationWakeup(messageText)) {
+    return null
+  }
+
   if (PROCESS_NOTIFICATION_RE.test(messageText.trim())) {
     return (
       <MessagePrimitive.Root

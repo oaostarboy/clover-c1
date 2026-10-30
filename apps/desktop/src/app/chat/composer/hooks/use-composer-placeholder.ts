@@ -1,12 +1,21 @@
+import { host } from '@clover/plugin-sdk'
+import { useStore } from '@nanostores/react'
 import { useEffect, useRef, useState } from 'react'
 
 import { useI18n } from '@/i18n'
+import { $focusedBotOwner, focusedRosterOwner } from '@/plugins/clover-bots/bot-state'
+import { $botMeta, $lastRoster, isActiveRosterBot } from '@/plugins/clover-bots/data'
+import { displayName } from '@/plugins/clover-bots/labels'
+import { botRosterMeta } from '@/plugins/clover-bots/routing'
 import { resetBrowseState } from '@/store/composer-input-history'
+import { $cronSessions, $messagingSessions, $sessionOwnerHintsRevision, $sessions } from '@/store/session'
+import { $sessionStates, $sessionTiles, knownOwnerForSession } from '@/store/session-states'
 
 import { pickPlaceholder } from '../composer-utils'
 
 interface UseComposerPlaceholderOptions {
   disabled: boolean
+  landing?: boolean
   reconnecting: boolean
   sessionId: null | string | undefined
 }
@@ -18,8 +27,60 @@ interface UseComposerPlaceholderOptions {
  * keeps its starter so the text doesn't flip mid-stream. While the transport is
  * down, it swaps to a reconnecting / starting message instead.
  */
-export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: UseComposerPlaceholderOptions): string {
+export function useComposerPlaceholder({
+  disabled,
+  landing = false,
+  reconnecting,
+  sessionId
+}: UseComposerPlaceholderOptions): string {
   const { t } = useI18n()
+  const focusedOwner = useStore($focusedBotOwner)
+  // Subscribe to every input of the existing owner ladder, including runtime
+  // to stored-id mapping and hints that may arrive after the surface mounts.
+  useStore($sessionTiles)
+  useStore($sessionStates)
+  useStore($sessions)
+  useStore($cronSessions)
+  useStore($messagingSessions)
+  useStore($sessionOwnerHintsRevision)
+  const roster = useStore($lastRoster)
+  const allMeta = useStore($botMeta)
+  const activeConnection = useStore(host.state.connectionId)
+  const sessionOwner = sessionId ? knownOwnerForSession(sessionId) : undefined
+
+  const owner = focusedRosterOwner(
+    sessionId
+      ? typeof sessionOwner === 'string'
+        ? { connectionId: activeConnection || '', profile: sessionOwner }
+        : sessionOwner || null
+      : focusedOwner
+  )
+
+  // Existing sessions own their text; only an unpersisted draft follows focus.
+  // Never borrow an unqualified row for another connection.
+  const matches = owner
+    ? roster.filter(bot => {
+        const botConnection = String(bot.connectionId || bot.route?.connectionId || '').trim()
+
+        if (botConnection && botConnection !== owner.connectionId) {
+          return false
+        }
+
+        if (!botConnection && owner.connectionId && owner.connectionId !== activeConnection) {
+          return false
+        }
+
+        if ((bot.remoteSource || bot.sourceScoped) && !owner.connectionId) {
+          return false
+        }
+
+        return isActiveRosterBot(bot, owner)
+      })
+    : []
+
+  const bot = matches.length === 1 ? matches[0] : null
+  const name = bot ? displayName(bot, botRosterMeta(bot, allMeta) || bot.ui_meta?.['clover-bots']) : 'Clover'
+
   const newSessionPlaceholders = t.composer.newSessionPlaceholders
   const followUpPlaceholders = t.composer.followUpPlaceholders
 
@@ -57,5 +118,7 @@ export function useComposerPlaceholder({ disabled, reconnecting, sessionId }: Us
     ? reconnecting
       ? t.composer.placeholderReconnecting
       : t.composer.placeholderStarting
-    : restingPlaceholder
+    : landing
+      ? `Ask ${name} anything…`
+      : restingPlaceholder.replace(/Clover/g, () => name)
 }

@@ -15,6 +15,14 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 2.0.2.3 | Clover C2.0.2.3 | 2026-10-30
+- Smaller Clover particles show delegated helpers and settle into a compact activity bar.
+- Helper details keep task progress, readable thinking, errors, and stop controls within reach.
+- Internal background messages and silent replies no longer clutter the conversation.
+- Sticky messages stay readable, and short prompts no longer fade out at the bottom.
+- Bot names use the desktop's regular font instead of oversized decorative lettering.
+- Bot lists and chat inputs show the configured agent name instead of always saying Clover.
+
 ## 2.0.2.2 | Clover C2.0.2.2 | 2026-10-30
 - Desktop text input no longer overlaps assistant responses when streaming or completing answers.
 - Desktop background smoothly transitions into an elegant frosted-glass look on your first message.

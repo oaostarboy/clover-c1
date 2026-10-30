@@ -82,6 +82,22 @@
   overflow: visible !important;
 }
 
+
+/* Delegated work stays above the composer, never inside its input controls. */
+.delegation-strip { color: var(--ui-text-primary); }
+.delegation-strip-toggle { display: flex; align-items: center; gap: .5rem; width: 100%; min-width: 0; padding: .35rem .6rem; font-size: .75rem; cursor: pointer; -webkit-app-region: no-drag; }
+.delegation-berths { display: inline-flex; align-items: center; flex-shrink: 0; gap: .125rem; }
+.delegation-particle { display: inline-flex; width: 26px; height: 26px; pointer-events: none; flex-shrink: 0; }
+.delegation-particle > .clover-formation { width: 26px !important; height: 26px !important; }
+.delegation-particle[data-status='failed'], .delegation-particle[data-status='interrupted'] { opacity: .5; }
+.delegation-flight { position: fixed; inset: 0 auto auto 0; z-index: 45; visibility: hidden; contain: layout style; }
+.delegation-drawer { padding: .25rem .75rem .6rem; }
+.delegation-helper { padding-block: .65rem; font-size: .75rem; line-height: 1.6; }
+.delegation-helper summary { cursor: pointer; color: var(--ui-text-secondary); -webkit-app-region: no-drag; }
+.delegation-stream { max-height: 14rem; overflow: auto; }
+.delegation-stream p + p { margin-top: .6rem; }
+.delegation-attention { color: var(--destructive); padding: .25rem .75rem; font-size: .75rem; }
+
 /* Live activity status: particle clover directly on the canvas without background enclosure */
 .clover-activity-anchor {
   position: relative;
@@ -95,8 +111,8 @@
 .clover-activity-anchor[data-active] {
   display: inline-flex;
   align-items: center;
-  justify-content: center;
-  width: fit-content;
+  justify-content: flex-start;
+  width: 208px;
   max-width: 100%;
   padding: 0;
   border-radius: 0;
@@ -123,8 +139,8 @@
 
 .clover-activity-art {
   position: relative;
-  width: 68px;
-  height: 68px;
+  width: 64px;
+  height: 64px;
   flex-shrink: 0;
   display: flex;
   align-items: center;
@@ -136,8 +152,8 @@
 }
 
 .clover-activity-art > .clover-formation {
-  width: 68px !important;
-  height: 68px !important;
+  width: 64px !important;
+  height: 64px !important;
 }
 
 .clover-activity-art[data-state='present'] {
@@ -198,13 +214,13 @@
   }
 
   .clover-activity-art {
-    width: 48px;
-    height: 48px;
+    width: 64px;
+    height: 64px;
   }
 
   .clover-activity-art > .clover-formation {
-    width: 48px !important;
-    height: 48px !important;
+    width: 64px !important;
+    height: 64px !important;
   }
 }
 

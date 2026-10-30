@@ -1122,8 +1122,7 @@ export const zh: Translations = {
       sshErrAuth:
         'SSH 认证失败。请将密钥加载到 ssh-agent（ssh-add），或在 ~/.ssh/config 中设置 IdentityFile——Clover 以非交互方式运行 ssh。',
       sshErrHostKey: '自上次连接以来主机密钥已更改。请确认这是预期的，然后运行 ssh-keygen -R <host> 并重新连接。',
-      sshErrNotInstalled:
-        '远程主机上未安装 Clover。请在远程安装（curl -fsSL  | sh）或设置 Clover 路径。',
+      sshErrNotInstalled: '远程主机上未安装 Clover。请在远程安装（curl -fsSL  | sh）或设置 Clover 路径。',
       sshErrPlatform: '不支持的远程平台。Clover Desktop 的 SSH 模式支持 Linux、macOS 和 Windows 远程主机。',
       sshErrTimeout: 'SSH 连接超时。主机可能无法访问或处于休眠状态。',
       sshErrUpdateRequired: '使用 Desktop SSH 连接前，请更新远程主机上的 Clover。',
@@ -2646,6 +2645,18 @@ export const zh: Translations = {
   },
 
   statusStack: {
+    delegation: {
+      completed: '已完成',
+      failed: '失败',
+      interrupted: '已停止',
+      queued: '排队中',
+      running: '运行中',
+      openSession: '打开会话',
+      recentThinking: '最近的思考摘要',
+      activity: '最近活动',
+      stopUnavailable: '无法停止此助手。请打开其会话检查。',
+      tools: count => `${count} 工具`
+    },
     agents: '代理',
     background: count => `${count} 个后台任务`,
     goalActive: '目标进行中',

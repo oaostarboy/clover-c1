@@ -2087,6 +2087,18 @@ export interface Translations {
   }
 
   statusStack: {
+    delegation: {
+      completed: string
+      failed: string
+      interrupted: string
+      queued: string
+      running: string
+      openSession: string
+      recentThinking: string
+      activity: string
+      stopUnavailable: string
+      tools: (count: number) => string
+    }
     agents: string
     background: (count: number) => string
     goalActive: string

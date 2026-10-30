@@ -30,6 +30,7 @@ import { openSessionInNewWindow } from '@/store/windows'
 
 import { PreviewStatusRow } from './preview-row'
 import { StatusItemRow } from './status-row'
+import { SubagentStrip } from './subagent-strip'
 
 // Slow safety-net poll for silent exits (processes without notify_on_complete
 // emit no event when they die). Only armed while a running row is on screen.
@@ -150,6 +151,12 @@ export function ComposerStatusStack({ queue, sessionId }: ComposerStatusStackPro
   const sections: { key: string; node: ReactNode }[] = []
 
   for (const group of groups) {
+    if (group.type === 'subagent' && sessionId) {
+      sections.push({ key: group.type, node: <SubagentStrip key={sessionId} sessionId={sessionId} /> })
+
+      continue
+    }
+
     sections.push({
       key: group.type,
       node: (
