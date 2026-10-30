@@ -64,9 +64,24 @@ def test_atomic_creation_rejects_missing_self_and_cyclic_parent(tmp_path, parent
                               model_config={"_delegate_from": parent}, validate_worker_parent=True)
         row = db.get_session("child")
         if parent == "descendant":
+            assert row is not None
             assert row["parent_session_id"] is None
             assert row["model_config"] is None
         else:
             assert row is None
+    finally:
+        db.close()
+
+
+def test_creation_rejects_already_cyclic_parent_graph(tmp_path):
+    db = SessionDB(db_path=tmp_path / "state.db")
+    try:
+        db.create_session("a", "cli")
+        db.create_session("b", "cli", parent_session_id="a")
+        db._execute_write(lambda conn: conn.execute("UPDATE sessions SET parent_session_id = 'b' WHERE id = 'a'"))
+        with pytest.raises(ValueError, match="Cyclic"):
+            db.create_session("worker", "cli", parent_session_id="a",
+                              model_config={"_delegate_from": "a"}, validate_worker_parent=True)
+        assert db.get_session("worker") is None
     finally:
         db.close()

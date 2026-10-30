@@ -198,6 +198,22 @@ def test_terminal_agent_job_creates_explicit_worker_in_own_profile(mock_worker_e
         assert [r["id"] for r in db.list_sessions_rich()] == ["owning-chat"]
         assert db.get_compression_tip("owning-chat") == "owning-chat"
         assert db.get_messages(worker["id"])
+        # Read the actual worker through the desktop API, then open its full
+        # transcript by the exact stored helper id.
+        from starlette.testclient import TestClient
+        from clover_cli.web_server import app, _SESSION_HEADER_NAME, _SESSION_TOKEN
+        import clover_state
+
+        monkeypatch.setattr(clover_state, "DEFAULT_DB_PATH", home / "state.db")
+        client = TestClient(app)
+        client.headers[_SESSION_HEADER_NAME] = _SESSION_TOKEN
+        page = client.get("/api/sessions/owning-chat/helpers").json()
+        assert [r["id"] for r in page["sessions"]] == [worker["id"]]
+        detail = client.get(f"/api/sessions/{worker['id']}").json()
+        assert detail["helper_parent_id"] == "owning-chat"
+        transcript = client.get(f"/api/sessions/{worker['id']}/messages").json()
+        assert transcript["session_id"] == worker["id"]
+        assert any(m.get("content") == "The notes file says smoke." for m in transcript["messages"])
     finally:
         clear_session_vars(tokens)
         db.close()

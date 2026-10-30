@@ -43,8 +43,9 @@ export function SidebarHelpers({ parent, activeSessionId, ...actions }: SidebarH
 
   const preview = parent.helpers ?? []
 
-  const rows = [...new Map([...preview, ...extra].map(row => [row.id, row])).values()]
-    .map(row => preview.find(fresh => fresh.id === row.id) ?? row)
+  const rows = [...new Map([...preview, ...extra].map(row => [row.id, row])).values()].map(
+    row => preview.find(fresh => fresh.id === row.id) ?? row
+  )
 
   const hasMore = more ?? parent.helpers_has_more
 

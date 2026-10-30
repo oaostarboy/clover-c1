@@ -6121,10 +6121,18 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                         UNION
                         SELECT s.id, s.parent_session_id FROM sessions s
                         JOIN ancestors a ON s.id = a.parent_session_id
-                    ) SELECT id FROM ancestors""", (parent_session_id,)
+                    ) SELECT id, parent_session_id FROM ancestors""", (parent_session_id,)
                 ).fetchall()
                 if not ancestors or any(row[0] == session_id for row in ancestors):
                     raise ValueError("Missing or cyclic CLI worker parent")
+                links = {row[0]: row[1] for row in ancestors}
+                seen = set()
+                current = parent_session_id
+                while current in links:
+                    if current in seen:
+                        raise ValueError("Cyclic CLI worker ancestry")
+                    seen.add(current)
+                    current = links[current]
                 if conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
                     raise ValueError("CLI worker session already exists")
             system_prompt_hash = self._store_system_prompt(conn, system_prompt)
@@ -14012,6 +14020,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         limit: int = 20,
         offset: int = 0,
         workspace_key: str = None,
+        exclude_helpers: bool = False,
     ) -> List[Dict[str, Any]]:
         """List sessions, optionally filtered by source.
 
@@ -14033,6 +14042,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         )
         where_clauses = []
         params: list = []
+        if exclude_helpers:
+            where_clauses.append(f"{_delegate_from_json('s.model_config')} IS NULL")
         if source:
             where_clauses.append("s.source = ?")
             params.append(source)

@@ -280,6 +280,9 @@ async def search_sessions(
                     if not parent:
                         root = cur
                         break
+                    if db._is_explicit_fork_child_row(s) or s.get("source") == "tool":
+                        root = cur
+                        break
                     try:
                         parent_session = db.get_session(parent)
                     except Exception:
@@ -626,6 +629,14 @@ async def get_session_detail(session_id: str, profile: Optional[str] = None):
             _cron_profile_home(profile)[0] if profile else _cron_default_profile()
         )
         session["is_default_profile"] = session["profile"] == "default"
+        config = session.get("model_config") or {}
+        if isinstance(config, str):
+            try:
+                config = json.loads(config)
+            except (TypeError, json.JSONDecodeError):
+                config = {}
+        if isinstance(config, dict) and isinstance(config.get("_delegate_from"), str) and config["_delegate_from"]:
+            session["helper_parent_id"] = config["_delegate_from"]
         return session
     finally:
         db.close()

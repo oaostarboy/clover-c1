@@ -35,6 +35,11 @@ def _args(**overrides):
 @pytest.fixture
 def main_mod(monkeypatch):
     import clover_cli.main as mod
+    from clover_constants import get_clover_home
+
+    # These launch tests exercise resume, not first-run setup. The canonical
+    # runner deliberately gives each test a fresh, unconfigured profile.
+    (get_clover_home() / "config.yaml").write_text("{}\n", encoding="utf-8")
 
     monkeypatch.setattr(mod, "_has_any_provider_configured", lambda: True)
     monkeypatch.setattr(mod, "_sync_bundled_skills_for_startup", lambda: False)
@@ -78,6 +83,26 @@ def test_chat_subparser_accepts_in_flag():
     args = parser.parse_args(["chat", "--in", "/tmp", "--resume", "latest"])
     assert args.in_dir == "/tmp"
     assert args.resume == "latest"
+
+
+@pytest.mark.parametrize("workspace_match", [True, False])
+def test_latest_cli_resume_does_not_adopt_explicit_worker(tmp_path, monkeypatch, workspace_match):
+    import clover_cli.main as mod
+    from clover_constants import get_clover_home
+    from clover_state import SessionDB
+
+    db = SessionDB(db_path=get_clover_home() / "state.db")
+    try:
+        db.create_session("standalone", "cli", cwd=str(tmp_path))
+        db.create_session("worker", "cli", cwd=str(tmp_path), parent_session_id="standalone",
+                          model_config={"_delegate_from": "standalone"})
+        db.append_message("standalone", "user", "human", timestamp=100)
+        db.append_message("worker", "user", "newer helper", timestamp=200)
+        assert db.search_sessions(source="cli", limit=1)[0]["id"] == "worker"
+    finally:
+        db.close()
+    monkeypatch.setattr(mod, "_resolve_workspace_key", lambda: str(tmp_path) if workspace_match else str(tmp_path / "fresh"))
+    assert mod._resolve_last_session("cli") == "standalone"
 
 
 def test_top_level_in_value_not_mistaken_for_subcommand(monkeypatch):

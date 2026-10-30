@@ -24,6 +24,10 @@ export function sameCronSignature(a: SessionInfo[], b: SessionInfo[]): boolean {
       session.message_count === other.message_count &&
       session.last_active === other.last_active &&
       session.ended_at === other.ended_at &&
+      session.is_active === other.is_active &&
+      session.helper_parent_id === other.helper_parent_id &&
+      session.helpers_has_more === other.helpers_has_more &&
+      sameCronSignature(session.helpers ?? [], other.helpers ?? []) &&
       // Row STATE, not just row content: session-pin-sync reconciles the
       // sidebar's pins against `pinned` on the rows in this atom, so a page
       // whose only delta is a flag has to swap in or the reconciler reads a
