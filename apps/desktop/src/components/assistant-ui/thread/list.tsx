@@ -38,6 +38,7 @@ import { MessageRenderBoundary } from '../message-render-boundary'
 
 import { ThreadActivityPresence } from './status'
 import { resolveShowEarlierAction, useTranscriptWindow } from './transcript-window'
+import { useGlassOcclusion } from './use-glass-occlusion'
 
 type ThreadMessageComponents = ComponentProps<typeof ThreadPrimitive.MessageByIndex>['components']
 
@@ -431,6 +432,8 @@ const ThreadMessageListInner: FC<ThreadMessageListProps> = ({
     resize: 'instant',
     targetScrollTop: resolveThreadScrollTarget
   })
+
+  useGlassOcclusion(scrollRef, contentRef, sessionKey, renderEmpty)
 
   const { olderAvailable, expandWindow } = useTranscriptWindow()
 
