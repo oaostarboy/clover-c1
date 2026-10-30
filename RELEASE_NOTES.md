@@ -16,11 +16,11 @@ HOW TO EDIT (by hand, at release time)
 -->
 
 ## 2.0.2.3 | Clover C2.0.2.3 | 2026-10-30
-- Smaller Clover particles show delegated helpers and settle into a compact activity bar.
+- Helpers finish splitting before docking, even when the parent finishes early.
 - The main thinking particle stays mounted across activity; thoughts start collapsed and remain expandable.
-- Helper progress, code, errors, and stop controls stay accessible without internal background-message clutter.
+- New local CLI helpers nest beneath their owning chat, with transcripts and controls preserved.
 - Messages scroll normally with frosted glass preserved, without full-width black bars.
-- Bot names use the desktop's regular font instead of oversized decorative lettering.
+- Video fullscreen works from the chat player; bot names keep the regular desktop font.
 - Bot lists and chat inputs show the configured agent name instead of always saying Clover.
 
 ## 2.0.2.2 | Clover C2.0.2.2 | 2026-10-30
