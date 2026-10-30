@@ -158,7 +158,7 @@ export const DelegateTool: FC<Pick<ToolPart, 'args' | 'result' | 'toolCallId'>> 
         data-slot="tool-block"
         open={rows.some(row => row.status === 'failed' || row.status === 'interrupted') || undefined}
       >
-        <summary className="cursor-pointer text-xs text-muted-foreground">
+        <summary className="cursor-pointer truncate whitespace-nowrap text-xs text-muted-foreground">
           {t.statusStack.subagents(rows.length)}
         </summary>
         {rows.map(row => (
