@@ -222,6 +222,12 @@ export function useKeybinds(deps: KeybindRuntimeDeps): void {
       $newChatProfile.set(null)
       deps.startFreshSession()
       window.dispatchEvent(new CustomEvent('clover:new-session-shortcut'))
+      window.requestAnimationFrame(() => {
+        const composer = document.querySelector<HTMLElement>(
+          '[data-slot="composer-rich-input"], [data-slot="composer-input"], textarea'
+        )
+        composer?.focus?.()
+      })
     },
     'session.newTab': () => deps.openNewSessionTab(),
     'session.newWindow': () => void openNewWindow(),

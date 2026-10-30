@@ -1,13 +1,18 @@
 import { beforeEach, describe, expect, it } from 'vitest'
 
 import {
+  $sidebarCompactNavigation,
   $sidebarGrouping,
+  $sidebarOpen,
   $sidebarOrdering,
   $sidebarRowMeta,
   $sidebarViewCustomized,
   resetSidebarView,
+  setSidebarCompactNavigation,
   setSidebarGrouping,
+  setSidebarOpen,
   setSidebarOrdering,
+  toggleSidebarOpen,
   toggleSidebarRowMeta,
   toggleSidebarStatusFilter
 } from './layout'
@@ -74,5 +79,26 @@ describe('the sidebar as it ships', () => {
 
     expect($showAllProfiles.get()).toBe(true)
     expect($sidebarGrouping.get()).toBe('profile')
+  })
+})
+
+describe('sidebar compact navigation & open toggle', () => {
+  it('expands compact navigation when sidebar is open and toggled', () => {
+    setSidebarOpen(true)
+    setSidebarCompactNavigation(true)
+    expect($sidebarCompactNavigation.get()).toBe(true)
+    expect($sidebarOpen.get()).toBe(true)
+
+    toggleSidebarOpen()
+    expect($sidebarCompactNavigation.get()).toBe(false)
+    expect($sidebarOpen.get()).toBe(true)
+  })
+
+  it('expands compact navigation when setSidebarOpen(true) is called', () => {
+    setSidebarCompactNavigation(true)
+    expect($sidebarCompactNavigation.get()).toBe(true)
+
+    setSidebarOpen(true)
+    expect($sidebarCompactNavigation.get()).toBe(false)
   })
 })

@@ -981,6 +981,23 @@ describe('view.findInPage keybind gate', () => {
 
     expect($findInPage.get().active).toBe(true)
   })
+
+  it('focuses the composer when session.new fires via mod+n', async () => {
+    const deps = renderKeybinds('/session/a')
+    const composer = document.createElement('div')
+    composer.setAttribute('data-slot', 'composer-rich-input')
+    composer.tabIndex = 0
+    document.body.appendChild(composer)
+
+    fireEvent.keyDown(window, { key: 'n', metaKey: true })
+
+    expect(deps.startFreshSession).toHaveBeenCalled()
+
+    await waitFor(() => {
+      expect(document.activeElement).toBe(composer)
+    })
+    composer.remove()
+  })
 })
 
 // ── Files-pane-aware positioning ────────────────────────────────────────────

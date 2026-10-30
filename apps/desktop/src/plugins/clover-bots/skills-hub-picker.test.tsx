@@ -13,7 +13,7 @@ import type * as CloverSdk from '@clover/plugin-sdk'
 import { cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
-const HUB_ORIGIN = ''
+const HUB_ORIGIN = 'https://skills.clover.ai'
 
 const mocks = vi.hoisted(() => ({
   notify: vi.fn(),
@@ -30,7 +30,7 @@ vi.mock('@clover/plugin-sdk', async importOriginal => {
   }
 })
 
-const { HubSkillsSection } = await import('./skills-hub')
+const { HubSkillsSection, setHubOrigin } = await import('./skills-hub')
 
 interface PickMessage {
   identifier?: string
@@ -67,13 +67,21 @@ function installCalls() {
 
 beforeEach(() => {
   vi.clearAllMocks()
+  setHubOrigin(HUB_ORIGIN)
 })
 
 afterEach(() => {
+  setHubOrigin('')
   cleanup()
 })
 
 describe('hub pick messages', () => {
+  it('hides the hub browser toggle button when HUB_ORIGIN is empty', () => {
+    setHubOrigin('')
+    render(<HubSkillsSection forProfile={null} />)
+    expect(screen.queryByRole('button', { name: /browse the full hub/ })).toBeNull()
+  })
+
   it('installs the picked skill when it comes from our own frame', () => {
     const frame = openHubBrowser()
 

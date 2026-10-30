@@ -12,8 +12,10 @@ describe('model-status-label', () => {
   })
 
   it('strips trailing date-pin snapshots from the display name', () => {
-    expect(displayModelName('claude-opus-4-5-20251101')).toBe('Opus 4 5')
-    expect(displayModelName('anthropic/claude-haiku-4-5-20251001')).toBe('Haiku 4 5')
+    expect(displayModelName('claude-opus-4-5-20251101')).toBe('Opus 4.5')
+    expect(displayModelName('anthropic/claude-haiku-4-5-20251001')).toBe('Haiku 4.5')
+    expect(displayModelName('claude-opus-5-5')).toBe('Opus 5.5')
+    expect(displayModelName('claude-sonnet-5-5')).toBe('Sonnet 5.5')
   })
 
   it('maps reasoning effort to compact labels', () => {

@@ -38,6 +38,7 @@ import {
   $panesFlipped,
   $pinnedSessionIds,
   $sidebarCardRows,
+  $sidebarCompactNavigation,
   $sidebarCronOpen,
   $sidebarFiltersActive,
   $sidebarGrouping,
@@ -60,6 +61,7 @@ import {
   pinSession,
   SESSION_SEARCH_FOCUS_EVENT,
   setPinnedSessionOrder,
+  setSidebarCompactNavigation,
   setSidebarCronOpen,
   setSidebarPinsOpen,
   setSidebarProjectOrderIds,
@@ -433,7 +435,7 @@ export function ChatSidebar({
   const [searchQuery, setSearchQuery] = useState('')
   // Window-local presentation only: expanding the rail retains the same
   // sessions, projects, filters and contributed navigation underneath it.
-  const [compactNavigation, setCompactNavigation] = useState(true)
+  const compactNavigation = useStore($sidebarCompactNavigation)
   const [showManagement, setShowManagement] = useState(false)
   const [serverMatches, setServerMatches] = useState<SessionSearchResult[]>([])
   const [searchPending, setSearchPending] = useState(false)
@@ -449,7 +451,7 @@ export function ChatSidebar({
   // Hotkey (session.focusSearch) → focus the field once it's mounted.
   useEffect(() => {
     const onFocus = () => {
-      setCompactNavigation(false)
+      setSidebarCompactNavigation(false)
       window.requestAnimationFrame(() => searchInputRef.current?.focus({ preventScroll: true }))
     }
 
@@ -467,6 +469,16 @@ export function ChatSidebar({
       setNewSessionKbdFlash(true)
       clearTimeout(timeout)
       timeout = setTimeout(() => setNewSessionKbdFlash(false), 140)
+
+      if (document.activeElement === searchInputRef.current) {
+        searchInputRef.current?.blur()
+      }
+      window.requestAnimationFrame(() => {
+        const composer = document.querySelector<HTMLElement>(
+          '[data-slot="composer-rich-input"], [data-slot="composer-input"], textarea'
+        )
+        composer?.focus?.()
+      })
     }
 
     window.addEventListener('clover:new-session-shortcut', onShortcut)
@@ -1481,7 +1493,7 @@ export function ChatSidebar({
           <Button
             aria-expanded={!compactNavigation}
             aria-label={compactNavigation ? s.expandNavigation : s.collapseNavigation}
-            onClick={() => setCompactNavigation(value => !value)}
+            onClick={() => setSidebarCompactNavigation(value => !value)}
             size="icon"
             variant="ghost"
           >
@@ -1604,7 +1616,7 @@ export function ChatSidebar({
               })}
               <SidebarMenuItem>
                 <SidebarMenuButton aria-label="More tools and channels" aria-expanded={showManagement}
-                  onClick={() => { setShowManagement(value => !value); setCompactNavigation(false) }}
+                  onClick={() => { setShowManagement(value => !value); setSidebarCompactNavigation(false) }}
                   tooltip={{ children: 'More tools and channels', hidden: !compactNavigation }}>
                   <span aria-hidden className="inline-flex size-4 items-center justify-center">···</span>
                   {!compactNavigation && <span>{showManagement ? 'Less' : 'More'}</span>}

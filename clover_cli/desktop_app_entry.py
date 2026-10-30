@@ -223,6 +223,14 @@ def install_windows_desktop_entry(
         desk_dir = Path(userprofile) / "Desktop" if userprofile else Path.home() / "Desktop"
         shortcuts.append(desk_dir / "Clover.lnk")
 
+    if custom_shortcut_paths is None and shortcuts:
+        try:
+            exe_mtime = target_exe.stat().st_mtime
+            if all(p.is_file() and p.stat().st_mtime >= exe_mtime for p in shortcuts):
+                return shortcuts
+        except OSError:
+            pass
+
     ps_bin = shutil.which("powershell") or shutil.which("powershell.exe") or "powershell"
     target_list_str = ", ".join(f"'{str(p)}'" for p in shortcuts)
     ps_command = f"""

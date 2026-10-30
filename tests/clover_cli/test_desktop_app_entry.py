@@ -254,6 +254,43 @@ class TestWindowsDesktopEntry:
         assert "powershell" in spawned[0][0]
         assert "WScript.Shell" in spawned[0][-1]
 
+    def test_install_windows_desktop_entry_skips_when_up_to_date(self, tmp_path, monkeypatch):
+        import time
+
+        monkeypatch.setattr(desktop_app_entry, "is_windows", lambda: True)
+
+        desktop_dir = tmp_path / "apps" / "desktop"
+        release_dir = desktop_dir / "release" / "win-unpacked"
+        release_dir.mkdir(parents=True)
+        exe = release_dir / "Clover.exe"
+        exe.write_text("binary")
+
+        appdata = tmp_path / "appdata"
+        userprofile = tmp_path / "userprofile"
+        monkeypatch.setenv("APPDATA", str(appdata))
+        monkeypatch.setenv("USERPROFILE", str(userprofile))
+
+        start_dir = appdata / "Microsoft" / "Windows" / "Start Menu" / "Programs"
+        desk_dir = userprofile / "Desktop"
+        start_dir.mkdir(parents=True)
+        desk_dir.mkdir(parents=True)
+
+        lnk1 = start_dir / "Clover.lnk"
+        lnk2 = desk_dir / "Clover.lnk"
+        lnk1.write_text("existing lnk 1")
+        lnk2.write_text("existing lnk 2")
+
+        future = time.time() + 100
+        os.utime(lnk1, (future, future))
+        os.utime(lnk2, (future, future))
+
+        spawned = []
+        monkeypatch.setattr(desktop_app_entry.subprocess, "run", lambda *a, **kw: spawned.append(a))
+
+        created = install_windows_desktop_entry(desktop_dir, packaged_executable=exe)
+        assert created == [lnk1, lnk2]
+        assert len(spawned) == 0
+
 
 class TestRegisterDesktopEntriesDispatcher:
     def test_dispatches_macos(self, tmp_path, monkeypatch):

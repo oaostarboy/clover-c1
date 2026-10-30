@@ -97,9 +97,11 @@ beforeEach(() => {
   getProfiles.mockResolvedValue({ profiles: [{ name: 'default', is_default: true }] })
 })
 
-afterEach(() => {
+afterEach(async () => {
   cleanup()
   vi.clearAllMocks()
+  const { setHubOriginForTest } = await import('./embedded-hub-picker')
+  setHubOriginForTest('')
   // Shared singleton client — drop cached skills/toolsets so each test refetches.
   queryClient.clear()
 })
@@ -273,18 +275,19 @@ describe('SkillsView toolset management', { timeout: 60_000 }, () => {
 
   it('hub picker refuses to reinstall an already-installed skill', async () => {
     const { notify } = await import('@/store/notifications')
-    const { EmbeddedHubPicker } = await import('./embedded-hub-picker')
+    const { EmbeddedHubPicker, setHubOriginForTest } = await import('./embedded-hub-picker')
+    setHubOriginForTest('https://skills.clover.ai')
 
     render(<EmbeddedHubPicker installedNames={new Set(['web-research'])} profile={null} />)
 
-    // The picker is expanded by default — the hub iframe is live on mount.
+    // The picker is expanded by default — the hub iframe is live on mount when HUB_ORIGIN is set.
     expect(document.querySelector('iframe')).toBeTruthy()
 
     await act(async () => {
       window.dispatchEvent(
         new MessageEvent('message', {
           data: { type: 'clover-skill-pick', name: 'web-research', identifier: 'web-research' },
-          origin: ''
+          origin: 'https://skills.clover.ai'
         })
       )
     })
@@ -297,7 +300,17 @@ describe('SkillsView toolset management', { timeout: 60_000 }, () => {
     )
   })
 
+  it('renders in-app search fallback when HUB_ORIGIN is empty', async () => {
+    const { EmbeddedHubPicker, setHubOriginForTest } = await import('./embedded-hub-picker')
+    setHubOriginForTest('')
+    render(<EmbeddedHubPicker installedNames={new Set()} profile={null} />)
+    expect(document.querySelector('iframe')).toBeNull()
+    expect(screen.getByPlaceholderText('Search Skills Hub…')).toBeTruthy()
+  })
+
   it('mounts the hub iframe lazily and keeps it (hidden) across tab switches', async () => {
+    const { setHubOriginForTest } = await import('./embedded-hub-picker')
+    setHubOriginForTest('https://skills.clover.ai')
     // On a non-Skills tab the docs-site iframe must not exist at all — an
     // eagerly mounted hub is exactly the Capabilities lag bug.
     await renderSkills() // ?tab=toolsets

@@ -54,19 +54,21 @@ const VARIANT_TAGS: ReadonlyArray<readonly [RegExp, string]> = [
 const titleCase = (text: string): string => text.replace(/\b\w/g, char => char.toUpperCase()).trim()
 
 function prettifyBase(base: string): string {
-  if (/^claude-/i.test(base)) {
-    return titleCase(base.replace(/^claude-/i, '').replace(/-/g, ' '))
+  const normalized = base.replace(/(\d)-(\d)(?=-|$)/g, '$1.$2')
+
+  if (/^claude-/i.test(normalized)) {
+    return titleCase(normalized.replace(/^claude-/i, '').replace(/-/g, ' '))
   }
 
-  if (/^gpt-/i.test(base)) {
-    return base.replace(/^gpt-/i, 'GPT-')
+  if (/^gpt-/i.test(normalized)) {
+    return normalized.replace(/^gpt-/i, 'GPT-')
   }
 
-  if (/^gemini-/i.test(base)) {
-    return base.replace(/^gemini-/i, 'Gemini ').replace(/-/g, ' ')
+  if (/^gemini-/i.test(normalized)) {
+    return normalized.replace(/^gemini-/i, 'Gemini ').replace(/-/g, ' ')
   }
 
-  return titleCase(base.replace(/-/g, ' '))
+  return titleCase(normalized.replace(/-/g, ' '))
 }
 
 /** Split a model id into a clean display name plus an optional grayed variant

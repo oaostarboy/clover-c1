@@ -1,8 +1,9 @@
 import { useStore } from '@nanostores/react'
 import { memo, type PointerEvent as ReactPointerEvent, useEffect, useRef, useState } from 'react'
 
-import type { ProfileScope } from '@/clover'
+import { type ProfileScope, searchSkillsHub } from '@/clover'
 import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
 import { useI18n } from '@/i18n'
 import { Loader2 } from '@/lib/icons'
 import { useStoreSelector } from '@/lib/use-session-slice'
@@ -10,6 +11,7 @@ import { cn } from '@/lib/utils'
 import { $hubActions, installHubSkill, UPDATE_ALL_KEY, updateHubSkills } from '@/store/hub-actions'
 import { notify, notifyError } from '@/store/notifications'
 import { $paneHeightOverride, setPaneHeightOverride } from '@/store/panes'
+import type { SkillHubResult } from '@/types/clover'
 
 // The REAL Skills Hub page (docs site) embedded as a one-click picker — the
 // same trick the Bot Mode agent editor uses. `?embed=picker` hides the docs
@@ -18,8 +20,11 @@ import { $paneHeightOverride, setPaneHeightOverride } from '@/store/panes'
 // to the parent window. We validate the origin and route the install through
 // the standard hub action pipeline (background action + tailed log + Skills
 // list invalidation), scoped to the Capabilities profile selector.
-const HUB_ORIGIN = ''
-const HUB_PICKER_URL = `${HUB_ORIGIN}/docs/skills?embed=picker`
+export let HUB_ORIGIN = ''
+export function setHubOriginForTest(origin: string) {
+  HUB_ORIGIN = origin
+}
+const getHubPickerUrl = () => `${HUB_ORIGIN}/docs/skills?embed=picker`
 
 // Hub viewport height: persisted through the shared pane store (same one the
 // terminal/editor panes use), dragged from the section's TOP edge — "pull the
@@ -80,6 +85,11 @@ export const EmbeddedHubPicker = memo(function EmbeddedHubPicker({
   const height = heightOverride ?? HUB_DEFAULT_PX
   const open = height > HUB_COLLAPSED_PX
   const [dragging, setDragging] = useState(false)
+  const [iframeError, setIframeError] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
+  const [searchResults, setSearchResults] = useState<SkillHubResult[] | null>(null)
+  const [searching, setSearching] = useState(false)
+  const [installingTarget, setInstallingTarget] = useState<null | string>(null)
   const sectionRef = useRef<HTMLElement>(null)
 
   // Top-edge sash: dragging UP grows the hub (shrinking the skills list above,
@@ -128,7 +138,7 @@ export const EmbeddedHubPicker = memo(function EmbeddedHubPicker({
     }
 
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== HUB_ORIGIN) {
+      if (!HUB_ORIGIN || event.origin !== HUB_ORIGIN) {
         return
       }
 
@@ -156,6 +166,41 @@ export const EmbeddedHubPicker = memo(function EmbeddedHubPicker({
 
     return () => window.removeEventListener('message', onMessage)
   }, [h, installedNames, open, profile])
+
+  const handleSearch = async () => {
+    const q = searchQuery.trim()
+    if (!q || searching) {
+      return
+    }
+
+    setSearching(true)
+    try {
+      const profileName = typeof profile === 'string' ? profile : (profile?.profile ?? null)
+      const res = await searchSkillsHub(q, 'all', 20, profileName)
+      setSearchResults(res.results || [])
+    } catch {
+      setSearchResults([])
+    } finally {
+      setSearching(false)
+    }
+  }
+
+  const handleInstall = async (target: string, label: string) => {
+    if (installedNames.has(label) || installedNames.has(target)) {
+      notify({ kind: 'success', title: h.alreadyInstalled(label), message: '' })
+      return
+    }
+
+    setInstallingTarget(target)
+    notify({ kind: 'success', title: h.installStarted(label), message: h.actionLog })
+    try {
+      await installHubSkill(target, profile)
+    } catch (err) {
+      notifyError(err, h.actionFailed)
+    } finally {
+      setInstallingTarget(null)
+    }
+  }
 
   const updateAll = () => {
     notify({ kind: 'success', title: h.updateStarted, message: h.actionLog })
@@ -204,43 +249,127 @@ export const EmbeddedHubPicker = memo(function EmbeddedHubPicker({
       </div>
       {open && (
         <div className="flex min-h-0 flex-col gap-1 px-3 pb-2">
-          {/* Resizable viewport: height comes from the top-edge drag sash
-              above (persisted; double-click resets). flex-basis instead of a
-              hard height so a short window shrinks the hub viewport rather
-              than letting it spill over the list. The iframe is rendered
-              oversized and scaled DOWN (133% × 0.75) so the hub page starts
-              zoomed out — the cross-origin page itself can't be styled, but
-              scaling the frame is ours. */}
-          <div
-            style={{
-              border: '1px solid var(--ui-stroke-secondary)',
-              borderRadius: 8,
-              flex: `0 1 ${height}px`,
-              maxWidth: '100%',
-              minHeight: 0,
-              minWidth: 320,
-              overflow: 'hidden',
-              position: 'relative',
-              width: '100%'
-            }}
-          >
-            <iframe
-              sandbox="allow-scripts allow-same-origin"
-              src={HUB_PICKER_URL}
+          {HUB_ORIGIN && !iframeError ? (
+            <div
               style={{
-                background: 'transparent',
-                border: 'none',
-                height: '133.34%',
-                // While the sash drags, the cross-origin iframe must not eat
-                // the pointermove stream.
-                pointerEvents: dragging ? 'none' : 'auto',
-                transform: 'scale(0.75)',
-                transformOrigin: 'top left',
-                width: '133.34%'
+                border: '1px solid var(--ui-stroke-secondary)',
+                borderRadius: 8,
+                flex: `0 1 ${height}px`,
+                maxWidth: '100%',
+                minHeight: 0,
+                minWidth: 320,
+                overflow: 'hidden',
+                position: 'relative',
+                width: '100%'
               }}
-              title={h.pickerTitle}
-            />
-          </div>
+            >
+              <iframe
+                onError={() => setIframeError(true)}
+                sandbox="allow-scripts allow-same-origin"
+                src={getHubPickerUrl()}
+                style={{
+                  background: 'transparent',
+                  border: 'none',
+                  height: '133.34%',
+                  // While the sash drags, the cross-origin iframe must not eat
+                  // the pointermove stream.
+                  pointerEvents: dragging ? 'none' : 'auto',
+                  transform: 'scale(0.75)',
+                  transformOrigin: 'top left',
+                  width: '133.34%'
+                }}
+                title={h.pickerTitle}
+              />
+            </div>
+          ) : (
+            <div
+              className="flex flex-col gap-2 overflow-hidden rounded-lg border border-(--ui-stroke-secondary) p-3"
+              style={{
+                flex: `0 1 ${height}px`,
+                maxHeight: `${height}px`,
+                minHeight: Math.min(height, HUB_MIN_PX)
+              }}
+            >
+              <div className="flex shrink-0 gap-1.5">
+                <Input
+                  className="h-7 flex-1 text-xs"
+                  onChange={event => setSearchQuery(event.target.value)}
+                  onKeyDown={event => {
+                    if (event.nativeEvent?.isComposing || event.keyCode === 229) {
+                      return
+                    }
+                    if (event.key === 'Enter') {
+                      event.preventDefault()
+                      void handleSearch()
+                    }
+                  }}
+                  placeholder="Search Skills Hub…"
+                  value={searchQuery}
+                />
+                <Button
+                  disabled={searching || !searchQuery.trim()}
+                  onClick={() => void handleSearch()}
+                  size="xs"
+                  variant="secondary"
+                >
+                  {searching && <Loader2 className="mr-1 size-3 animate-spin" />}
+                  {searching ? 'Searching…' : 'Search'}
+                </Button>
+              </div>
+              {searching ? (
+                <div className="px-1 text-[0.6875rem] text-(--ui-text-quaternary)">
+                  Searching Skills Hub…
+                </div>
+              ) : searchResults === null ? (
+                <div className="flex flex-1 items-center justify-center text-[0.75rem] text-(--ui-text-quaternary)">
+                  Search skills from the hub to install.
+                </div>
+              ) : searchResults.length === 0 ? (
+                <div className="px-1 py-1.5 text-[0.7rem] text-(--ui-text-quaternary)">
+                  No hub skills matched.
+                </div>
+              ) : (
+                <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                  <div className="grid gap-1.5">
+                    {searchResults.map(r => {
+                      const isInstalled = installedNames.has(r.name) || installedNames.has(r.identifier)
+                      const isTargetInstalling = installingTarget === (r.identifier || r.name)
+                      return (
+                        <div
+                          className="flex items-center justify-between gap-2 rounded border border-(--ui-stroke-secondary) px-2.5 py-1.5 text-xs"
+                          key={r.identifier || r.name}
+                        >
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium">{r.name}</div>
+                            {r.description && (
+                              <div className="truncate text-[0.65rem] text-(--ui-text-quaternary)">
+                                {r.description}
+                              </div>
+                            )}
+                          </div>
+                          {isInstalled ? (
+                            <span className="shrink-0 text-[0.6875rem] font-medium text-(--ui-text-tertiary)">
+                              ✓ installed
+                            </span>
+                          ) : (
+                            <Button
+                              disabled={isTargetInstalling}
+                              onClick={() => void handleInstall(r.identifier || r.name, r.name)}
+                              size="xs"
+                              variant="outline"
+                            >
+                              {isTargetInstalling && <Loader2 className="mr-1 size-3 animate-spin" />}
+                              {isTargetInstalling ? 'Installing…' : 'Install'}
+                            </Button>
+                          )}
+                        </div>
+                      )
+                    })}
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
           <p className="shrink-0 px-1 text-[0.65rem] leading-4 text-(--ui-text-quaternary)">{h.pickerHint}</p>
         </div>
       )}

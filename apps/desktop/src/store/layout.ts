@@ -73,6 +73,13 @@ export const $sidebarOpen: ReadableAtom<boolean> = computed(
   states => states[CHAT_SIDEBAR_PANE_ID]?.open ?? true
 )
 
+export const $sidebarCompactNavigation = atom(false)
+
+export function setSidebarCompactNavigation(value: boolean | ((current: boolean) => boolean)) {
+  const next = typeof value === 'function' ? value($sidebarCompactNavigation.get()) : value
+  $sidebarCompactNavigation.set(next)
+}
+
 export const $fileBrowserOpen: ReadableAtom<boolean> = computed(
   $paneStates,
   states => states[FILE_BROWSER_PANE_ID]?.open ?? false
@@ -495,11 +502,18 @@ function revealNarrowPane(id: string, mode: 'close' | 'open' | 'toggle'): boolea
 }
 
 export function setSidebarOpen(open: boolean) {
+  if (open && $sidebarCompactNavigation.get()) {
+    $sidebarCompactNavigation.set(false)
+  }
   setPaneOpen(CHAT_SIDEBAR_PANE_ID, open)
   revealNarrowPane(CHAT_SIDEBAR_PANE_ID, open ? 'open' : 'close')
 }
 
 export function toggleSidebarOpen() {
+  if ($sidebarOpen.get() && $sidebarCompactNavigation.get()) {
+    $sidebarCompactNavigation.set(false)
+    return
+  }
   if (!revealNarrowPane(CHAT_SIDEBAR_PANE_ID, 'toggle')) {
     togglePane(CHAT_SIDEBAR_PANE_ID)
   }

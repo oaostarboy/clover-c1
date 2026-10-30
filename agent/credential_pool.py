@@ -2856,7 +2856,7 @@ def _seed_from_singletons(provider: str, entries: List[PooledCredential]) -> Tup
                 # JWT, so this should be rare; surface it at WARNING so a
                 # recurrence is visible in logs instead of failing silently.
                 if api_token == token and not enterprise_base_url:
-                    logger.warning(
+                    logger.debug(
                         "Copilot token exchange degraded to RAW token (exchange "
                         "unavailable); enterprise-only models may 400 with "
                         "model_not_available_for_integrator until exchange recovers."

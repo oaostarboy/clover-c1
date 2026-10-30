@@ -18,7 +18,10 @@ import { useBots } from './i18n'
 // the origin, install via skills.manage, and bubble onInstalled so the
 // checklist above gains the row. Search-box fallback kept for offline use.
 
-const HUB_ORIGIN = ''
+export let HUB_ORIGIN = ''
+export function setHubOrigin(origin: string) {
+  HUB_ORIGIN = origin
+}
 const HUB_PICKER_URL = HUB_ORIGIN + '/docs/skills?embed=picker'
 /** One `skills.manage action=search` hit. */
 interface HubSkillResult {
@@ -53,7 +56,7 @@ export function HubSkillsSection({ forProfile, onInstalled }: HubSkillsSectionPr
     }
 
     const onMessage = (event: MessageEvent) => {
-      if (event.origin !== HUB_ORIGIN) {
+      if (!HUB_ORIGIN || event.origin !== HUB_ORIGIN) {
         return
       }
 
@@ -156,16 +159,18 @@ export function HubSkillsSection({ forProfile, onInstalled }: HubSkillsSectionPr
     <div className="grid gap-1.5 border-t border-(--ui-stroke-secondary) pt-2">
       <div className="flex items-baseline justify-between gap-2">
         <div className="text-[0.7rem] font-medium text-(--ui-text-secondary)">Skills Hub</div>
-        <Button
-          className="text-[0.65rem] text-(--ui-text-quaternary) hover:text-(--ui-text-secondary)"
-          onClick={() => setBrowseHub(v => !v)}
-          size="inline"
-          variant="text"
-        >
-          {browseHub ? 'hide the hub browser' : 'browse the full hub ▾'}
-        </Button>
+        {HUB_ORIGIN ? (
+          <Button
+            className="text-[0.65rem] text-(--ui-text-quaternary) hover:text-(--ui-text-secondary)"
+            onClick={() => setBrowseHub(v => !v)}
+            size="inline"
+            variant="text"
+          >
+            {browseHub ? 'hide the hub browser' : 'browse the full hub ▾'}
+          </Button>
+        ) : null}
       </div>
-      {browseHub ? (
+      {HUB_ORIGIN && browseHub ? (
         <div className="grid gap-1">
           {/* Resizable viewport: native CSS resize handle (bottom-right */
           /* corner) lets the user drag it larger/smaller. The iframe */
