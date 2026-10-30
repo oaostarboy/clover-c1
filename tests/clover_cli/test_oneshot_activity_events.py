@@ -154,3 +154,50 @@ def test_without_flag_stderr_stays_quiet(mock_worker_env):
     assert proc.returncode == 0, proc.stderr
     assert proc.stdout.strip() == "The notes file says smoke."
     assert "clover_activity" not in proc.stderr
+
+
+def test_terminal_agent_job_creates_explicit_worker_in_own_profile(mock_worker_env, monkeypatch):
+    import shlex
+    import time
+    from types import SimpleNamespace
+
+    from clover_state import SessionDB
+    from gateway.session_context import set_session_vars, clear_session_vars
+    from tools import terminal_tool as terminal
+    from tools.process_registry import process_registry
+
+    home, cwd = mock_worker_env
+    monkeypatch.setenv("CLOVER_HOME", str(home))
+    db = SessionDB(db_path=home / "state.db")
+    db.create_session("owning-chat", "desktop")
+    config = {"env_type": "local", "cwd": str(cwd), "timeout": 30}
+    monkeypatch.setattr(terminal, "_get_env_config", lambda: config)
+    monkeypatch.setattr(terminal, "_start_cleanup_thread", lambda: None)
+    monkeypatch.setattr(terminal, "_check_all_guards", lambda *a, **k: {"approved": True})
+    tokens = set_session_vars(session_id="owning-chat")
+    monkeypatch.setitem(terminal._active_environments, "default", SimpleNamespace(env={}))
+    monkeypatch.setitem(terminal._last_activity, "default", time.time())
+    try:
+        command = shlex.join([sys.executable, str(REPO / "clover"), "-z", "Read notes.txt", "-t", "terminal"])
+        result = json.loads(terminal.terminal_tool(command=command, background=True,
+                            agent_job={"title": "worker", "parser": "none"}, force=True))
+        assert result["exit_code"] == 0, result
+        proc = process_registry.get(result["session_id"])
+        assert proc is not None
+        deadline = time.monotonic() + 120
+        while not proc.exited and time.monotonic() < deadline:
+            time.sleep(0.1)
+        assert proc.exit_code == 0, proc.output_buffer
+        rows = db.list_sessions_rich(include_children=True, limit=100)
+        worker = next(row for row in rows if row["id"] != "owning-chat")
+        stored = db.get_session(worker["id"])
+        assert stored is not None
+        assert stored["source"] == "cli"
+        assert stored["parent_session_id"] == "owning-chat"
+        assert json.loads(stored["model_config"])["_delegate_from"] == "owning-chat"
+        assert [r["id"] for r in db.list_sessions_rich()] == ["owning-chat"]
+        assert db.get_compression_tip("owning-chat") == "owning-chat"
+        assert db.get_messages(worker["id"])
+    finally:
+        clear_session_vars(tokens)
+        db.close()

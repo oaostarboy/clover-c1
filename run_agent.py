@@ -711,9 +711,12 @@ class AIAgent:
                 parent_session_id=self._parent_session_id,
                 cwd=_launch_cwd_for_session(source),
                 profile_name=_profile_for_session,
+                validate_worker_parent=getattr(self, "_validate_worker_parent", False),
             )
             self._session_db_created = True
         except Exception as e:
+            if getattr(self, "_validate_worker_parent", False):
+                raise
             # Transient failure (e.g. SQLite lock). Keep _session_db alive —
             # _session_db_created stays False so next run_conversation() retries.
             logger.warning(

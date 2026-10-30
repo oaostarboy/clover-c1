@@ -6073,6 +6073,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         git_repo_root: str = None,
         origin_json: str = None,
         display_name: str = None,
+        validate_worker_parent: bool = False,
     ) -> None:
         """Insert a session row, enriching NULL metadata on conflict.
 
@@ -6110,6 +6111,22 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         without a recoverable routing mapping (#59527).
         """
         def _do(conn):
+            if validate_worker_parent:
+                if (not parent_session_id or parent_session_id == session_id
+                        or (model_config or {}).get("_delegate_from") != parent_session_id):
+                    raise ValueError("Invalid explicit CLI worker identity")
+                ancestors = conn.execute(
+                    """WITH RECURSIVE ancestors(id, parent_session_id) AS (
+                        SELECT id, parent_session_id FROM sessions WHERE id = ?
+                        UNION
+                        SELECT s.id, s.parent_session_id FROM sessions s
+                        JOIN ancestors a ON s.id = a.parent_session_id
+                    ) SELECT id FROM ancestors""", (parent_session_id,)
+                ).fetchall()
+                if not ancestors or any(row[0] == session_id for row in ancestors):
+                    raise ValueError("Missing or cyclic CLI worker parent")
+                if conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
+                    raise ValueError("CLI worker session already exists")
             system_prompt_hash = self._store_system_prompt(conn, system_prompt)
             conn.execute(
                 """INSERT INTO sessions (
@@ -6235,6 +6252,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                                          (SELECT p.origin_json FROM sessions p
                                            WHERE p.id = sessions.parent_session_id))
                      WHERE id = ? AND parent_session_id IS NOT NULL
+                       AND json_extract(COALESCE(model_config, '{}'), '$._delegate_from') IS NULL
+                       AND json_extract(COALESCE(model_config, '{}'), '$._branched_from') IS NULL
                        AND EXISTS (
                            SELECT 1 FROM sessions p
                            WHERE p.id = sessions.parent_session_id

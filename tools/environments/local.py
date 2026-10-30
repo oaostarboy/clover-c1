@@ -656,6 +656,9 @@ def _sanitize_subprocess_env(base_env: dict | None, extra_env: dict | None = Non
 
     sanitized = _scrub_delegated_child_kanban_env(sanitized)
 
+    from agent.worker_provenance import inject_worker_launch
+    inject_worker_launch(sanitized)
+
     return sanitized
 
 
@@ -1510,6 +1513,9 @@ def _make_run_env(env: dict) -> dict:
     _apply_windows_msys_bash_env_defaults(run_env)
 
     run_env = _scrub_delegated_child_kanban_env(run_env)
+
+    from agent.worker_provenance import inject_worker_launch
+    inject_worker_launch(run_env)
 
     return run_env
 
