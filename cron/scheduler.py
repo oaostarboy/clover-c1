@@ -3124,26 +3124,6 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
     except Exception:
         pass
 
-    if wrap_response:
-        task_name = job.get("name", job["id"])
-        job_id = job.get("id", "")
-        # Clover skin: "☘️ <job>" / "🥀 <job> didn't finish"; other skins keep the stock header.
-        try:
-            from agent import clover_flavor
-
-            _clo_header = clover_flavor.cron_header(str(task_name), failed=_DELIVERY_FAILED.get())
-        except Exception:
-            _clo_header = None
-        delivery_content = (
-            f"{_clo_header or 'Cronjob Response: ' + str(task_name)}\n"
-            f"(job_id: {job_id})\n"
-            f"-------------\n\n"
-            f"{content}\n\n"
-            f"To stop or manage this job, send me a new message (e.g. \"stop reminder {task_name}\")."
-        )
-    else:
-        delivery_content = content
-
     # Extract MEDIA: tags so attachments are forwarded as files, not raw text
     from gateway.platforms.base import BasePlatformAdapter
 
@@ -3158,7 +3138,45 @@ def _deliver_result(job: dict, content: str, adapters=None, loop=None) -> Option
 
     apply_media_policy_env(user_cfg)
 
-    media_files, cleaned_delivery_content = BasePlatformAdapter.extract_media(delivery_content)
+    # Extract MEDIA: tags from raw content before blockquote wrapping so
+    # protected-span masking does not swallow attachments.
+    media_files, cleaned_content = BasePlatformAdapter.extract_media(content)
+
+    if wrap_response:
+        task_name = job.get("name", job["id"])
+        job_id = job.get("id", "")
+        cron_style = (
+            (user_cfg or {}).get("cron", {}).get("style")
+            or (user_cfg or {}).get("display", {}).get("cron_style")
+            or "card"
+        )
+        _clo_card = None
+        if cron_style != "classic":
+            try:
+                from agent import clover_flavor
+
+                _clo_card = clover_flavor.format_cron_card(
+                    str(task_name),
+                    cleaned_content,
+                    job_id=str(job_id),
+                    failed=_DELIVERY_FAILED.get(),
+                )
+            except Exception:
+                _clo_card = None
+
+        if _clo_card is not None:
+            cleaned_delivery_content = _clo_card
+        else:
+            # Stock skins or classic style keep stock text byte-for-byte
+            cleaned_delivery_content = (
+                f"Cronjob Response: {task_name}\n"
+                f"(job_id: {job_id})\n"
+                f"-------------\n\n"
+                f"{cleaned_content}\n\n"
+                f'To stop or manage this job, send me a new message (e.g. "stop reminder {task_name}").'
+            )
+    else:
+        cleaned_delivery_content = cleaned_content
     requested_media = [(str(p), v) for p, v in media_files]
     media_files = BasePlatformAdapter.filter_media_delivery_paths(media_files)
     # Attachments the policy filter dropped will never be sent on ANY lane —

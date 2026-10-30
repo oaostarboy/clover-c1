@@ -827,6 +827,62 @@ def cron_header(name: str, failed: bool = False, rng: Optional[Any] = None) -> O
     return _join(mark, name)
 
 
+_CRON_SPACER = "\u2800"
+
+
+def format_cron_card(
+    name: str,
+    content: str,
+    job_id: str = "",
+    failed: bool = False,
+    rng: Optional[Any] = None,
+) -> Optional[str]:
+    """Render a cron delivery message as a full quote card (Option B).
+
+    Tucks header, alert body, and manage/pause hint with job_id into a single
+    continuous quote block with U+2800 spacers so background jobs never read
+    like normal chat replies and no information is lost. Returns None without
+    an active message pack (stock text).
+    """
+    pack = active_pack()
+    if pack is None:
+        return None
+
+    if failed:
+        header_mark = pack["fail_mark"]
+        title_text = f"{name} didn't finish"
+    else:
+        header_mark = pack["mark"]
+        if pack["lucky_mark"]:
+            effective_rng = rng if rng is not None else random
+            if effective_rng.randrange(LUCKY_ODDS) == 0:
+                header_mark = pack["lucky_mark"]
+        title_text = name
+
+    header_line = f"{header_mark} **{title_text}**"
+
+    body_raw = (content or "").strip()
+    body_lines = body_raw.splitlines() if body_raw else []
+
+    if job_id and job_id != name:
+        hint_line = f'*say "stop {name}" to pause · job_id: {job_id}*'
+    else:
+        hint_line = f'*say "stop {name}" to pause*'
+
+    blocks = [[header_line]]
+    if body_lines:
+        blocks.append(body_lines)
+    blocks.append([hint_line])
+
+    out = []
+    for b in blocks:
+        if out:
+            out.append(_CRON_SPACER)
+        out.extend(b)
+
+    return "\n".join(f"> {ln}" if ln.strip() else f"> {_CRON_SPACER}" for ln in out)
+
+
 # --- /new and /reset reply ------------------------------------------------------------
 # "<face> <line>" headline, a quote-bar info block (model / context / local
 # endpoint) and an italic tip.  Pretty names, not raw ids.

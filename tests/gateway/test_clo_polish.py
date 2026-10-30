@@ -222,20 +222,52 @@ def _deliver(job_name, failed=False):
 def test_cron_header_clover(monkeypatch):
     monkeypatch.setattr(random, "randrange", lambda n: 7)
     sent = _deliver("daily-report")
-    assert sent.startswith("☘️ daily-report\n(job_id: j1)")
+    assert sent.startswith("> ☘️ **daily-report**")
     assert "Cronjob Response" not in sent
     assert "body text" in sent
+    assert "job_id: j1" in sent
+    assert 'say "stop daily-report" to pause' in sent
 
 
 def test_cron_header_lucky(monkeypatch):
     monkeypatch.setattr(random, "randrange", lambda n: 0)
-    assert _deliver("daily-report").startswith("🍀 daily-report\n")
+    assert _deliver("daily-report").startswith("> 🍀 **daily-report**")
 
 
 def test_cron_header_failed():
     sent = _deliver("daily-report", failed=True)
-    assert sent.startswith("🥀 daily-report didn't finish\n")
+    assert sent.startswith("> 🥀 **daily-report didn't finish**")
     assert "body text" in sent
+
+
+def test_cron_card_reversible_with_classic_style(monkeypatch):
+    with patch("cron.scheduler.load_config", return_value={"cron": {"style": "classic"}}):
+        sent = _deliver("daily-report")
+        assert sent.startswith("Cronjob Response: daily-report\n(job_id: j1)\n-------------")
+
+
+def test_cron_card_octavia_tentacle_skin(monkeypatch):
+    tentacle_pack = {
+        "mark": "🐙",
+        "lucky_mark": "",
+        "done_mark": "🫧",
+        "fail_mark": "🦑",
+        "incomplete_mark": "",
+        "stopped_mark": "",
+        "faces": {},
+        "lines": {},
+        "review_items": {},
+        "hello": [],
+        "ui": {},
+    }
+    monkeypatch.setattr(clover_flavor, "active_pack", lambda: tentacle_pack)
+    sent = _deliver("SILAS ads fault watch")
+    assert sent.startswith("> 🐙 **SILAS ads fault watch**")
+    assert "> \u2800\n> body text\n> \u2800" in sent
+    assert '*say "stop SILAS ads fault watch" to pause · job_id: j1*' in sent
+
+    sent_failed = _deliver("SILAS ads fault watch", failed=True)
+    assert sent_failed.startswith("> 🦑 **SILAS ads fault watch didn't finish**")
 
 
 @pytest.mark.parametrize("skin", OTHER_SKINS)
