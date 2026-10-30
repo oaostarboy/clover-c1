@@ -77,11 +77,6 @@ function ParticleJourney({
 
     const state = journey.current
 
-    if (!state.initialized) {
-      state.initialized = true
-      state.eligible = claim(sessionId, agent, $delegationAnchors.get()[sessionId]?.turnStartedAt)
-    }
-
     let timer: number | undefined
     let visible = true
     let last = performance.now()
@@ -101,6 +96,21 @@ function ParticleJourney({
 
     const tick = () => {
       stop()
+
+      if (!state.initialized) {
+        const turn = $delegationAnchors.get()[sessionId]?.turnStartedAt
+
+        if (turn === undefined) {
+          node.style.visibility = 'hidden'
+          target.style.visibility = 'visible'
+
+          return
+        }
+
+        const current = $subagentsBySession.get()[sessionId]?.find(item => item.id === agent.id) ?? agent
+        state.initialized = true
+        state.eligible = claim(sessionId, current, turn)
+      }
 
       if (pause.isPaused() || !visible) {
         node.style.visibility = 'hidden'
