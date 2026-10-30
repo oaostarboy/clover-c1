@@ -241,6 +241,7 @@ import {
   waitForManagedUpdateOperations
 } from './managed-ssh-update'
 import { registerMcpOauthCallbackIpc } from './mcp-oauth-callback-ipc'
+import { isDesktopPermissionRequestAllowed } from './media-permissions'
 import { createMediaProtocolHandler, MEDIA_PROTOCOL } from './media-protocol'
 import {
   oauthGuardMayHardFail,
@@ -6873,25 +6874,6 @@ function installContextMenuBridge(window: BrowserWindow) {
 // permission (macOS TCC prompts on first use, per the NSMicrophone/NSCamera
 // usage strings), so the user keeps a real allow/deny and can revoke it in
 // System Settings afterwards.
-function isMediaCapturePermission(permission, details) {
-  if (permission === 'audioCapture' || permission === 'videoCapture') {
-    return true
-  }
-
-  if (permission !== 'media') {
-    return false
-  }
-
-  const mediaTypes = details?.mediaTypes
-
-  // Windows: mediaTypes is often empty for a capture request. Don't deny on
-  // missing metadata.
-  if (!Array.isArray(mediaTypes) || mediaTypes.length === 0) {
-    return true
-  }
-
-  return mediaTypes.includes('audio') || mediaTypes.includes('video')
-}
 
 // Chromium-initiated downloads (renderer anchor/blob downloads, drag-outs)
 // land here. Without a handler the OS save dialog opens with the process cwd
@@ -6926,7 +6908,7 @@ function installDownloadHandling() {
 function installMediaPermissions() {
   // Async request handler: the prompt-style path (most platforms).
   session.defaultSession.setPermissionRequestHandler((_webContents, permission, callback, details) => {
-    callback(isMediaCapturePermission(permission, details))
+    callback(isDesktopPermissionRequestAllowed(permission, details))
   })
 
   // Synchronous check handler: Chromium consults this for getUserMedia on
