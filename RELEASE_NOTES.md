@@ -17,9 +17,9 @@ HOW TO EDIT (by hand, at release time)
 
 ## 2.0.2.3 | Clover C2.0.2.3 | 2026-10-30
 - Smaller Clover particles show delegated helpers and settle into a compact activity bar.
-- Helper details keep task progress, readable thinking, errors, and stop controls within reach.
-- Internal background messages and silent replies no longer clutter the conversation.
-- Sticky messages stay readable, and short prompts no longer fade out at the bottom.
+- The main thinking particle stays mounted across activity; thoughts start collapsed and remain expandable.
+- Helper progress, code, errors, and stop controls stay accessible without internal background-message clutter.
+- Messages scroll normally with frosted glass preserved, without full-width black bars.
 - Bot names use the desktop's regular font instead of oversized decorative lettering.
 - Bot lists and chat inputs show the configured agent name instead of always saying Clover.
 
