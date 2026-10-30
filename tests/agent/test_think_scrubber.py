@@ -38,6 +38,19 @@ class TestClosedPairs:
         delta = f"<{tag}>x</{tag}>Hello"
         assert _drive(s, [delta]) == "Hello"
 
+    @pytest.mark.parametrize(
+        "open_tag,close_tag",
+        [
+            ("[::thought", "::]"),
+            ("[::thinking", "::]"),
+            ("[::reasoning", "::]"),
+        ],
+    )
+    def test_bracket_tag_variants(self, open_tag: str, close_tag: str) -> None:
+        s = StreamingThinkScrubber()
+        delta = f"{open_tag} internal thinking {close_tag}Hello"
+        assert _drive(s, [delta]) == "Hello"
+
 
 
 class TestUnterminatedOpen:

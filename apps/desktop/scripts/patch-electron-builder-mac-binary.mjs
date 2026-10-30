@@ -1,12 +1,34 @@
 import fs from 'node:fs'
 import path from 'node:path'
 
+const desktopRoot = path.resolve(import.meta.dirname, '..')
+const repoRoot = path.resolve(desktopRoot, '..', '..')
+
+// Cross-platform: allow 4-part versions (e.g. 2.0.2.2) in electron-builder normalizePackageData
+const normalizePaths = [
+  path.join(repoRoot, 'node_modules', 'app-builder-lib', 'out', 'util', 'normalizePackageData.js'),
+  path.join(desktopRoot, 'node_modules', 'app-builder-lib', 'out', 'util', 'normalizePackageData.js')
+]
+for (const normPath of normalizePaths) {
+  if (fs.existsSync(normPath)) {
+    const src = fs.readFileSync(normPath, 'utf8')
+    if (!src.includes('semver.coerce')) {
+      const patched = src.replace(
+        'if (!semver.valid(data.version, loose)) {',
+        'const coerced = semver.coerce(data.version); if (coerced) { data.version = coerced.version; return true; } if (!semver.valid(data.version, loose)) {'
+      )
+      if (patched !== src) {
+        fs.writeFileSync(normPath, patched, 'utf8')
+        console.log('[patch-electron-builder] applied 4-part version fallback to normalizePackageData.js')
+      }
+    }
+  }
+}
+
 if (process.platform !== 'darwin') {
   process.exit(0)
 }
 
-const desktopRoot = path.resolve(import.meta.dirname, '..')
-const repoRoot = path.resolve(desktopRoot, '..', '..')
 const electronMacPath = path.join(repoRoot, 'node_modules', 'app-builder-lib', 'out', 'electron', 'electronMac.js')
 
 const marker = 'clover-macos-electron-binary-fallback'
