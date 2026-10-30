@@ -2225,6 +2225,8 @@ export const en: Translations = {
     },
     newSessionIn: label => `New session in ${label}`,
     showMoreIn: (count, label) => `Show ${count} more in ${label}`,
+    helpers: 'Helpers',
+    helpersRetry: 'Could not load helpers. Try again.',
     loading: 'Loading…',
     loadMore: 'Load more',
     loadCount: step => `Load ${step} more`,

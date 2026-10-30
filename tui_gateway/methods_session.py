@@ -168,6 +168,13 @@ def _(rid, params: dict) -> dict:
         if db is None:
             return _db_unavailable_error(rid, code=5006)
         try:
+            if params.get("helper_parent_id"):
+                from clover_cli.session_helpers import session_helper_page
+
+                return _ok(rid, session_helper_page(
+                    db, str(params["helper_parent_id"]),
+                    limit=params.get("limit", 20), offset=params.get("offset", 0),
+                ))
             # Resume picker should surface human conversation sessions from every
             # user-facing surface — CLI, TUI, all gateway platforms (including new
             # ones not enumerated here), ACP adapter clients, webhook sessions,

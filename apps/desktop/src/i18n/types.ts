@@ -1895,6 +1895,8 @@ export interface Translations {
     }
     newSessionIn: (label: string) => string
     showMoreIn: (count: number, label: string) => string
+    helpers?: string
+    helpersRetry?: string
     loading: string
     loadMore: string
     loadCount: (step: number) => string

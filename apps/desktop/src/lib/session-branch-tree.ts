@@ -19,9 +19,13 @@ const recency = (session: SessionInfo): number => session.last_active || session
 
 /** Flat list with branch/fork sessions nested visually under their parent. */
 export function flattenSessionsWithBranches(
-  sessions: readonly SessionInfo[],
+  input: readonly SessionInfo[],
   options: FlattenSessionsOptions = {}
 ): SidebarSessionEntry[] {
+  // Opening a helper caches its full row alongside roots. It still belongs
+  // exclusively in Helpers, never in the branch tree or the recents page.
+  const sessions = input.filter(session => !session.helper_parent_id)
+
   if (sessions.length < 2) {
     return sessions.map(session => ({ session }))
   }

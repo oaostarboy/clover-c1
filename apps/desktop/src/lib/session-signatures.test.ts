@@ -8,6 +8,15 @@ const session = (id: string, title: string | null, extra: Partial<SessionInfo> =
   ({ id, title, ...extra }) as SessionInfo
 
 describe('sameCronSignature', () => {
+  it('refreshes helper-only activity even when the owning chat is idle', () => {
+    const before = [session('parent', 'chat', { helpers: [session('worker', 'helper', { is_active: true })] })]
+    const after = [session('parent', 'chat', { helpers: [session('worker', 'helper', { is_active: false })] })]
+
+    expect(sameCronSignature(before, after)).toBe(false)
+    expect(sameCronSignature(before, structuredClone(before))).toBe(true)
+    expect(sameCronSignature(before, [session('parent', 'chat')])).toBe(false)
+  })
+
   it('is false when the lengths differ', () => {
     expect(sameCronSignature([session('a', 't')], [])).toBe(false)
   })

@@ -3,6 +3,26 @@ import asyncio
 from clover_cli import web_server
 
 
+def test_explicit_helper_search_does_not_collapse_into_compressed_owner(tmp_path, monkeypatch):
+    from clover_state import SessionDB
+
+    path = tmp_path / "state.db"
+    db = SessionDB(db_path=path)
+    try:
+        db.create_session("owner", "desktop")
+        db.append_message("owner", "user", "needle owner before compression")
+        db.end_session("owner", "compression")
+        db.create_session("tip", "desktop", parent_session_id="owner")
+        db.append_message("tip", "assistant", "needle owner after compression")
+        db.create_session("worker", "cli", parent_session_id="owner", model_config={"_delegate_from": "owner"})
+        db.append_message("worker", "assistant", "needle explicit helper transcript")
+    finally:
+        db.close()
+    monkeypatch.setattr(web_server, "_open_session_db_for_profile", lambda *a, **k: SessionDB(db_path=path, read_only=True))
+    response = asyncio.run(web_server.search_sessions(q="needle"))
+    assert {r["session_id"] for r in response["results"]} == {"tip", "worker"}
+
+
 class _FakeSessionDB:
     """Fake backing the /api/sessions/search endpoint.
 

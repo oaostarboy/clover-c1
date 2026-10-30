@@ -10,6 +10,18 @@ const session = (id: string, overrides: Partial<SessionInfo> = {}): SessionInfo 
   makeSessionInfo({ id, message_count: 1, source: 'cli', title: id, ...overrides })
 
 describe('flattenSessionsWithBranches', () => {
+  it('keeps opened and cached helpers out of the branch/root list without dropping ordinary CLI rows', () => {
+    const parent = session('parent')
+    const helper = session('worker', { helper_parent_id: 'parent', parent_session_id: 'parent' })
+    const historical = session('unlinked')
+
+    expect(flattenSessionsWithBranches([parent, helper, historical]).map(row => row.session.id)).toEqual([
+      'parent',
+      'unlinked'
+    ])
+    expect(flattenSessionsWithBranches([helper])).toEqual([])
+  })
+
   it('nests branch rows under their parent with tree stems', () => {
     const parent = session('parent', { last_active: 20 })
     const branchA = session('branch-a', { last_active: 15, parent_session_id: 'parent' })

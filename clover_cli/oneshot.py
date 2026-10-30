@@ -647,6 +647,10 @@ def _run_agent(
             clarify_callback=_oneshot_clarify_callback,
         )
 
+        from agent.worker_provenance import configure_oneshot_worker
+
+        configure_oneshot_worker(agent, session_db)
+
         # One-shot runs have no human to answer; no delegation checkpoint
         # (agent/delegation_checkpoint.py).
         agent._delegation_checkpoint_exempt = "oneshot"

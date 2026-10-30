@@ -14,6 +14,7 @@ import { sessionPinId } from '@/store/session'
 import { $sessionListDensity } from '@/store/session-list-density'
 
 import { SidebarDateDivider } from './chrome'
+import { SidebarHelpers } from './session-helpers'
 import { SidebarSessionRow } from './session-row'
 import { sessionRowEstimate } from './session-row-details'
 
@@ -159,13 +160,22 @@ export const VirtualSessionList: FC<VirtualSessionListProps> = ({
     // distinct rows (#92454) — a bare-id key misattributes rendered state.
     const rowKey = `${session.profile ?? ''}::${session.id}`
 
-    return reorderable ? (
+    return (
       <div data-index={virtualItem.index} key={rowKey} ref={virtualizer.measureElement} style={itemStyle}>
-        <VirtualSortableRow rowProps={commonProps} session={session} />
-      </div>
-    ) : (
-      <div data-index={virtualItem.index} key={rowKey} ref={virtualizer.measureElement} style={itemStyle}>
-        <SidebarSessionRow {...commonProps} session={session} />
+        {reorderable ? (
+          <VirtualSortableRow rowProps={commonProps} session={session} />
+        ) : (
+          <SidebarSessionRow {...commonProps} session={session} />
+        )}
+        <SidebarHelpers
+          activeSessionId={activeSessionId}
+          onArchiveSession={onArchiveSession}
+          onDeleteSession={onDeleteSession}
+          onResumeSession={onResumeSession}
+          onTogglePin={onTogglePin}
+          onToggleUnread={onToggleUnread}
+          parent={session}
+        />
       </div>
     )
   })

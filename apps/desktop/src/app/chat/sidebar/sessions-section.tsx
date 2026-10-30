@@ -1,7 +1,7 @@
 import type { useSensors } from '@dnd-kit/core'
 import { useStore } from '@nanostores/react'
 import type * as React from 'react'
-import { useCallback, useMemo } from 'react'
+import { Fragment, useCallback, useMemo } from 'react'
 
 import { SidebarPanelLabel } from '@/app/shell/sidebar-label'
 import type { SessionInfo } from '@/clover'
@@ -34,6 +34,7 @@ import {
 import { WorkspaceAddButton } from './projects/workspace-header'
 import { ReorderableList, useSortableBindings } from './reorderable-list'
 import { SidebarSessionSkeletons } from './section-states'
+import { SidebarHelpers } from './session-helpers'
 import { SidebarSessionRow } from './session-row'
 import { VirtualSessionList } from './virtual-session-list'
 
@@ -269,10 +270,19 @@ export function SidebarSessionsSection({
       // Key by (profile, id): twins with the same stored id in two profiles
       // are distinct rows (#92454) — a bare-id key makes React misattribute
       // one twin's rendered state to the other.
-      return draggable && !branchStem ? (
-        <SortableSidebarSessionRow key={`${session.profile ?? ''}::${session.id}`} {...rowProps} />
-      ) : (
-        <SidebarSessionRow key={`${session.profile ?? ''}::${session.id}`} {...rowProps} />
+      return (
+        <Fragment key={`${session.connection_id ?? ''}::${session.profile ?? ''}::${session.id}`}>
+          {draggable && !branchStem ? <SortableSidebarSessionRow {...rowProps} /> : <SidebarSessionRow {...rowProps} />}
+          <SidebarHelpers
+            activeSessionId={activeSessionId}
+            onArchiveSession={onArchiveSession}
+            onDeleteSession={onDeleteSession}
+            onResumeSession={onResumeSession}
+            onTogglePin={onTogglePin}
+            onToggleUnread={onToggleUnread}
+            parent={session}
+          />
+        </Fragment>
       )
     },
     [

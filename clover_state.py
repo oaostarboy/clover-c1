@@ -6073,6 +6073,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         git_repo_root: str = None,
         origin_json: str = None,
         display_name: str = None,
+        validate_worker_parent: bool = False,
     ) -> None:
         """Insert a session row, enriching NULL metadata on conflict.
 
@@ -6110,6 +6111,30 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         without a recoverable routing mapping (#59527).
         """
         def _do(conn):
+            if validate_worker_parent:
+                if (not parent_session_id or parent_session_id == session_id
+                        or (model_config or {}).get("_delegate_from") != parent_session_id):
+                    raise ValueError("Invalid explicit CLI worker identity")
+                ancestors = conn.execute(
+                    """WITH RECURSIVE ancestors(id, parent_session_id) AS (
+                        SELECT id, parent_session_id FROM sessions WHERE id = ?
+                        UNION
+                        SELECT s.id, s.parent_session_id FROM sessions s
+                        JOIN ancestors a ON s.id = a.parent_session_id
+                    ) SELECT id, parent_session_id FROM ancestors""", (parent_session_id,)
+                ).fetchall()
+                if not ancestors or any(row[0] == session_id for row in ancestors):
+                    raise ValueError("Missing or cyclic CLI worker parent")
+                links = {row[0]: row[1] for row in ancestors}
+                seen = set()
+                current = parent_session_id
+                while current in links:
+                    if current in seen:
+                        raise ValueError("Cyclic CLI worker ancestry")
+                    seen.add(current)
+                    current = links[current]
+                if conn.execute("SELECT 1 FROM sessions WHERE id = ?", (session_id,)).fetchone():
+                    raise ValueError("CLI worker session already exists")
             system_prompt_hash = self._store_system_prompt(conn, system_prompt)
             conn.execute(
                 """INSERT INTO sessions (
@@ -6235,6 +6260,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
                                          (SELECT p.origin_json FROM sessions p
                                            WHERE p.id = sessions.parent_session_id))
                      WHERE id = ? AND parent_session_id IS NOT NULL
+                       AND json_extract(COALESCE(model_config, '{}'), '$._delegate_from') IS NULL
+                       AND json_extract(COALESCE(model_config, '{}'), '$._branched_from') IS NULL
                        AND EXISTS (
                            SELECT 1 FROM sessions p
                            WHERE p.id = sessions.parent_session_id
@@ -10647,6 +10674,27 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
 
         return {"tokens": int(row[0] or 0), "cost_usd": float(row[1] or 0.0)}
 
+    def list_session_helpers(
+        self, parent_session_id: str, *, limit: int = 20, offset: int = 0
+    ) -> List[Dict[str, Any]]:
+        """Bounded explicit helpers of one conversation, never arbitrary children.
+
+        Include helpers launched before/after the owner's compression. Missing,
+        hidden or archived owners fail closed; historical unmarked CLI rows are
+        deliberately not recoverable through this interface.
+        """
+        lineage = self.get_compression_lineage(parent_session_id)
+        if not lineage:
+            return []
+        owner = self.get_session(lineage[0])
+        if not owner or owner.get("hidden") or owner.get("archived"):
+            return []
+        return self.list_sessions_rich(
+            limit=min(max(int(limit), 1), 100), offset=max(int(offset), 0),
+            compact_rows=True, project_compression_tips=False,
+            order_by_last_active=True, _helper_parent_ids=lineage,
+        )
+
     def list_sessions_rich(
         self,
         source: str = None,
@@ -10667,6 +10715,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         include_pinned: bool = False,
         session_key: str = None,
         include_hidden: bool = False,
+        _helper_parent_ids: Optional[List[str]] = None,
     ) -> List[Dict[str, Any]]:
         """List sessions with preview (first user message) and last active timestamp.
 
@@ -10728,7 +10777,16 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         where_clauses = []
         params = []
 
-        if not include_children:
+        if _helper_parent_ids is not None:
+            if not _helper_parent_ids:
+                return []
+            placeholders = ",".join("?" for _ in _helper_parent_ids)
+            where_clauses.append(f"s.parent_session_id IN ({placeholders})")
+            params.extend(_helper_parent_ids)
+            where_clauses.append(
+                f"{_delegate_from_json('s.model_config')} = s.parent_session_id"
+            )
+        elif not include_children:
             # Show roots and user-visible branch/reset sessions, while still
             # hiding sub-agent runs and compression continuations. All four
             # carry parent_session_id, so the shared predicate classifies the
@@ -13962,6 +14020,7 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         limit: int = 20,
         offset: int = 0,
         workspace_key: str = None,
+        exclude_helpers: bool = False,
     ) -> List[Dict[str, Any]]:
         """List sessions, optionally filtered by source.
 
@@ -13983,6 +14042,8 @@ class SessionDB(SessionSearchMixin, SessionSchemaMixin, SessionPortabilityMixin)
         )
         where_clauses = []
         params: list = []
+        if exclude_helpers:
+            where_clauses.append(f"{_delegate_from_json('s.model_config')} IS NULL")
         if source:
             where_clauses.append("s.source = ?")
             params.append(source)

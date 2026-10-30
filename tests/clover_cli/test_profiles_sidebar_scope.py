@@ -97,6 +97,41 @@ def _slice_ids(payload, slice_name):
 
 class TestSidebarScope:
 
+    def test_explicit_helpers_stay_bounded_under_own_parent_and_profile(self, client, profiles_on_disk):
+        from clover_state import SessionDB
+
+        for name, home in profiles_on_disk.items():
+            db = SessionDB(db_path=home / "state.db")
+            try:
+                # Same identifiers in two profile stores must never cross-link.
+                db.create_session("parent", "desktop")
+                db.append_message("parent", "user", "hi")
+                db.create_session("unlinked", "cli")
+                db.append_message("unlinked", "user", "old worker, no proven link")
+                for i in range(7):
+                    sid = f"{name}-helper-{i}"
+                    db.create_session(sid, "cli" if i else "tool", parent_session_id="parent",
+                                      model_config={"_delegate_from": "parent"})
+                    db.append_message(sid, "user", "helper transcript")
+            finally:
+                db.close()
+        payload = client.get("/api/profiles/sessions/sidebar", params={"recents_profile": "worker"}).json()
+        assert payload["errors"] == []
+        rows = payload["recents"]["sessions"]
+        assert {r["id"] for r in rows} == {"parent", "unlinked"}
+        parent = next(r for r in rows if r["id"] == "parent")
+        assert parent["helpers_has_more"] is True
+        assert len(parent["helpers"]) == 5
+        assert all(r["id"].startswith("worker-helper-") for r in parent["helpers"])
+        assert all("model_config" not in r and "system_prompt" not in r for r in parent["helpers"])
+        page = client.get("/api/sessions/parent/helpers", params={"profile": "worker", "limit": 2, "offset": 5}).json()
+        assert page["has_more"] is False
+        assert len(page["sessions"]) == 2
+        assert all(r["profile"] == "worker" and r["is_active"] for r in page["sessions"])
+        assert not ({r["id"] for r in page["sessions"]} & {r["id"] for r in parent["helpers"]})
+        missing = client.get("/api/sessions/missing/helpers", params={"profile": "worker"}).json()
+        assert missing["sessions"] == []
+
     def test_concrete_profile_sees_only_its_own_slices(self, client, profiles_on_disk):
         _seed_session(profiles_on_disk["default"], "default-chat", source="cli")
         _seed_session(profiles_on_disk["default"], "default-cron", source="cron")

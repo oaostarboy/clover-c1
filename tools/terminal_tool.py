@@ -3408,14 +3408,17 @@ def terminal_tool(
             )
             try:
                 if env_type == "local":
-                    proc_session = process_registry.spawn_local(
-                        command=command,
-                        cwd=effective_cwd,
-                        task_id=effective_task_id,
-                        session_key=session_key,
-                        env_vars=env.env if hasattr(env, 'env') else None,
-                        use_pty=effective_pty,
-                    )
+                    from agent.worker_provenance import local_worker_launch
+
+                    with local_worker_launch(enabled=bool(agent_job)):
+                        proc_session = process_registry.spawn_local(
+                            command=command,
+                            cwd=effective_cwd,
+                            task_id=effective_task_id,
+                            session_key=session_key,
+                            env_vars=env.env if hasattr(env, 'env') else None,
+                            use_pty=effective_pty,
+                        )
                 else:
                     proc_session = process_registry.spawn_via_env(
                         env=env,
