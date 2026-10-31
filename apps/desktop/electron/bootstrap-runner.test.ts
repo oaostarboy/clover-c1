@@ -1,9 +1,12 @@
 import assert from 'node:assert/strict'
+import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
+import https from 'node:https'
 import os from 'node:os'
 import path from 'node:path'
+import { PassThrough } from 'node:stream'
 
-import { test } from 'vitest'
+import { test, vi } from 'vitest'
 
 import {
   buildPinArgs,
@@ -18,12 +21,224 @@ import {
   runBootstrap
 } from './bootstrap-runner'
 
+test('real downloader fetches the pinned installer from the project raw URL', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-url-'))
+  let url = ''
+
+  const spy = vi.spyOn(https, 'get').mockImplementation(((requested, callback) => {
+    url = String(requested)
+    const request = new EventEmitter()
+    queueMicrotask(() => {
+      const response = new PassThrough() as PassThrough & { statusCode: number }
+      response.statusCode = 200
+      ;(callback as (res: unknown) => void)(response)
+      response.end('test installer')
+    })
+
+    return request
+  }) as typeof https.get)
+
+  try {
+    const sha = 'a'.repeat(40)
+    const result = await resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+    assert.equal(url, `https://raw.githubusercontent.com/oaostarboy/clover-c1/${sha}/scripts/${SCRIPT_NAME}`)
+    assert.equal(fs.readFileSync(result.path, 'utf8'), 'test installer')
+  } finally {
+    spy.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
 const SCRIPT_NAME = process.platform === 'win32' ? 'install.ps1' : 'install.sh'
 const ZERO_COMMIT = '0000000000000000000000000000000000000000'
 
 function mkTmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clover-bootstrap-test-'))
 }
+
+test('fallback branch downloads using the Windows installer path', async () => {
+  const home = mkTmpHome()
+  const original = process.platform
+  let url = ''
+  Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+
+  const spy = vi.spyOn(https, 'get').mockImplementation(((requested, callback) => {
+    url = String(requested)
+    const request = new EventEmitter()
+    queueMicrotask(() => {
+      const response = new PassThrough() as PassThrough & { statusCode: number }
+      response.statusCode = 200
+      ;(callback as (res: unknown) => void)(response)
+      response.end('test installer')
+    })
+
+    return request
+  }) as typeof https.get)
+
+  try {
+    const result = await resolveInstallScript({ installStamp: { commit: ZERO_COMMIT, branch: 'release/test' }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+    assert.equal(url, 'https://raw.githubusercontent.com/oaostarboy/clover-c1/release/test/scripts/install.ps1')
+    assert.equal(result.commit, null)
+    assert.equal(fs.readFileSync(result.path, 'utf8'), 'test installer')
+  } finally {
+    spy.mockRestore()
+    Object.defineProperty(process, 'platform', { value: original, configurable: true })
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('HTTP error does not create a usable cached installer', async () => {
+  const home = mkTmpHome()
+  let responseStream: PassThrough | undefined
+  let output: fs.WriteStream | undefined
+  const originalCreateWriteStream = fs.createWriteStream
+
+  const outputSpy = vi.spyOn(fs, 'createWriteStream').mockImplementation(((...args: Parameters<typeof fs.createWriteStream>) => {
+    output = originalCreateWriteStream(...args)
+
+    return output!
+  }) as typeof fs.createWriteStream)
+
+  const spy = vi.spyOn(https, 'get').mockImplementation(((requested, callback) => {
+    const request = new EventEmitter()
+    queueMicrotask(() => {
+      const response = new PassThrough() as PassThrough & { statusCode: number }
+      responseStream = response
+      response.statusCode = 404
+      ;(callback as (res: unknown) => void)(response)
+    })
+
+    return request
+  }) as typeof https.get)
+
+  try {
+    const sha = 'b'.repeat(40)
+    await assert.rejects(resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} }), /HTTP 404/)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha)), false)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+    assert.equal(output?.closed, true)
+    assert.equal(responseStream?.destroyed, true)
+  } finally {
+    spy.mockRestore()
+    outputSpy.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('request error closes output before rejecting', async () => {
+  const home = mkTmpHome()
+  let output: fs.WriteStream | undefined
+  const create = fs.createWriteStream
+  const outputSpy = vi.spyOn(fs, 'createWriteStream').mockImplementation(((...args: Parameters<typeof fs.createWriteStream>) => (output = create(...args))) as typeof fs.createWriteStream)
+
+  const spy = vi.spyOn(https, 'get').mockImplementation((() => {
+    const request = new EventEmitter()
+    queueMicrotask(() => request.emit('error', new Error('connection failed')))
+
+    return request
+  }) as unknown as typeof https.get)
+
+  try {
+    const sha = 'd'.repeat(40)
+    await assert.rejects(resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} }), /connection failed/)
+    assert.equal(output?.closed, true)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+  } finally {
+    spy.mockRestore()
+    outputSpy.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('redirected download saves completed installer', async () => {
+  const home = mkTmpHome()
+  let calls = 0
+
+  const spy = vi.spyOn(https, 'get').mockImplementation(((requested, callback) => {
+    const request = new EventEmitter()
+    const call = calls++
+    queueMicrotask(() => {
+      const response = new PassThrough() as PassThrough & { statusCode: number, headers: { location: string } }
+      response.statusCode = call === 0 ? 302 : 200
+      response.headers = { location: 'https://example.test/installer' }
+      ;(callback as (res: unknown) => void)(response)
+
+      if (call !== 0) {response.end('redirect installer')}
+    })
+
+    return request
+  }) as typeof https.get)
+
+  try {
+    const result = await resolveInstallScript({ installStamp: { commit: 'e'.repeat(40) }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+    assert.equal(calls, 2)
+    assert.equal(fs.readFileSync(result.path, 'utf8'), 'redirect installer')
+  } finally {
+    spy.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('redirected HTTP failure closes the response and leaves no temporary file', async () => {
+  const home = mkTmpHome()
+  const responses: PassThrough[] = []
+  let calls = 0
+
+  const spy = vi.spyOn(https, 'get').mockImplementation(((requested, callback) => {
+    const request = new EventEmitter()
+    const call = calls++
+    queueMicrotask(() => {
+      const response = new PassThrough() as PassThrough & { statusCode: number, headers: { location: string } }
+      response.statusCode = call === 0 ? 302 : 404
+      response.headers = { location: 'https://example.test/installer' }
+      responses.push(response)
+      ;(callback as (res: unknown) => void)(response)
+    })
+
+    return request
+  }) as typeof https.get)
+
+  try {
+    const sha = 'c'.repeat(40)
+    await assert.rejects(resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} }), /HTTP 404/)
+    assert.equal(calls, 2)
+    assert.ok(responses.every(response => response.destroyed))
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha)), false)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+  } finally {
+    spy.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('fallback branch cache keys distinguish slash from underscore', async () => {
+  const home = mkTmpHome()
+
+  try {
+    const resolve = (branch: string) => resolveInstallScript({ installStamp: { commit: ZERO_COMMIT, branch }, sourceRepoRoot: null, cloverHome: home, emit: () => {}, _download: async (ref, dest) => { fs.mkdirSync(path.dirname(dest), { recursive: true }); fs.writeFileSync(dest, ref) } })
+    const first = await resolve('release/test')
+    const second = await resolve('release_test')
+    assert.notEqual(first.path, second.path)
+    assert.equal(fs.readFileSync(second.path, 'utf8'), 'release_test')
+  } finally { fs.rmSync(home, { recursive: true, force: true }) }
+})
+
+test('fallback refs cannot inject URL syntax', async () => {
+  const home = mkTmpHome()
+  const spy = vi.spyOn(https, 'get')
+
+  try {
+    const invalid = 'https://evil/x'
+    const cache = cachedScriptPath(home, `fallback-${encodeURIComponent(invalid)}`)
+    fs.mkdirSync(path.dirname(cache), { recursive: true })
+    fs.writeFileSync(cache, 'must not execute')
+    await assert.rejects(resolveInstallScript({ installStamp: { commit: ZERO_COMMIT, branch: invalid }, sourceRepoRoot: null, cloverHome: home, emit: () => {} }), /Invalid installer ref/)
+    assert.equal(spy.mock.calls.length, 0)
+  } finally {
+    spy.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
 
 test('runBootstrap bails immediately when the signal is already aborted', async () => {
   const controller = new AbortController()

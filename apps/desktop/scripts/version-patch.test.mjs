@@ -1,10 +1,11 @@
-import { test } from 'node:test'
+import { test } from 'vitest'
 import assert from 'node:assert/strict'
 import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { createRequire } from 'node:module'
+import { nativeVersionOptions } from './native-version-options.mjs'
 
 const require = createRequire(import.meta.url)
 const original = path.dirname(require.resolve('app-builder-lib/package.json'))
@@ -12,6 +13,7 @@ const dependencyRoot = path.dirname(path.dirname(require.resolve('semver/package
 
 test('builder patch upgrades the old coercion without changing valid versions', () => {
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), 'clover-builder-version-'))
+  const oldNodePath = process.env.NODE_PATH
   try {
     const scriptDir = path.join(temp, 'apps', 'desktop', 'scripts')
     const libDir = path.join(temp, 'node_modules', 'app-builder-lib')
@@ -52,5 +54,23 @@ test('builder patch upgrades the old coercion without changing valid versions', 
     assert.equal(info.version, '2.0.2.4')
     assert.equal(info.buildVersion, '2.0.2.4')
     assert.equal(info.channel, null)
-  } finally { fs.rmSync(temp, { recursive: true, force: true }) }
+    const oldBuildNumber = process.env.BUILD_NUMBER
+    try {
+      for (const version of ['2.0.2.3', '2.0.2.4', '2.0.2.10']) {
+        const native = nativeVersionOptions(version)
+        process.env.BUILD_NUMBER = native.buildNumber
+        const mapped = new AppInfo({ metadata: { name: 'clover', version }, config: { buildVersion: native.buildVersion } })
+        assert.equal(mapped.getVersionInWeirdWindowsForm(), version)
+        assert.equal(mapped.buildVersion, version)
+      }
+    } finally {
+      if (oldBuildNumber === undefined) delete process.env.BUILD_NUMBER
+      else process.env.BUILD_NUMBER = oldBuildNumber
+    }
+  } finally {
+    if (oldNodePath === undefined) delete process.env.NODE_PATH
+    else process.env.NODE_PATH = oldNodePath
+    require('node:module').Module._initPaths()
+    fs.rmSync(temp, { recursive: true, force: true })
+  }
 })
