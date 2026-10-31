@@ -46,7 +46,18 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
           if [ "$RUNNER_OS" = macOS ]; then npm run builder -- --mac zip --publish never; else npm run builder -- --win dir --publish never; fi
-      - name: Inspect package and launch with fake boot
+      - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
+        with:
+          version: '0.13.6'
+          enable-cache: false
+      - name: Install real backend from frozen lock
+        working-directory: product
+        shell: bash
+        run: |
+          uv sync --frozen --python 3.11 --extra web --extra mcp --extra cron --extra pty
+          git diff --exit-code
+      - name: Verify real backend chat and same-profile restart
+        timeout-minutes: 6
         shell: bash
         run: node helper/.github/native-desktop-trial.mjs
       - name: Upload evidence and package
@@ -58,5 +69,8 @@ jobs:
             product/apps/desktop/release/**
             product/apps/desktop/build/install-stamp.json
             native-evidence.json
+            native-app.log
+            native-agent.log
+            native-failure.png
           if-no-files-found: warn
           retention-days: 7
