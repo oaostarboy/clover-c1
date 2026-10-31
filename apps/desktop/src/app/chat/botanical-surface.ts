@@ -57,7 +57,7 @@ type Context = CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D
 // One current-size working set per canvas, not an accumulating resize cache.
 const frameBuffers = new WeakMap<Context, {
   width: number; height: number; depth: Float32Array; tones: Float32Array;
-  inks: Float32Array; points: Int32Array; leaves: Uint8Array
+  inks: Float32Array; points: Int32Array; leaves: Uint8Array; attenuation: Float64Array; jitter: Float64Array
 }>()
 
 export function drawBotanical(ctx: Context, width: number, heightPx: number, time: number) {
@@ -67,12 +67,21 @@ export function drawBotanical(ctx: Context, width: number, heightPx: number, tim
 
   if (!buffers || buffers.width !== width || buffers.height !== heightPx) {
     const size = cols * rows
+    const attenuation = new Float64Array(size), jitter = new Float64Array(size)
+    for (let row = 0; row < rows; row++) {for (let col = 0; col < cols; col++) {
+      const i = row * cols + col
+      const x = (col + 0.5) * cw, y = (row + 0.5) * ch
+      const clear = Math.hypot((x / width - 0.5) / 0.33, (y / heightPx - 0.48) / 0.23)
+      attenuation[i] = Math.min(1, Math.max(0.55, (clear - 0.82) * 3))
+      const noise = Math.sin(col * 127.1 + row * 311.7) * 43758.5453
+      jitter[i] = (noise - Math.floor(noise) - 0.5) * 0.15
+    }}
     buffers = { width, height: heightPx, depth: new Float32Array(size), tones: new Float32Array(size),
-      inks: new Float32Array(size), points: new Int32Array(size), leaves: new Uint8Array(size) }
+      inks: new Float32Array(size), points: new Int32Array(size), leaves: new Uint8Array(size), attenuation, jitter }
     frameBuffers.set(ctx, buffers)
   }
 
-  const { depth, tones, inks, points, leaves } = buffers
+  const { depth, tones, inks, points, leaves, attenuation, jitter } = buffers
   depth.fill(-Infinity); tones.fill(0); inks.fill(0); points.fill(-1); leaves.fill(0)
   // Keep the depth winner, then light it once. Lighting all 108k source
   // samples wastes most of the worker on hidden/overwritten fragments.
@@ -128,8 +137,16 @@ export function drawBotanical(ctx: Context, width: number, heightPx: number, tim
         const radial = point.r * length
         const rr = radial * co - point.z * so
         const zz = radial * so + point.z * co
-        const p = project(rr * c - lateral * s, rr * s + lateral * c, zz)
-        deposit(p[0], p[1], p[2], 0, plant.ink, pointIndex, lightingIndex)
+        const x = rr * c - lateral * s, y = rr * s + lateral * c
+        const yy = y * ct - zz * st
+        const px = cx + size * (x * cs - yy * ss), py = cy + size * (x * ss + yy * cs)
+        const z = y * st + zz * ct
+        const col = Math.floor(px / cw), row = Math.floor(py / ch)
+        if (col < 0 || col >= cols || row < 0 || row >= rows) {continue}
+        const index = row * cols + col
+        if (z <= depth[index]) {continue}
+        depth[index] = z; tones[index] = 0; inks[index] = plant.ink
+        points[index] = pointIndex; leaves[index] = lightingIndex
       }
     }
   }
@@ -145,8 +162,7 @@ export function drawBotanical(ctx: Context, width: number, heightPx: number, tim
 
     if (!inks[i]) {continue}
     const x = (col + 0.5) * cw, y = (row + 0.5) * ch
-    const clear = Math.hypot((x / width - 0.5) / 0.33, (y / heightPx - 0.48) / 0.23)
-    const alpha = inks[i] * Math.min(1, Math.max(0.55, (clear - 0.82) * 3))
+    const alpha = inks[i] * attenuation[i]
 
     if (alpha < 0.03) {continue}
     let tone = tones[i]
@@ -167,9 +183,7 @@ export function drawBotanical(ctx: Context, width: number, heightPx: number, tim
       tone = Math.fround(Math.min(1, 0.09 + diffuse * 0.65 + specular + point.vein))
     }
 
-    const noise = Math.sin(col * 127.1 + row * 311.7) * 43758.5453
-    const jitter = (noise - Math.floor(noise) - 0.5) * 0.15
-    const index = Math.max(1, Math.min(RAMP.length - 1, Math.floor((tone + jitter) * RAMP.length)))
+    const index = Math.max(1, Math.min(RAMP.length - 1, Math.floor((tone + jitter[i]) * RAMP.length)))
     const red = Math.round(45 + tone * 135), green = Math.round(80 + tone * 149), blue = Math.round(72 + tone * 145)
 
     // The glyphs alone occupy only a fraction of each cell. Once blurred they

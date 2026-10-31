@@ -15,6 +15,11 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 2.0.2.5 | Clover C2.0.2.5 | 2026-10-31
+<!-- draft -->
+- Experimental desktop background drawing uses less CPU in a headless idle test.
+- The overall performance target and real-device validation remain open.
+
 ## 2.0.2.3 | Clover C2.0.2.3 | 2026-10-30
 - Helpers finish splitting before docking, even when the parent finishes early.
 - The main thinking particle stays mounted across activity; thoughts start collapsed and remain expandable.
