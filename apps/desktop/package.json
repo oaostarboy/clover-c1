@@ -2,7 +2,7 @@
   "name": "clover",
   "productName": "Clover",
   "private": true,
-  "version": "2.0.2.3",
+  "version": "2.0.2.4",
   "description": "Native desktop shell for Clover Cognition.",
   "author": "Clover Cognition",
   "repository": {

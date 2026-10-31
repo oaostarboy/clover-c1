@@ -12,15 +12,15 @@ const normalizePaths = [
 for (const normPath of normalizePaths) {
   if (fs.existsSync(normPath)) {
     const src = fs.readFileSync(normPath, 'utf8')
-    if (!src.includes('semver.coerce')) {
-      const patched = src.replace(
-        'if (!semver.valid(data.version, loose)) {',
-        'const coerced = semver.coerce(data.version); if (coerced) { data.version = coerced.version; return true; } if (!semver.valid(data.version, loose)) {'
-      )
-      if (patched !== src) {
-        fs.writeFileSync(normPath, patched, 'utf8')
-        console.log('[patch-electron-builder] applied 4-part version fallback to normalizePackageData.js')
-      }
+    const oldPatch = 'const coerced = semver.coerce(data.version); if (coerced) { data.version = coerced.version; return true; } '
+    const unpatched = src.replace(oldPatch, '')
+    const needle = 'if (!semver.valid(data.version, loose)) {'
+    const replacement = 'if (typeof data.version === "string" && /^(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)$/.test(data.version)) { return true; } if (!semver.valid(data.version, loose)) {'
+    const marker = 'if (typeof data.version === "string" && /^(0|[1-9]'
+    const patched = unpatched.includes(marker) ? unpatched : unpatched.replace(needle, replacement)
+    if (patched !== src) {
+      fs.writeFileSync(normPath, patched, 'utf8')
+      console.log('[patch-electron-builder] preserved 4-part versions in normalizePackageData.js')
     }
   }
 }
