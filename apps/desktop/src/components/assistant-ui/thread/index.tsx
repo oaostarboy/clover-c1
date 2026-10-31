@@ -14,6 +14,7 @@ import { Intro, type IntroProps } from '@/components/chat/intro'
 import { ConfirmDialog } from '@/components/ui/confirm-dialog'
 import { useI18n } from '@/i18n'
 import { notifyError } from '@/store/notifications'
+
 import { ThreadBackendContext } from '../tool/thread-backend-context'
 
 type ThreadLoadingState = 'response' | 'session'

@@ -1,6 +1,7 @@
 import { useStore } from '@nanostores/react'
 import { useEffect, useMemo, useRef, useState } from 'react'
 
+import { LandingBloom } from '@/app/chat/landing-bloom'
 import { getGlobalModelOptions } from '@/clover'
 import { Button } from '@/components/ui/button'
 import { Codicon } from '@/components/ui/codicon'
@@ -10,17 +11,14 @@ import { useI18n } from '@/i18n'
 import { Check, ChevronLeft, KeyRound, Loader2 } from '@/lib/icons'
 import { isProviderSetupErrorMessage } from '@/lib/provider-setup-errors'
 import { cn } from '@/lib/utils'
-import { LandingBloom } from '@/app/chat/landing-bloom'
 import { $desktopBoot, type DesktopBootState } from '@/store/boot'
 import {
   $desktopOnboarding,
   clearPendingProviderOAuth,
   closeManualOnboarding,
-  completeDesktopTour,
   confirmOnboardingModel,
   DEFAULT_MANUAL_ONBOARDING_REASON,
   DEFAULT_ONBOARDING_REASON,
-  dismissDesktopTour,
   dismissFirstRunOnboarding,
   type OnboardingContext,
   peekPendingProviderOAuth,

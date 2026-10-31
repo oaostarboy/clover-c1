@@ -1255,6 +1255,7 @@ def test_gui_password_store_bridge_is_linux_only(tmp_path, monkeypatch):
          patch("clover_cli.main._desktop_build_needed", return_value=True), \
          patch("clover_cli.main._write_desktop_build_stamp"), \
          patch("clover_cli.main._desktop_macos_relaunchable_fixup"), \
+         patch("clover_cli.desktop_app_entry.install_macos_desktop_entry", return_value=None), \
          patch("clover_cli.config.load_config", return_value={}), \
          patch("clover_cli.linux_desktop_entry.install_desktop_entry", return_value=None), \
          patch("clover_cli.main._detect_linux_password_store") as mock_detect, \

@@ -90,10 +90,13 @@ def _fake_cli_class(calls):
 
 
 @pytest.fixture
-def chat_entrypoint(monkeypatch):
+def chat_entrypoint(monkeypatch, tmp_path):
     import cli as cli_mod
     import clover_cli.main as main_mod
 
+    config = tmp_path / "config.yaml"
+    config.write_text("{}\n")
+    monkeypatch.setattr("clover_cli.config.get_config_path", lambda: config)
     calls: list = []
     monkeypatch.setattr(cli_mod, "CloverCLI", _fake_cli_class(calls))
     monkeypatch.setattr(cli_mod.atexit, "register", lambda *_a, **_k: None)

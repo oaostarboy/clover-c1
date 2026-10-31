@@ -25,7 +25,7 @@ def test_actual_helper_partial_artifact_keeps_unverified_packaging_open_across_n
     def provider(*args, **kwargs):
         old(*args, **kwargs)  # retain actual request accounting
         system = str(kwargs.get('messages', [{}])[0].get('content', ''))
-        is_child = 'SUBAGENT' in system or 'subagent' in system.lower()
+        is_child = 'You are a focused subagent working on a specific delegated task.' in system
         if not is_child and not sent['parent']:
             sent['parent'] = True
             return _tools(_call('delegate_task', {'goal':

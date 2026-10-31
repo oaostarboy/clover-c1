@@ -20,6 +20,7 @@ def test_repair_node_deps_runs_config_migration_on_version_bump(capsys):
     with (
         patch.object(update_cmd, "_update_node_dependencies", return_value=[]),
         patch.object(update_cmd, "_m") as m,
+        patch.object(update_cmd, "_rebuild_desktop_after_update", return_value=True),
         patch.object(update_cmd, "_reload_config_modules"),
         patch.object(update_cmd, "_run_config_check_fresh", return_value=(37, 38)),
         patch("clover_cli.config.get_missing_env_vars", return_value=[]),
@@ -47,6 +48,7 @@ def test_repair_node_deps_up_to_date_config(capsys):
     with (
         patch.object(update_cmd, "_update_node_dependencies", return_value=[]),
         patch.object(update_cmd, "_m") as m,
+        patch.object(update_cmd, "_rebuild_desktop_after_update", return_value=True),
         patch.object(update_cmd, "_reload_config_modules"),
         patch.object(update_cmd, "_run_config_check_fresh", return_value=(38, 38)),
         patch("clover_cli.config.get_missing_env_vars", return_value=[]),

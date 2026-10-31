@@ -113,7 +113,7 @@ function Fixture() {
         $delegationAnchors.set(rest)
       },
       restoreAnchor: () => {
-        if (savedAnchor) registerDelegationAnchor(sessionId, savedAnchor)
+        if (savedAnchor) {registerDelegationAnchor(sessionId, savedAnchor)}
       },
       syntheticAnchor: (element: HTMLElement) => {
         removeSyntheticAnchor = registerDelegationAnchor(sessionId, { element, turnStartedAt: $turnStartedAt.get() ?? undefined })

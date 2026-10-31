@@ -1,4 +1,5 @@
 import { useEffect, useState } from 'react'
+
 import { LandingBloom } from '@/app/chat/landing-bloom'
 import { BrandMark } from '@/components/brand-mark'
 import { Button } from '@/components/ui/button'
@@ -130,7 +131,7 @@ export function DesktopTourOverlay({ onDismiss }: DesktopTourOverlayProps) {
           {/* Platform-Aware Native Window Chrome Preview */}
           <div className="mb-2 flex h-5 w-full items-center justify-between px-1 text-neutral-400">
             {isMac ? (
-              <div className="flex items-center gap-1.5" aria-hidden="true">
+              <div aria-hidden="true" className="flex items-center gap-1.5">
                 <span className="h-2.5 w-2.5 rounded-full bg-[#ff5f56]/90 shadow-[0_0_6px_rgba(255,95,86,0.5)]" />
                 <span className="h-2.5 w-2.5 rounded-full bg-[#ffbd2e]/90 shadow-[0_0_6px_rgba(255,189,46,0.5)]" />
                 <span className="h-2.5 w-2.5 rounded-full bg-[#27c93f]/90 shadow-[0_0_6px_rgba(39,201,63,0.5)]" />
@@ -147,13 +148,13 @@ export function DesktopTourOverlay({ onDismiss }: DesktopTourOverlayProps) {
             </div>
 
             {isWin ? (
-              <div className="flex items-center gap-2.5 text-[10px] text-neutral-400 font-mono" aria-hidden="true">
+              <div aria-hidden="true" className="flex items-center gap-2.5 text-[10px] text-neutral-400 font-mono">
                 <span>&#8212;</span>
                 <span>&#9633;</span>
                 <span className="text-neutral-400">&#10005;</span>
               </div>
             ) : isLinux ? (
-              <div className="flex items-center gap-1.5" aria-hidden="true">
+              <div aria-hidden="true" className="flex items-center gap-1.5">
                 <span className="h-1.5 w-1.5 rounded-full bg-neutral-600" />
                 <span className="h-1.5 w-1.5 rounded-full bg-neutral-600" />
                 <span className="h-1.5 w-1.5 rounded-full bg-neutral-500" />
@@ -227,8 +228,8 @@ export function DesktopTourOverlay({ onDismiss }: DesktopTourOverlayProps) {
 
                   {extraSessions.map((name, i) => (
                     <div
-                      key={`extra-${i}`}
                       className="flex items-center justify-between rounded-lg border border-emerald-400/30 bg-white/10 px-2 py-1 text-xs text-white"
+                      key={`extra-${i}`}
                     >
                       <span>💬 {name}</span>
                       <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 shadow-[0_0_6px_#4ade80]" />
@@ -478,7 +479,6 @@ export function DesktopTourOverlay({ onDismiss }: DesktopTourOverlayProps) {
             <div className="flex items-center gap-1.5">
               {Array.from({ length: totalSteps }).map((_, i) => (
                 <button
-                  key={i}
                   aria-label={`Go to step ${i + 1}`}
                   className={cn(
                     'h-1.5 rounded-full transition-all duration-300 [-webkit-app-region:no-drag]',
@@ -486,6 +486,7 @@ export function DesktopTourOverlay({ onDismiss }: DesktopTourOverlayProps) {
                       ? 'w-5 bg-emerald-400 shadow-[0_0_8px_#4ade80]'
                       : 'w-1.5 bg-white/20 hover:bg-white/40'
                   )}
+                  key={i}
                   onClick={() => setStep(i)}
                   type="button"
                 />

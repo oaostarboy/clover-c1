@@ -1,5 +1,7 @@
 import {expect,it} from 'vitest'
+
 import {isCardTool} from '@/lib/tool-render-class'
+
 import {splitRunItems} from './fallback'
 it('does not collapse the registered comparison deliverable into a tool summary',()=>{
  expect(isCardTool('comparison_card')).toBe(true)

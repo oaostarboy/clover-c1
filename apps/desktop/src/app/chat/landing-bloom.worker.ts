@@ -14,9 +14,9 @@ function draw() {
   ;(self as typeof self & { __landingBloomFrames: number }).__landingBloomFrames++
 }
 function tick() {
-  if (!active) return
+  if (!active) {return}
   const start = performance.now()
-  if (last) elapsed += start - last
+  if (last) {elapsed += start - last}
   last = start
   draw()
   timer = setTimeout(tick, Math.max(0, 1000 / 60 - (performance.now() - start)))
@@ -26,18 +26,18 @@ self.onmessage = (event: MessageEvent) => {
   if (data.type === 'init') {
     canvas = data.canvas
     const context = canvas.getContext('2d')
-    if (!context) throw new Error('OffscreenCanvas 2D context unavailable')
+    if (!context) {throw new Error('OffscreenCanvas 2D context unavailable')}
     ctx = context
   } else if (data.type === 'resize') {
     width = data.width; height = data.height; dpr = data.dpr
     canvas.width = Math.max(1, Math.round(width * dpr))
     canvas.height = Math.max(1, Math.round(height * dpr))
-    if (!active) draw()
+    if (!active) {draw()}
   } else if (data.type === 'active') {
     clearTimeout(timer)
     active = data.active
     last = 0
     if (data.reduced) { elapsed = 0; draw() }
-    if (active) tick()
+    if (active) {tick()}
   }
 }

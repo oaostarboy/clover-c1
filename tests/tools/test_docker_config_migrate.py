@@ -66,7 +66,7 @@ def test_docker_config_migrate_backs_up_and_migrates_legacy_config(tmp_path: Pat
     # v24→25 lowers the old default model_catalog TTL; v32→33 folds
     # max_async_children into max_concurrent_children.
     assert raw["model_catalog"]["ttl_hours"] == 1
-    assert raw["delegation"] == {"max_concurrent_children": 8}
+    assert raw["delegation"] == {"max_concurrent_children": 8, "reasoning_effort": "low"}
     assert list(tmp_path.glob("config.yaml.bak-*"))
     assert list(tmp_path.glob(".env.bak-*"))
 

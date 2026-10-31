@@ -1,6 +1,7 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { LandingBloom, drawBotanical } from './landing-bloom'
+
+import { drawBotanical, LandingBloom } from './landing-bloom'
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 

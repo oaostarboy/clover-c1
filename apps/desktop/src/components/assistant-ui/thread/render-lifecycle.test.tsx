@@ -1,9 +1,8 @@
 import { act, cleanup, render, screen } from '@testing-library/react'
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { useState } from 'react'
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 import { ActivityPresence } from './activity-presence'
-import { CloverParticles } from './clover-particles'
 
 describe('render lifecycle: rapid-completion, reconnect, replay, keyboard', () => {
   beforeEach(() => {

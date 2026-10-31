@@ -1,10 +1,8 @@
 import './landing.css'
 import './liquid-glass.css'
-import { LandingBloom } from './landing-bloom'
 
 import { type AppendMessage, AssistantRuntimeProvider, type ThreadMessage } from '@assistant-ui/react'
 import { useStore } from '@nanostores/react'
-import { useConversationContinuation } from './use-conversation-continuation'
 import { useQuery } from '@tanstack/react-query'
 import type { ReadableAtom } from 'nanostores'
 import type * as React from 'react'
@@ -72,6 +70,7 @@ import type { ChatBarState } from './composer/types'
 import { type DroppedFile, partitionDroppedFiles } from './hooks/use-composer-actions'
 import { type DragKind, useFileDropZone } from './hooks/use-file-drop-zone'
 import { shouldShowIntro } from './intro-visibility'
+import { LandingBloom } from './landing-bloom'
 import { ProfileTag } from './profile-tag'
 import { isRouteSessionMismatch } from './route-session-state'
 import { useRuntimeMessageRepository } from './runtime-repository'
@@ -85,6 +84,7 @@ import {
   transcriptBackfillAvailable
 } from './transcript-backfill'
 import { advanceTranscriptWindow, type TranscriptWindowState } from './transcript-window'
+import { useConversationContinuation } from './use-conversation-continuation'
 
 interface ChatViewProps extends Omit<React.ComponentProps<'div'>, 'onSubmit'> {
   gateway: CloverGateway | null
@@ -620,7 +620,6 @@ const ChatViewContent = memo(function ChatViewContent({
   const continuationRef = useConversationContinuation(showIntro)
   return (
     <div
-      ref={continuationRef}
       className={cn(
         'relative isolate flex h-full min-w-0 flex-col overflow-hidden bg-(--ui-chat-surface-background)',
         className
@@ -631,6 +630,7 @@ const ChatViewContent = memo(function ChatViewContent({
       data-composer-target={composerScope.target}
       data-landing={showIntro ? '' : undefined}
       data-session-anchor={sessionAnchor}
+      ref={continuationRef}
     >
       <Backdrop />
       {showIntro && (

@@ -8393,7 +8393,7 @@ def cmd_gui(args: argparse.Namespace):
                 if not _electron_dist_ok(PROJECT_ROOT):
                     _redownload_electron_dist(PROJECT_ROOT, env, mirror=mirror)
                 _stop_desktop_processes_locking_build(desktop_dir)
-                mirror_kwargs = dict(build_kwargs)
+                mirror_kwargs = {**build_kwargs, "stdin": subprocess.DEVNULL}
                 mirror_kwargs["env"] = mirror_env
                 build_result = subprocess.run([npm, "run", build_script], **mirror_kwargs)
             if build_result.returncode != 0:
