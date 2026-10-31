@@ -36,6 +36,8 @@ const result = {platform:process.platform, executable, stamp, helper:process.env
 const save=()=>fs.writeFileSync('native-evidence.json',JSON.stringify(result,null,2))
 const prompt='Return the native desktop test response.'
 const reply='Native desktop verification complete. This saved reply must survive a full app restart.'
+const secondPrompt='Return the updated desktop test response.'
+const secondReply='Updated 2.0.2.4 backend reply verified and saved after the real upgrade.'
 const sid='native-functional-preserved-session'
 const py=code=>execFileSync(python,['-c',code],{cwd:product,env,encoding:'utf8',timeout:30000}).trim()
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
@@ -57,7 +59,7 @@ try {
       const sys=String((p.messages||[]).find(m=>m.role==='system')?.content||'')
       const user=String((p.messages||[]).filter(m=>m.role==='user').at(-1)?.content||'')
       const aux=/Size this request:|Your previous reply was invalid/.test(user)||/Reply with one JSON object only/.test(sys)
-      const content=aux?'{"mode":"direct","tasks":[],"reason":"fixture plain request"}':reply
+      const content=aux?'{"mode":"direct","tasks":[],"reason":"fixture plain request"}':user.startsWith(secondPrompt)?secondReply:reply
       result.requests.push({stream:!!p.stream,aux,model:p.model,tools:(p.tools||[]).length,user:user.slice(0,150)});save()
       if(!p.stream)return json(200,{id:'native',object:'chat.completion',created:0,model:'synthetic-native',choices:[{index:0,message:{role:'assistant',content},finish_reason:'stop'}],usage:{prompt_tokens:10,completion_tokens:20,total_tokens:30}})
       res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'})
@@ -125,19 +127,20 @@ d.close()`)
   await expect(page.getByText(prompt,{exact:true}).first()).toBeVisible({timeout:30000})
   await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(reply,{timeout:30000})
   const after=snapshot();assert.deepEqual(after,before)
-  const secondPrompt='Return the updated desktop test response.'
   await page.locator('[contenteditable="true"]').first().fill(secondPrompt)
   await page.locator('[contenteditable="true"]').first().press('Enter')
-  await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(reply,{timeout:60000})
-  await expect.poll(()=>snapshot().rows.at(-1),{timeout:15000}).toEqual(['assistant',reply])
-  const updatedRows=snapshot();result.phases.push('updated app chat succeeded')
+  await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(secondReply,{timeout:60000})
+  await expect.poll(()=>snapshot().rows,{timeout:30000}).toEqual([...before.rows,['user',secondPrompt],['assistant',secondReply]])
+  await expect.poll(()=>fs.readFileSync(path.join(clover,'logs/agent.log'),'utf8').match(/Turn ended:.*tool_turns=0/g)?.length||0,{timeout:30000}).toBeGreaterThanOrEqual(2)
+  assert.equal(result.requests.filter(r=>r.stream&&!r.aux&&r.user.startsWith(secondPrompt)).length,1,'Updated backend must receive the new request once')
+  const updatedRows=snapshot();result.updatedChat={expectedMessages:before.rows.length+2,actualMessages:updatedRows.rows.length,secondReply,secondPrompt};result.phases.push('updated app chat succeeded')
   await quit()
   await launch('2.0.2.4')
   await expect(page.getByText(secondPrompt,{exact:true}).first()).toBeVisible({timeout:30000})
-  await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(reply,{timeout:30000})
+  await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(secondReply,{timeout:30000})
   assert.deepEqual(snapshot(),updatedRows)
   result.phases.push('updated app restart preserved new chat')
-  result.persistence={messages:after.rows.length,integrity:after.integrity,logicalRowsUnchanged:true,fullPriorReplyVisible:true,configUnchanged:hash(path.join(clover,'config.yaml'))===configBefore,envUnchanged:hash(path.join(clover,'.env'))===envBefore,uiSettingToggled:false}
+  result.persistence={messages:updatedRows.rows.length,integrity:updatedRows.integrity,logicalRowsUnchanged:true,fullPriorReplyVisible:true,configUnchanged:hash(path.join(clover,'config.yaml'))===configBefore,envUnchanged:hash(path.join(clover,'.env'))===envBefore,uiSettingToggled:false}
   result.configAfterRestart=configObject()
   preserveSubset(initialConfig,result.configAfterRestart)
   assert.deepEqual(result.configAfterRestart,configAfterFirstQuit,'Config changed across restart')
