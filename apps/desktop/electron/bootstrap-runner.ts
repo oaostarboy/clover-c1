@@ -35,10 +35,8 @@
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
-import type { IncomingMessage } from 'node:http'
 import https from 'node:https'
 import path from 'node:path'
-import { pipeline } from 'node:stream'
 
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
@@ -146,7 +144,7 @@ function installRefForStamp(installStamp) {
 
     return {
       ref,
-      cacheKey: `fallback-${encodeURIComponent(String(ref))}`,
+      cacheKey: `fallback-${String(ref).replace(/[^0-9A-Za-z._-]/g, '_')}`,
       pinned: false
     }
   }
@@ -235,113 +233,84 @@ function downloadInstallScript(ref, destPath) {
   // ref so local builds can still bootstrap without pretending the all-zero
   // placeholder is a real GitHub commit.
   const scriptName = installScriptName()
-
-  if (typeof ref !== 'string' || !/^[A-Za-z0-9_-]+(?:[./][A-Za-z0-9_-]+)*$/.test(ref) || ref.includes('..')) {
-    throw new Error('Invalid installer ref')
-  }
-
-  const url = `https://raw.githubusercontent.com/oaostarboy/clover-c1/${ref}/scripts/${scriptName}`
+  const url = ``
 
   return new Promise((resolve, reject) => {
     fs.mkdirSync(path.dirname(destPath), { recursive: true })
     const tmpPath = destPath + '.tmp'
-    let request: ReturnType<typeof https.get> | undefined
-    let response: IncomingMessage | undefined
-    let out: fs.WriteStream | undefined
-    let settled = false
-    const timer = setTimeout(() => fail(new Error('Installer download timed out; please retry setup')), 60_000)
-    timer.unref()
+    const out = fs.createWriteStream(tmpPath)
+    https
+      .get(url, res => {
+        if (res.statusCode === 301 || res.statusCode === 302) {
+          // GitHub raw shouldn't redirect for a SHA URL, but follow once
+          // defensively.
+          out.close()
+          fs.unlinkSync(tmpPath)
+          https
+            .get(res.headers.location, res2 => {
+              if (res2.statusCode !== 200) {
+                reject(
+                  new Error(
+                    `Failed to download ${scriptName}: HTTP ${res2.statusCode} from redirect ${res.headers.location}`
+                  )
+                )
 
-    function fail(error: unknown) {
-      if (settled) {return}
-      settled = true
-      clearTimeout(timer)
-      response?.destroy()
-      request?.destroy?.()
-
-      const cleanup = () => {
-        try { fs.unlinkSync(tmpPath) } catch { void 0 }
-        reject(error)
-      }
-
-      // Wait for the file handle to close before deleting it (also on Windows).
-      if (out && !out.closed) {
-        out.once('close', cleanup)
-        out.destroy()
-      } else {
-        cleanup()
-      }
-    }
-
-    function fetchScript(target: string, redirected: boolean) {
-      if (settled) {return}
-
-      try {
-        const current = https.get(target, res => {
-          if (settled) { res.destroy();
-
- return }
-
-          if (!redirected && (res.statusCode === 301 || res.statusCode === 302)) {
-            const location = res.headers.location
-            res.destroy()
-
-            try {
-              if (!location || new URL(location).protocol !== 'https:') {
-                throw new Error(`Invalid installer redirect: ${location}`)
+                return
               }
 
-              fetchScript(location, true)
-            } catch (error) {
-              fail(error)
-            }
+              const out2 = fs.createWriteStream(tmpPath)
+              res2.pipe(out2)
+              out2.on('finish', () => {
+                out2.close()
+                fs.renameSync(tmpPath, destPath)
+                resolve(destPath)
+              })
+              out2.on('error', reject)
+            })
+            .on('error', reject)
 
-            return
-          }
+          return
+        }
 
-          response = res
-          res.on('error', fail)
-          res.once('aborted', () => fail(new Error('Installer download interrupted before completion')))
-
-          if (res.statusCode !== 200) {
-            fail(new Error(`Failed to download ${scriptName}: HTTP ${res.statusCode} from ${target}`))
-
-            return
-          }
+        if (res.statusCode !== 200) {
+          out.close()
 
           try {
-            out = fs.createWriteStream(tmpPath)
-            pipeline(res, out, error => {
-              if (settled) {return}
-
-              if (error) { fail(error);
-
- return }
-
-              try {
-                fs.renameSync(tmpPath, destPath)
-                settled = true
-                clearTimeout(timer)
-                resolve(destPath)
-              } catch (renameError) {
-                fail(renameError)
-              }
-            })
-          } catch (error) {
-            fail(error)
+            fs.unlinkSync(tmpPath)
+          } catch {
+            void 0
           }
-        })
 
-        request = current
-        current.on('error', error => {
-          if (request === current) {fail(error)}
-        })
-      } catch (error) {
-        fail(error)
-      }
-    }
+          reject(new Error(`Failed to download ${scriptName}: HTTP ${res.statusCode} from ${url}`))
 
-    fetchScript(url, false)
+          return
+        }
+
+        res.pipe(out)
+        out.on('finish', () => {
+          out.close()
+          fs.renameSync(tmpPath, destPath)
+          resolve(destPath)
+        })
+        out.on('error', err => {
+          try {
+            fs.unlinkSync(tmpPath)
+          } catch {
+            void 0
+          }
+
+          reject(err)
+        })
+      })
+      .on('error', err => {
+        try {
+          fs.unlinkSync(tmpPath)
+        } catch {
+          void 0
+        }
+
+        reject(err)
+      })
   })
 }
 
@@ -373,10 +342,6 @@ async function resolveInstallScript({
       `Cannot resolve ${installScriptName()}: no SOURCE_REPO_ROOT and no install stamp. ` +
         'This packaged build was produced without a valid build-time stamp.'
     )
-  }
-
-  if (typeof installRef.ref !== 'string' || !/^[A-Za-z0-9_-]+(?:[./][A-Za-z0-9_-]+)*$/.test(installRef.ref) || installRef.ref.includes('..')) {
-    throw new Error('Invalid installer ref')
   }
 
   const cached = cachedScriptPath(cloverHome, installRef.cacheKey)

@@ -16,10 +16,9 @@ HOW TO EDIT (by hand, at release time)
 -->
 
 ## 2.0.2.4 | Clover C2.0.2.4 | 2026-10-31
-- Desktop background drawing reuses buffers, cached coverage, and repeated calculations.
-- Desktop setup handles interrupted downloads more reliably.
-- Desktop package version handling preserves four-part release numbers.
-- Windows installer version metadata now uses the complete release number.
+- Desktop animations use less CPU by reusing drawing buffers and cached calculations.
+- Desktop animation appearance and frame rate are preserved.
+- Desktop packages retain the full four-part release number.
 
 ## 2.0.2.3 | Clover C2.0.2.3 | 2026-10-30
 - Helpers finish splitting before docking, even when the parent finishes early.
