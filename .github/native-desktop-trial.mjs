@@ -28,6 +28,8 @@ for (const d of [home,clover,userData]) fs.mkdirSync(d,{recursive:true})
 const python = path.join(product,'.venv', process.platform === 'win32' ? 'Scripts/python.exe' : 'bin/python')
 assert.ok(fs.existsSync(python), 'Exact product Python environment missing')
 const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => !/(TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|AUTH)/i.test(k)))
+// xvfb-run creates an ephemeral Xauthority file on the disposable runner.
+if (process.platform === 'linux' && process.env.XAUTHORITY) env.XAUTHORITY=process.env.XAUTHORITY
 Object.assign(env, {HOME:home, USERPROFILE:home, CLOVER_HOME:clover, CLOVER_DESKTOP_USER_DATA_DIR:userData, CLOVER_DESKTOP_IGNORE_EXISTING:'1', CLOVER_DESKTOP_CLOVER_ROOT:product, CLOVER_DESKTOP_CWD:home, CLOVER_DESKTOP_SKIP_QUIT_CONFIRM:'1', PYTHONPATH:product, PYTHONUNBUFFERED:'1'})
 for (const k of ['CLOVER_DESKTOP_DEV_SERVER','CLOVER_DESKTOP_BOOT_FAKE','CLOVER_DESKTOP_BOOT_FAKE_STEP_MS','VIRTUAL_ENV']) delete env[k]
 const result = {platform:process.platform, executable, stamp, helper:process.env.GITHUB_SHA, mode:'real app-spawned Python backend, loopback synthetic provider', phases:[], requests:[], errors:[], ok:false}
