@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import { EventEmitter } from 'node:events'
 import fs from 'node:fs'
+import http from 'node:http'
 import https from 'node:https'
 import os from 'node:os'
 import path from 'node:path'
@@ -49,8 +50,270 @@ test('real downloader fetches the pinned installer from the project raw URL', as
   }
 })
 
+test('interrupted response rejects and removes partial installer', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-interrupted-'))
+
+  const spy = vi.spyOn(https, 'get').mockImplementation(((_url: unknown, callback: (response: unknown) => void) => {
+    const request = new EventEmitter()
+    queueMicrotask(() => {
+      const response = new PassThrough() as PassThrough & { statusCode: number }
+      response.statusCode = 200
+      callback(response)
+      response.write('partial')
+      response.destroy(new Error('connection interrupted'))
+    })
+
+    return request
+  }) as typeof https.get)
+
+  try {
+    const sha = 'c'.repeat(40)
+    const result = resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+    await assert.rejects(Promise.race([result, new Promise((_, reject) => setTimeout(() => reject(new Error('download remained pending')), 300))]), /connection interrupted|premature close/i)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+  } finally {
+    spy.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+for (const fault of ['abort', 'premature-close', 'redirect-abort', 'rename'] as const) {
+  test(`downloader cleans up ${fault} and permits a successful retry`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-lifecycle-'))
+    const sha = 'b'.repeat(40)
+    let failing = true
+    let requests = 0
+
+    const rename = fault === 'rename'
+      ? vi.spyOn(fs, 'renameSync').mockImplementation(() => { throw new Error('rename refused') })
+      : null
+
+    const spy = vi.spyOn(https, 'get').mockImplementation(((_url: unknown, callback: (response: unknown) => void) => {
+      const request = new EventEmitter()
+      requests++
+      const redirect = failing && fault === 'redirect-abort' && requests === 1
+      queueMicrotask(() => {
+        const response = Object.assign(new PassThrough(), {
+          statusCode: redirect ? 302 : 200,
+          headers: redirect ? { location: 'https://example.test/installer' } : {}
+        })
+
+        callback(response)
+
+        if (redirect) {return}
+
+        if (!failing || fault === 'rename') {
+          response.end('complete installer')
+        } else {
+          response.write('partial')
+
+          if (fault !== 'premature-close') {response.emit('aborted')}
+          response.destroy()
+        }
+      })
+
+      return request
+    }) as typeof https.get)
+
+    const attempt = () => resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+
+    try {
+      await assert.rejects(attempt(), /interrupted|premature close|rename refused/i)
+      assert.equal(fs.existsSync(cachedScriptPath(home, sha)), false)
+      assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+      rename?.mockRestore()
+      failing = false
+      const result = await attempt()
+      assert.equal(fs.readFileSync(result.path, 'utf8'), 'complete installer')
+    } finally {
+      rename?.mockRestore()
+      spy.mockRestore()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+}
+
+for (const headersReceived of [false, true]) {
+  test(`stalled download times out with headers=${headersReceived}`, async () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-timeout-'))
+    const sha = 'e'.repeat(40)
+    const request = Object.assign(new EventEmitter(), { destroy: vi.fn() })
+    let response: PassThrough | undefined
+    let markRequested!: () => void
+    const requested = new Promise<void>(resolve => { markRequested = resolve })
+
+    const spy = vi.spyOn(https, 'get').mockImplementation(((_url: unknown, callback: (response: unknown) => void) => {
+      markRequested()
+
+      if (headersReceived) {
+        queueMicrotask(() => {
+          response = Object.assign(new PassThrough(), { statusCode: 200 })
+          callback(response)
+          response.write('partial')
+        })
+      }
+
+      return request
+    }) as unknown as typeof https.get)
+
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+
+    try {
+      const attempt = resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+      const rejection = assert.rejects(attempt, /timed out/)
+      await requested
+      await vi.advanceTimersByTimeAsync(60_001)
+      await rejection
+      assert.equal(request.destroy.mock.calls.length, 1)
+
+      if (response) {assert.equal(response.destroyed, true)}
+      assert.equal(fs.existsSync(cachedScriptPath(home, sha)), false)
+      assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+      assert.equal(vi.getTimerCount(), 0)
+    } finally {
+      vi.useRealTimers()
+      spy.mockRestore()
+      fs.rmSync(home, { recursive: true, force: true })
+    }
+  })
+}
+
+test('writer failure removes partial file and retry remains intact', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-writer-'))
+  const sha = '9'.repeat(40)
+  const create = fs.createWriteStream
+  let failing = true
+
+  const writer = vi.spyOn(fs, 'createWriteStream').mockImplementation(((...args: Parameters<typeof fs.createWriteStream>) => {
+    const out = create(...args)
+
+    if (failing) {out.once('open', () => out.destroy(new Error('writer failed')))}
+
+    return out
+  }) as typeof fs.createWriteStream)
+
+  const get = vi.spyOn(https, 'get').mockImplementation(((_url: unknown, callback: (response: unknown) => void) => {
+    const request = new EventEmitter()
+    queueMicrotask(() => {
+      const response = Object.assign(new PassThrough(), { statusCode: 200 })
+      callback(response)
+      response.end('complete installer')
+    })
+
+    return request
+  }) as unknown as typeof https.get)
+
+  const attempt = () => resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+
+  try {
+    await assert.rejects(attempt(), /writer failed/)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha)), false)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+    failing = false
+    const result = await attempt()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(fs.readFileSync(result.path, 'utf8'), 'complete installer')
+    assert.equal(fs.existsSync(result.path + '.tmp'), false)
+  } finally {
+    writer.mockRestore()
+    get.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
+test('timeout remains absolute across redirects and permits retry', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-redirect-timeout-'))
+  const sha = '8'.repeat(40)
+  let calls = 0
+  let notify!: () => void
+  const started = new Promise<void>(resolve => { notify = resolve })
+  const requests: Array<EventEmitter & { destroy: ReturnType<typeof vi.fn> }> = []
+
+  const get = vi.spyOn(https, 'get').mockImplementation(((_url: unknown, callback: (response: unknown) => void) => {
+    const request = Object.assign(new EventEmitter(), { destroy: vi.fn() })
+    requests.push(request)
+    calls++
+
+    if (calls === 1) {notify()}
+
+    if (calls === 3) {queueMicrotask(() => callback(Object.assign(new PassThrough(), { statusCode: 200 }).end('complete installer')))}
+
+    return request
+  }) as unknown as typeof https.get)
+
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+  const attempt = () => resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+
+  try {
+    const pending = attempt()
+    const rejection = assert.rejects(pending, /timed out/)
+    await started
+    await vi.advanceTimersByTimeAsync(59_000)
+    // Deliver a redirect near the original deadline.
+    const callback = get.mock.calls[0][1] as (response: unknown) => void
+    callback(Object.assign(new PassThrough(), { statusCode: 302, headers: { location: 'https://example.test/install' } }))
+    assert.equal(calls, 2)
+    await vi.advanceTimersByTimeAsync(1_001)
+    await rejection
+    assert.equal(requests[1].destroy.mock.calls.length, 1)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+    vi.useRealTimers()
+    const result = await attempt()
+    await new Promise(resolve => setTimeout(resolve, 20))
+    assert.equal(fs.readFileSync(result.path, 'utf8'), 'complete installer')
+    assert.equal(fs.existsSync(result.path + '.tmp'), false)
+  } finally {
+    vi.useRealTimers()
+    get.mockRestore()
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
+
 const SCRIPT_NAME = process.platform === 'win32' ? 'install.ps1' : 'install.sh'
 const ZERO_COMMIT = '0000000000000000000000000000000000000000'
+
+test('real socket reset removes partial download and permits retry', async () => {
+  const home = fs.mkdtempSync(path.join(os.tmpdir(), 'bootstrap-socket-'))
+  const sha = 'f'.repeat(40)
+  let calls = 0
+
+  const server = http.createServer((_req, res) => {
+    calls++
+
+    if (calls === 1) {
+      res.writeHead(200, { 'Content-Length': '100' })
+      res.write('partial')
+      setTimeout(() => res.socket?.destroy(), 10)
+    } else {
+      res.end('complete installer')
+    }
+  })
+
+  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve))
+  const address = server.address()
+  assert.ok(address && typeof address !== 'string')
+
+  const spy = vi.spyOn(https, 'get').mockImplementation(((requested, callback) => {
+    assert.equal(String(requested), `https://raw.githubusercontent.com/oaostarboy/clover-c1/${sha}/scripts/${SCRIPT_NAME}`)
+
+    return http.get(`http://127.0.0.1:${address.port}/`, callback)
+  }) as typeof https.get)
+
+  const attempt = () => resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} })
+
+  try {
+    await assert.rejects(attempt())
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha)), false)
+    assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
+    const result = await attempt()
+    assert.equal(fs.readFileSync(result.path, 'utf8'), 'complete installer')
+    assert.equal(calls, 2)
+  } finally {
+    spy.mockRestore()
+    await new Promise<void>(resolve => server.close(() => resolve()))
+    fs.rmSync(home, { recursive: true, force: true })
+  }
+})
 
 function mkTmpHome() {
   return fs.mkdtempSync(path.join(os.tmpdir(), 'clover-bootstrap-test-'))
@@ -116,7 +379,8 @@ test('HTTP error does not create a usable cached installer', async () => {
     await assert.rejects(resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} }), /HTTP 404/)
     assert.equal(fs.existsSync(cachedScriptPath(home, sha)), false)
     assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
-    assert.equal(output?.closed, true)
+    // A failure before HTTP 200 need not open an output file at all.
+    assert.ok(output === undefined || output.closed)
     assert.equal(responseStream?.destroyed, true)
   } finally {
     spy.mockRestore()
@@ -141,7 +405,8 @@ test('request error closes output before rejecting', async () => {
   try {
     const sha = 'd'.repeat(40)
     await assert.rejects(resolveInstallScript({ installStamp: { commit: sha }, sourceRepoRoot: null, cloverHome: home, emit: () => {} }), /connection failed/)
-    assert.equal(output?.closed, true)
+    // A failure before HTTP 200 need not open an output file at all.
+    assert.ok(output === undefined || output.closed)
     assert.equal(fs.existsSync(cachedScriptPath(home, sha) + '.tmp'), false)
   } finally {
     spy.mockRestore()

@@ -35,8 +35,10 @@
 import { execFileSync, spawn } from 'node:child_process'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import type { IncomingMessage } from 'node:http'
 import https from 'node:https'
 import path from 'node:path'
+import { pipeline } from 'node:stream'
 
 import { hiddenWindowsChildOptions } from './windows-child-options'
 
@@ -243,87 +245,103 @@ function downloadInstallScript(ref, destPath) {
   return new Promise((resolve, reject) => {
     fs.mkdirSync(path.dirname(destPath), { recursive: true })
     const tmpPath = destPath + '.tmp'
-    const out = fs.createWriteStream(tmpPath)
-    https
-      .get(url, res => {
-        if (res.statusCode === 301 || res.statusCode === 302) {
-          // GitHub raw shouldn't redirect for a SHA URL, but follow once
-          // defensively.
-          const location = res.headers.location
-          res.destroy()
-          out.on('error', () => {})
-          out.close(() => {
-            try { fs.unlinkSync(tmpPath) } catch { void 0 }
+    let request: ReturnType<typeof https.get> | undefined
+    let response: IncomingMessage | undefined
+    let out: fs.WriteStream | undefined
+    let settled = false
+    const timer = setTimeout(() => fail(new Error('Installer download timed out; please retry setup')), 60_000)
+    timer.unref()
 
-            if (!location || !location.startsWith('https://')) {
-              reject(new Error(`Invalid installer redirect: ${location}`))
+    function fail(error: unknown) {
+      if (settled) {return}
+      settled = true
+      clearTimeout(timer)
+      response?.destroy()
+      request?.destroy?.()
 
-              return
-            }
+      const cleanup = () => {
+        try { fs.unlinkSync(tmpPath) } catch { void 0 }
+        reject(error)
+      }
 
-            https
-              .get(location, res2 => {
-                if (res2.statusCode !== 200) {
-                  res2.destroy()
-                  reject(new Error(`Failed to download ${scriptName}: HTTP ${res2.statusCode} from redirect ${res.headers.location}`))
+      // Wait for the file handle to close before deleting it (also on Windows).
+      if (out && !out.closed) {
+        out.once('close', cleanup)
+        out.destroy()
+      } else {
+        cleanup()
+      }
+    }
 
-                  return
-                }
+    function fetchScript(target: string, redirected: boolean) {
+      if (settled) {return}
 
-                const out2 = fs.createWriteStream(tmpPath)
-                res2.pipe(out2)
-                out2.on('finish', () => {
-                  out2.close(() => {
-                    try { fs.renameSync(tmpPath, destPath); resolve(destPath) } catch (err) { reject(err) }
-                  })
-                })
-                out2.on('error', reject)
-              })
-              .on('error', reject)
-          })
+      try {
+        const current = https.get(target, res => {
+          if (settled) { res.destroy();
 
-          return
-        }
+ return }
 
-        if (res.statusCode !== 200) {
-          res.destroy()
-          out.on('error', () => {})
-          out.close(() => {
+          if (!redirected && (res.statusCode === 301 || res.statusCode === 302)) {
+            const location = res.headers.location
+            res.destroy()
+
             try {
-              fs.unlinkSync(tmpPath)
-            } catch {
-              void 0
+              if (!location || new URL(location).protocol !== 'https:') {
+                throw new Error(`Invalid installer redirect: ${location}`)
+              }
+
+              fetchScript(location, true)
+            } catch (error) {
+              fail(error)
             }
 
-            reject(new Error(`Failed to download ${scriptName}: HTTP ${res.statusCode} from ${url}`))
-          })
-
-          return
-        }
-
-        res.pipe(out)
-        out.on('finish', () => {
-          out.close()
-          fs.renameSync(tmpPath, destPath)
-          resolve(destPath)
-        })
-        out.on('error', err => {
-          try {
-            fs.unlinkSync(tmpPath)
-          } catch {
-            void 0
+            return
           }
 
-          reject(err)
+          response = res
+          res.on('error', fail)
+          res.once('aborted', () => fail(new Error('Installer download interrupted before completion')))
+
+          if (res.statusCode !== 200) {
+            fail(new Error(`Failed to download ${scriptName}: HTTP ${res.statusCode} from ${target}`))
+
+            return
+          }
+
+          try {
+            out = fs.createWriteStream(tmpPath)
+            pipeline(res, out, error => {
+              if (settled) {return}
+
+              if (error) { fail(error);
+
+ return }
+
+              try {
+                fs.renameSync(tmpPath, destPath)
+                settled = true
+                clearTimeout(timer)
+                resolve(destPath)
+              } catch (renameError) {
+                fail(renameError)
+              }
+            })
+          } catch (error) {
+            fail(error)
+          }
         })
-      })
-      .on('error', err => {
-        out.on('error', () => {})
-        out.close(() => {
-          try { fs.unlinkSync(tmpPath) } catch { void 0 }
-          reject(err)
+
+        request = current
+        current.on('error', error => {
+          if (request === current) {fail(error)}
         })
-      })
+      } catch (error) {
+        fail(error)
+      }
+    }
+
+    fetchScript(url, false)
   })
 }
 
