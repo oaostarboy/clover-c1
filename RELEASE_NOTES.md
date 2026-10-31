@@ -15,6 +15,11 @@ HOW TO EDIT (by hand, at release time)
   * Bump order at release: fill this file, then __version__, pyproject.toml, uv.lock.
 -->
 
+## 2.0.2.4 | Clover C2.0.2.4 | 2026-10-31
+- Desktop animations use less CPU by reusing drawing buffers and cached calculations.
+- Desktop animation appearance and frame rate are preserved.
+- Desktop packages retain the full four-part release number.
+
 ## 2.0.2.3 | Clover C2.0.2.3 | 2026-10-30
 - Helpers finish splitting before docking, even when the parent finishes early.
 - The main thinking particle stays mounted across activity; thoughts start collapsed and remain expandable.

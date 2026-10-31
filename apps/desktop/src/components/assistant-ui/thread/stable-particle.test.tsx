@@ -6,10 +6,10 @@ import { afterEach, expect, it, vi } from 'vitest'
 import { PRIMARY_SESSION_VIEW, SessionViewProvider } from '@/app/chat/session-view'
 import { $compactingSessions, setSessionCompacting } from '@/store/compaction'
 import { clearApprovalRequest, setApprovalRequest } from '@/store/prompts'
+import { setReasoningCollapsedByDefault } from '@/store/reasoning-disclosure'
 
 import { stubThreadEnvironment, ThreadRuntime, userMessage } from '../test-utils'
 
-import { setReasoningCollapsedByDefault } from '@/store/reasoning-disclosure'
 import { $delegationAnchors } from './delegation-anchor'
 
 import { Thread } from '.'

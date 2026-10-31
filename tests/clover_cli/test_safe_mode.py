@@ -21,10 +21,14 @@ def _clean_env(monkeypatch):
         os.environ.pop(var, None)
 
 
-def test_cmd_chat_safe_mode_sets_env_before_startup(monkeypatch):
+def test_cmd_chat_safe_mode_sets_env_before_startup(monkeypatch, tmp_path):
+    import clover_cli.config as config_mod
     import clover_cli.main as main_mod
     from clover_cli._parser import build_top_level_parser
 
+    config_path = tmp_path / "config.yaml"
+    config_path.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr(config_mod, "get_config_path", lambda: config_path)
     parser, _subparsers, chat_parser = build_top_level_parser()
     chat_parser.set_defaults(func=main_mod.cmd_chat)
     args = parser.parse_args(["chat", "--safe-mode"])

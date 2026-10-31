@@ -93,7 +93,7 @@ export const DEFAULT_ONBOARDING_REASON = 'No inference provider is configured.'
 export const DEFAULT_MANUAL_ONBOARDING_REASON = 'Add or switch inference provider.'
 
 function isE2ETestEnvironment(): boolean {
-  if (typeof window === 'undefined') return false
+  if (typeof window === 'undefined') {return false}
   try {
     if (window.localStorage.getItem('clover-force-tour') === '1') {
       return false

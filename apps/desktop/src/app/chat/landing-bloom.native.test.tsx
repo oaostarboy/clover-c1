@@ -1,5 +1,6 @@
 import { cleanup, render } from '@testing-library/react'
 import { afterEach, expect, it, vi } from 'vitest'
+
 import { LandingBloom } from './landing-bloom'
 afterEach(()=>{cleanup();vi.restoreAllMocks();vi.unstubAllGlobals();Reflect.deleteProperty(window,'cloverDesktop');Reflect.deleteProperty(HTMLCanvasElement.prototype,'transferControlToOffscreen')})
 it('pauses native-hidden botanical workers even when document.hidden stays false',()=>{

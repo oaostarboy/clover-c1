@@ -1,8 +1,11 @@
+import './landing.css'
+
 import { useEffect, useRef } from 'react'
-import { createRendererLoopPauseController } from '../../lib/renderer-loop-pause'
+
 import { cn } from '@/lib/utils'
 
-import './landing.css'
+import { createRendererLoopPauseController } from '../../lib/renderer-loop-pause'
+
 import { drawBotanical } from './botanical-surface'
 export { drawBotanical } from './botanical-surface'
 
@@ -18,7 +21,7 @@ export function LandingBloom({
   const ref = useRef<HTMLDivElement>(null)
   useEffect(() => {
     const host = ref.current
-    if (!host) return
+    if (!host) {return}
     const media = window.matchMedia?.('(prefers-reduced-motion: reduce)')
     let worker: Worker | undefined
     let canvas: HTMLCanvasElement
@@ -36,7 +39,7 @@ export function LandingBloom({
       const rect = host.getBoundingClientRect()
       const width = Math.max(1, Math.round(rect.width)), height = Math.max(1, Math.round(rect.height))
       const dpr = Math.min(window.devicePixelRatio || 1, 2, 2400 / width, 1600 / height)
-      if (worker) worker.postMessage({ type: 'resize', width, height, dpr })
+      if (worker) {worker.postMessage({ type: 'resize', width, height, dpr })}
       else {
         canvas.width = Math.max(1, Math.round(width * dpr)); canvas.height = Math.max(1, Math.round(height * dpr))
         const ctx = canvas.getContext('2d')
@@ -44,7 +47,7 @@ export function LandingBloom({
       }
     }
     const fallback = () => {
-      if (disposed) return
+      if (disposed) {return}
       worker?.terminate(); worker = undefined
       canvas = makeCanvas()
       resize()
@@ -85,15 +88,15 @@ export function LandingBloom({
   return (
     <div
       aria-hidden="true"
-      data-landing-bloom=""
-      data-frosted={frosted ? 'true' : undefined}
       className={cn('pointer-events-none absolute inset-0 z-0 overflow-hidden', className)}
+      data-frosted={frosted ? 'true' : undefined}
+      data-landing-bloom=""
     >
-      <div ref={ref} aria-hidden="true" className="absolute inset-0 pointer-events-none" />
+      <div aria-hidden="true" className="absolute inset-0 pointer-events-none" ref={ref} />
       <div
         aria-hidden="true"
-        data-slot="landing-bloom-veil"
         className="pointer-events-none absolute inset-0"
+        data-slot="landing-bloom-veil"
       />
     </div>
   )

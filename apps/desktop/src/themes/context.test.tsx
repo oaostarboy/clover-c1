@@ -2,8 +2,8 @@ import { act, cleanup, render } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it } from 'vitest'
 
 import { $accentOverride, setAccentOverride } from './accent-override'
-import { contrastRatio } from './color'
 import { __resetBackendSkinSync, ingestBackendSkin } from './backend-sync'
+import { contrastRatio } from './color'
 import { skinPref, ThemeProvider, useTheme } from './context'
 import { everforestTheme } from './presets'
 

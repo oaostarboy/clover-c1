@@ -68,7 +68,7 @@ class TestChatVerboseArg:
         assert not hasattr(args, "verbose")
 
 
-    def test_cmd_chat_forwards_none_when_verbose_is_absent(self, monkeypatch):
+    def test_cmd_chat_forwards_none_when_verbose_is_absent(self, monkeypatch, tmp_path):
         import types
         import sys
 
@@ -78,6 +78,9 @@ class TestChatVerboseArg:
         parser, _subparsers, chat_parser = build_top_level_parser()
         chat_parser.set_defaults(func=main_mod.cmd_chat)
         args = parser.parse_args(["chat"])
+        config = tmp_path / "config.yaml"
+        config.write_text("{}\n")
+        monkeypatch.setattr("clover_cli.config.get_config_path", lambda: config)
         captured = {}
         fake_cli = types.ModuleType("cli")
 

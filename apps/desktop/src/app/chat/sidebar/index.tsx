@@ -1615,7 +1615,7 @@ export function ChatSidebar({
                 )
               })}
               <SidebarMenuItem>
-                <SidebarMenuButton aria-label="More tools and channels" aria-expanded={showManagement}
+                <SidebarMenuButton aria-expanded={showManagement} aria-label="More tools and channels"
                   onClick={() => { setShowManagement(value => !value); setSidebarCompactNavigation(false) }}
                   tooltip={{ children: 'More tools and channels', hidden: !compactNavigation }}>
                   <span aria-hidden className="inline-flex size-4 items-center justify-center">···</span>

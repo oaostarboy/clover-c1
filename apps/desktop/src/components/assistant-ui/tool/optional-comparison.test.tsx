@@ -1,8 +1,10 @@
-import {render,screen,fireEvent,waitFor,cleanup,act} from '@testing-library/react'
+import {act,cleanup,fireEvent,render,screen,waitFor} from '@testing-library/react'
 import {afterEach,expect,it,vi} from 'vitest'
+
+import type {CloverGateway} from '@/clover'
+
 import {OptionalComparison} from './optional-comparison'
 import {ThreadBackendContext} from './thread-backend-context'
-import type {CloverGateway} from '@/clover'
 afterEach(cleanup)
 it('hydrates only canonical semantic data and renders read-only text with local view switching',async()=>{
  const record={contract:'clover.structured-tool/1',identity:{stored_session_id:'stored',assistant_row_id:3,tool_call_id:'call-1',turn_row_id:2},component:'clover.comparison',version:1,tool_name:'comparison_card',revision:2,status:'success',payload:{version:1,title:'Authored comparison',columns:['A','B'],rows:[{label:'Markup',values:['<img src=x onerror=alert(1)>','Plain']}]},terminal_row_id:4}

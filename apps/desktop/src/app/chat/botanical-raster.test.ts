@@ -1,4 +1,5 @@
 import { afterEach, expect, it, vi } from 'vitest'
+
 import { drawBotanical } from './botanical-surface'
 afterEach(() => vi.unstubAllGlobals())
 it('reuses glyph coverage and a bounded pixel buffer instead of rerasterizing thousands of glyphs every frame', () => {

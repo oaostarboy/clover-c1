@@ -1,0 +1,22 @@
+<!doctype html><meta charset="utf-8"><script type="module">
+import {botanicalRaster as candidate,drawBotanical} from './candidate.mjs';
+import {botanicalRaster as original} from './original.mjs';
+window.run=async()=>{
+ const cases=[],cache=[],assert=(ok,msg)=>{if(!ok)throw Error(msg)};
+ const compare=(a,b,label)=>{let different=0;for(let i=0;i<a.length;i++)if(a[i]!==b[i])different++;cases.push({label,bytes:a.length,different});assert(!different,label+' differs '+different)};
+ for(const dpr of [1,1.25,2400/1220,2]){
+  const a=new OffscreenCanvas(88,76),b=new OffscreenCanvas(88,76),ac=a.getContext('2d'),bc=b.getContext('2d');ac.setTransform(dpr,0,0,dpr,0,0);bc.setTransform(dpr,0,0,dpr,0,0);
+  const r=original(ac),s=candidate(bc),expected=new Uint8ClampedArray(88*76*4);
+  const ops=[[0,0,255,1,127,.001],[0,0,5,223,65,.13],[0,0,120,47,233,.47],[9,8,33,111,200,.333],[9,8,255,8,4,.81],[87,75,21,87,99,.5],[-1,0,2,3,4,.7],[88,0,1,2,3,.5]];
+  for(const [x,y,R,G,B,alpha] of ops){r.blend(x,y,R,G,B,alpha);if(x>=0&&y>=0&&x<88&&y<76){const i=(y*88+x)*4;s.blendAt(i,R,G,B,alpha);if(!expected[i+3]){expected[i]=R;expected[i+1]=G;expected[i+2]=B;expected[i+3]=alpha*255}else{const old=expected[i+3]/255,out=alpha+old*(1-alpha),remaining=old*(1-alpha);expected[i]=(R*alpha+expected[i]*remaining)/out;expected[i+1]=(G*alpha+expected[i+1]*remaining)/out;expected[i+2]=(B*alpha+expected[i+2]*remaining)/out;expected[i+3]=out*255}}}
+  compare(s.image.data,expected,`numeric ${dpr}`);compare(s.image.data,r.image.data,`baseline numeric ${dpr}`);
+  const actions=[['wash',-1.2,2.3,.31],['glyph','@',-.3,1.4,201,98,33,.45],['glyph','x',4.25,4.7,31,177,201,.28],['wash',4.25,4.7,.56],['glyph','@',4.25,4.7,255,1,100,.63],['glyph','#',43.8,38.1,50,255,3,.73],['wash',43.8,38.1,.4],['glyph','o',100,100,40,50,60,.8],['wash',-100,-100,.9]];
+  for(const [op,...args] of actions){r[op](...args);s[op](...args);compare(s.image.data,r.image.data,`${dpr} ${op} ${JSON.stringify(args)}`)}
+ }
+ const c=new OffscreenCanvas(1,1),ctx=c.getContext('2d');let previous=null;
+ const stats=r=>({masks:r.masks.size,locations:[...r.locations.values()].reduce((n,m)=>n+m.size,0),columns:r.washColumns.size,rows:r.washRows.size,imageBytes:r.image.data.byteLength,maskBytes:[...r.masks.values()].reduce((n,m)=>n+m.offsets.byteLength+m.xs.byteLength+m.ys.byteLength+m.alpha.byteLength,0),axisBytes:[...r.washColumns.values(),...r.washRows.values()].reduce((n,v)=>n+v.values.byteLength,0)});
+ for(let cycle=0;cycle<4;cycle++)for(const [w,h,dpr] of [[320,240,1],[320,240,1.25],[321,241,2]]){
+  c.width=Math.round(w*dpr);c.height=Math.round(h*dpr);ctx.setTransform(dpr,0,0,dpr,0,0);drawBotanical(ctx,w,h,0);let r=candidate(ctx);assert(r!==previous,'resize did not replace cache');previous=r;for(let i=0;i<60;i++)drawBotanical(ctx,w,h,i/60);let first=stats(r);for(let i=0;i<60;i++)drawBotanical(ctx,w,h,(i+60)/60);let second=stats(r);assert(candidate(ctx)===r,'same size changed cache');cache.push({cycle,w,h,dpr,first,second});
+ }
+ return {cases,cache};
+};</script>

@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react'
-import { CloverActivityAgent, validateRecord, recordKey, type NativeRecord } from '../../../../../../integrations/generative-ui/adapter'
+
+import { CloverActivityAgent, type NativeRecord, recordKey, validateRecord } from '../../../../../../integrations/generative-ui/adapter'
 
 export interface OpenUIRendererProps {
   record: NativeRecord
@@ -31,16 +32,16 @@ export function OpenUIRenderer({ record, offline = false, onInterrupt }: OpenUIR
         { runId: agent.nativeRunId },
         {
           onMessagesChanged: ({ messages }) => {
-            if (!mounted) return
+            if (!mounted) {return}
             const current = messages
               .map(m => (m.role === 'activity' ? validateRecord(m.content) : null))
               .find(r => r && recordKey(r) === key)
-            if (current) setShown(current)
+            if (current) {setShown(current)}
           },
         }
       )
       .catch(() => {
-        if (mounted) setShown(null)
+        if (mounted) {setShown(null)}
       })
 
     return () => {
@@ -55,7 +56,7 @@ export function OpenUIRenderer({ record, offline = false, onInterrupt }: OpenUIR
 
   if (!shown) {
     return (
-      <div role="status" className="p-4 text-sm text-(--ui-text-secondary, #94a3b8)">
+      <div className="p-4 text-sm text-(--ui-text-secondary, #94a3b8)" role="status">
         Opening OpenUI component…
       </div>
     )
@@ -67,15 +68,15 @@ export function OpenUIRenderer({ record, offline = false, onInterrupt }: OpenUIR
   return (
     <section
       aria-label={p.title}
-      data-openui-renderer=""
       className="my-3 rounded-lg border border-(--ui-stroke-secondary, #334155) bg-(--ui-bg-card, #0f172a)/80 p-4 text-(--ui-text-primary, #f8fafc) backdrop-blur-sm"
+      data-openui-renderer=""
     >
       <div className="flex flex-wrap items-center justify-between gap-3 border-b border-(--ui-stroke-tertiary, #1e293b) pb-3">
         <div>
           <div className="flex items-center gap-2">
             <span
-              className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[0.6875rem] font-medium tracking-wide text-emerald-400 border border-emerald-500/20"
               aria-label="Component source"
+              className="inline-flex items-center rounded-full bg-emerald-500/10 px-2 py-0.5 text-[0.6875rem] font-medium tracking-wide text-emerald-400 border border-emerald-500/20"
             >
               OpenUI
             </span>
@@ -84,52 +85,52 @@ export function OpenUIRenderer({ record, offline = false, onInterrupt }: OpenUIR
             </h3>
           </div>
           <p
-            role="status"
             className="mt-1 text-xs text-(--ui-text-secondary, #94a3b8)"
+            role="status"
           >
             {offline ? 'Offline (last saved state) · ' : ''}
             {statusLabel}
           </p>
         </div>
 
-        <div className="flex items-center gap-1.5" role="toolbar" aria-label="Component view modes">
+        <div aria-label="Component view modes" className="flex items-center gap-1.5" role="toolbar">
           <button
-            type="button"
-            aria-pressed={view === 'table'}
             aria-label="Table view"
-            onClick={() => setView('table')}
+            aria-pressed={view === 'table'}
             className={`min-h-[44px] min-w-[44px] px-3 py-1.5 text-xs font-medium rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400 focus-visible:outline-offset-[-2px] ${
               view === 'table'
                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 : 'text-(--ui-text-secondary, #94a3b8) hover:bg-slate-800'
             }`}
+            onClick={() => setView('table')}
+            type="button"
           >
             Table
           </button>
           <button
-            type="button"
-            aria-pressed={view === 'list'}
             aria-label="List view"
-            onClick={() => setView('list')}
+            aria-pressed={view === 'list'}
             className={`min-h-[44px] min-w-[44px] px-3 py-1.5 text-xs font-medium rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400 focus-visible:outline-offset-[-2px] ${
               view === 'list'
                 ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                 : 'text-(--ui-text-secondary, #94a3b8) hover:bg-slate-800'
             }`}
+            onClick={() => setView('list')}
+            type="button"
           >
             List
           </button>
           {p.openui_lang ? (
             <button
-              type="button"
-              aria-pressed={view === 'dsl'}
               aria-label="OpenUI Lang source view"
-              onClick={() => setView('dsl')}
+              aria-pressed={view === 'dsl'}
               className={`min-h-[44px] min-w-[44px] px-3 py-1.5 text-xs font-medium rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-400 focus-visible:outline-offset-[-2px] ${
                 view === 'dsl'
                   ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
                   : 'text-(--ui-text-secondary, #94a3b8) hover:bg-slate-800'
               }`}
+              onClick={() => setView('dsl')}
+              type="button"
             >
               Lang
             </button>
@@ -143,14 +144,14 @@ export function OpenUIRenderer({ record, offline = false, onInterrupt }: OpenUIR
             <table className="w-full table-fixed text-left text-[0.8125rem] leading-normal">
               <thead>
                 <tr className="border-b border-(--ui-stroke-tertiary, #1e293b)">
-                  <th scope="col" className="py-2.5 pr-3 text-xs font-semibold uppercase tracking-wider text-(--ui-text-secondary, #cbd5e1)">
+                  <th className="py-2.5 pr-3 text-xs font-semibold uppercase tracking-wider text-(--ui-text-secondary, #cbd5e1)" scope="col">
                     Dimension
                   </th>
                   {p.columns.map((col, idx) => (
                     <th
+                      className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wider text-(--ui-text-secondary, #cbd5e1) break-words"
                       key={idx}
                       scope="col"
-                      className="px-3 py-2.5 text-xs font-semibold uppercase tracking-wider text-(--ui-text-secondary, #cbd5e1) break-words"
                     >
                       {col}
                     </th>
@@ -159,17 +160,17 @@ export function OpenUIRenderer({ record, offline = false, onInterrupt }: OpenUIR
               </thead>
               <tbody className="divide-y divide-(--ui-stroke-tertiary, #1e293b)/50">
                 {p.rows.map((row, rIdx) => (
-                  <tr key={rIdx} className="hover:bg-slate-800/30 transition-colors">
+                  <tr className="hover:bg-slate-800/30 transition-colors" key={rIdx}>
                     <th
-                      scope="row"
                       className="py-2.5 pr-3 font-medium text-(--ui-text-primary, #f8fafc) break-words"
+                      scope="row"
                     >
                       {row.label}
                     </th>
                     {row.values.map((val, cIdx) => (
                       <td
-                        key={cIdx}
                         className="px-3 py-2.5 text-(--ui-text-secondary, #cbd5e1) [overflow-wrap:anywhere]"
+                        key={cIdx}
                       >
                         {val}
                       </td>
@@ -183,13 +184,13 @@ export function OpenUIRenderer({ record, offline = false, onInterrupt }: OpenUIR
           <dl className="grid gap-3 text-sm">
             {p.rows.map((row, rIdx) => (
               <div
-                key={rIdx}
                 className="rounded border border-(--ui-stroke-tertiary, #1e293b) bg-slate-900/40 p-3"
+                key={rIdx}
               >
                 <dt className="font-semibold text-emerald-300 mb-1">{row.label}</dt>
                 <dd className="grid gap-1 pl-2">
                   {row.values.map((val, cIdx) => (
-                    <div key={cIdx} className="flex items-baseline justify-between gap-4 text-xs">
+                    <div className="flex items-baseline justify-between gap-4 text-xs" key={cIdx}>
                       <span className="text-(--ui-text-secondary, #94a3b8)">{p.columns[cIdx]}:</span>
                       <span className="text-(--ui-text-primary, #f8fafc) text-right [overflow-wrap:anywhere]">
                         {val}

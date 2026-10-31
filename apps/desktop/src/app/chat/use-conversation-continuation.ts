@@ -9,7 +9,7 @@ export function useConversationContinuation(landing: boolean) {
   useLayoutEffect(() => {
     const root = surface.current
     const dock = root?.querySelector<HTMLElement>('[data-slot="composer-dock"]')
-    if (!root || !dock) return
+    if (!root || !dock) {return}
     let animation: Animation | undefined
     if (wasLanding.current && !landing && previous.current && !dock.hasAttribute('data-popped-out') &&
       !document.hidden && !window.matchMedia('(prefers-reduced-motion: reduce)').matches) {
@@ -22,7 +22,7 @@ export function useConversationContinuation(landing: boolean) {
       ], { duration: 360, easing: 'cubic-bezier(0.22, 1, 0.36, 1)' })
     }
     wasLanding.current = landing
-    const measure = () => { if (landing) previous.current = dock.getBoundingClientRect() }
+    const measure = () => { if (landing) {previous.current = dock.getBoundingClientRect()} }
     measure()
     const observer = new ResizeObserver(measure)
     observer.observe(dock)
