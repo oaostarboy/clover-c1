@@ -43,9 +43,12 @@ def _chat_args(**overrides):
 
 
 @pytest.fixture
-def main_mod(monkeypatch):
+def main_mod(monkeypatch, tmp_path):
     import clover_cli.main as mod
 
+    config = tmp_path / "config.yaml"
+    config.write_text("{}\n", encoding="utf-8")
+    monkeypatch.setattr("clover_cli.config.get_config_path", lambda: config)
     monkeypatch.setattr(mod, "_has_any_provider_configured", lambda: True)
     monkeypatch.setattr(mod, "_sync_bundled_skills_for_startup", lambda: None)
     monkeypatch.setattr(mod, "_termux_should_prefetch_update_check", lambda: False)
