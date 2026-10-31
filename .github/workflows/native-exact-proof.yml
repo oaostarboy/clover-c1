@@ -38,10 +38,7 @@ jobs:
       - name: Build desktop
         working-directory: product/apps/desktop
         shell: bash
-        env:
-          GITHUB_SHA: 7c43ea32629ceff116a047515f1185890ccf081f
-          GITHUB_REF_NAME: candidate-2.0.2.4
-        run: npm run build
+        run: GITHUB_SHA=7c43ea32629ceff116a047515f1185890ccf081f GITHUB_REF_NAME=candidate-2.0.2.4 npm run build
       - name: Package desktop
         working-directory: product/apps/desktop
         shell: bash
