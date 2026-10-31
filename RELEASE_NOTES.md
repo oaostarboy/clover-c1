@@ -16,9 +16,10 @@ HOW TO EDIT (by hand, at release time)
 -->
 
 ## 2.0.2.4 | Clover C2.0.2.4 | 2026-10-31
-<!-- draft -->
-- Desktop background drawing reuses calculations and cached values.
-- Performance targets and real-device validation remain open.
+- Desktop background drawing reuses buffers, cached coverage, and repeated calculations.
+- Desktop setup handles interrupted downloads more reliably.
+- Desktop package version handling preserves four-part release numbers.
+- Windows installer version metadata now uses the complete release number.
 
 ## 2.0.2.3 | Clover C2.0.2.3 | 2026-10-30
 - Helpers finish splitting before docking, even when the parent finishes early.

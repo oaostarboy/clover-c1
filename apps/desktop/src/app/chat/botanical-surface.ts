@@ -68,6 +68,7 @@ export function drawBotanical(ctx: Context, width: number, heightPx: number, tim
   if (!buffers || buffers.width !== width || buffers.height !== heightPx) {
     const size = cols * rows
     const attenuation = new Float64Array(size), jitter = new Float64Array(size)
+
     for (let row = 0; row < rows; row++) {for (let col = 0; col < cols; col++) {
       const i = row * cols + col
       const x = (col + 0.5) * cw, y = (row + 0.5) * ch
@@ -76,6 +77,7 @@ export function drawBotanical(ctx: Context, width: number, heightPx: number, tim
       const noise = Math.sin(col * 127.1 + row * 311.7) * 43758.5453
       jitter[i] = (noise - Math.floor(noise) - 0.5) * 0.15
     }}
+
     buffers = { width, height: heightPx, depth: new Float32Array(size), tones: new Float32Array(size),
       inks: new Float32Array(size), points: new Int32Array(size), leaves: new Uint8Array(size), attenuation, jitter }
     frameBuffers.set(ctx, buffers)
@@ -142,8 +144,10 @@ export function drawBotanical(ctx: Context, width: number, heightPx: number, tim
         const px = cx + size * (x * cs - yy * ss), py = cy + size * (x * ss + yy * cs)
         const z = y * st + zz * ct
         const col = Math.floor(px / cw), row = Math.floor(py / ch)
+
         if (col < 0 || col >= cols || row < 0 || row >= rows) {continue}
         const index = row * cols + col
+
         if (z <= depth[index]) {continue}
         depth[index] = z; tones[index] = 0; inks[index] = plant.ink
         points[index] = pointIndex; leaves[index] = lightingIndex
