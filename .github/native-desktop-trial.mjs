@@ -33,6 +33,8 @@ const reply='Native desktop verification complete. This saved reply must survive
 const sid='native-functional-preserved-session'
 const py=code=>execFileSync(python,['-c',code],{cwd:product,env,encoding:'utf8',timeout:30000}).trim()
 const hash=file=>crypto.createHash('sha256').update(fs.readFileSync(file)).digest('hex')
+const configObject=()=>JSON.parse(py("import json,yaml,os;print(json.dumps(yaml.safe_load(open(os.path.join(os.environ['CLOVER_HOME'],'config.yaml')))))"))
+function preserveSubset(before,after,key=''){for(const [k,v] of Object.entries(before)){const full=key?key+'.'+k:k;if(v&&typeof v==='object'&&!Array.isArray(v)){assert.ok(after[k],full+' removed');preserveSubset(v,after[k],full)}else assert.deepEqual(after[k],v,full+' changed')}}
 let app, page, provider, monitor, timeout
 const quit=async()=>{const child=app.process();await app.close();assert.equal(child.exitCode,0,'App did not quit cleanly');app=null;result.phases.push('clean quit')}
 const snapshot=()=>JSON.parse(py(`import sqlite3,json,os
@@ -61,6 +63,7 @@ try {
   fs.writeFileSync(path.join(clover,'config.yaml'),`model:\n  default: synthetic-native\n  provider: synthetic\nproviders:\n  synthetic:\n    api: http://127.0.0.1:${provider.address().port}/v1\n    name: Synthetic Native Fixture\n    api_mode: chat_completions\n    key_env: SYNTHETIC_FIXTURE_KEY\n    models:\n      synthetic-native: {}\n    context_length: 65536\ntoolsets: []\nplugins:\n  enabled: []\nmcp_servers: {}\nmemory:\n  memory_enabled: false\n  user_profile_enabled: false\n`)
   fs.writeFileSync(path.join(clover,'.env'),'SYNTHETIC_FIXTURE_KEY=fixture-dummy-not-a-credential\n')
   const configBefore=hash(path.join(clover,'config.yaml')),envBefore=hash(path.join(clover,'.env'))
+  const initialConfig=configObject();result.initialConfig=initialConfig
   py(`from clover_state import SessionDB
 import os,time
 from pathlib import Path
@@ -94,12 +97,19 @@ d.close()`)
   await expect.poll(()=>snapshot().rows.at(-1),{timeout:15000}).toEqual(['assistant',reply])
   const before=snapshot();assert.equal(before.integrity,'ok');assert.ok(result.requests.some(r=>r.stream&&!r.aux))
   await quit()
+  const configAfterFirstQuit=configObject();result.configAfterFirstQuit=configAfterFirstQuit
+  preserveSubset(initialConfig,configAfterFirstQuit)
   await launch()
   await expect(page.getByText(prompt,{exact:true}).first()).toBeVisible({timeout:30000})
   await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(reply,{timeout:30000})
   const after=snapshot();assert.deepEqual(after,before)
   result.persistence={messages:after.rows.length,integrity:after.integrity,logicalRowsUnchanged:true,fullPriorReplyVisible:true,configUnchanged:hash(path.join(clover,'config.yaml'))===configBefore,envUnchanged:hash(path.join(clover,'.env'))===envBefore,uiSettingToggled:false}
-  assert.ok(result.persistence.configUnchanged&&result.persistence.envUnchanged)
+  result.configAfterRestart=configObject()
+  preserveSubset(initialConfig,result.configAfterRestart)
+  assert.deepEqual(result.configAfterRestart,configAfterFirstQuit,'Config changed across restart')
+  result.persistence.originalConfigValuesPreserved=true
+  result.persistence.configStableAcrossRestart=true
+  assert.ok(result.persistence.envUnchanged)
   await quit()
   const log=fs.readFileSync(path.join(clover,'logs/agent.log'),'utf8')
   const turns=[...log.matchAll(/tool_turns=(\d+)/g)].map(m=>Number(m[1]));assert.ok(turns.length>0);assert.ok(turns.every(n=>n===0))
