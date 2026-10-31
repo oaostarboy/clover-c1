@@ -5,19 +5,23 @@ import http from 'node:http'
 import crypto from 'node:crypto'
 import assert from 'node:assert/strict'
 import { createRequire } from 'node:module'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 const product = path.resolve('product')
 const desktop = path.join(product, 'apps/desktop')
 const require = createRequire(path.join(desktop, 'package.json'))
 const { _electron, expect } = require('@playwright/test')
 const walk = dir => fs.readdirSync(dir, { withFileTypes: true }).flatMap(e => { const p = path.join(dir,e.name); return e.isDirectory() ? [p,...walk(p)] : [p] })
-const all = walk(path.join(desktop, 'release'))
-const executable = process.platform === 'darwin' ? all.find(p => /\.app\/Contents\/MacOS\/Clover$/.test(p)) : all.find(p => /win-unpacked[\\/]Clover\.exe$/i.test(p))
-assert.ok(executable, 'Packaged executable not found')
-const stampPath = process.platform === 'darwin' ? path.join(executable, '../../Resources/install-stamp.json') : path.join(path.dirname(executable), 'resources/install-stamp.json')
-const stamp = JSON.parse(fs.readFileSync(stampPath, 'utf8'))
-assert.equal(stamp.commit, '7c43ea32629ceff116a047515f1185890ccf081f')
-assert.equal(stamp.dirty, false)
+const baseline='f3243637efb0a2a92758eb87d98196d1a10bcc9a', target='a2c65a244315f028febaf5429089140b20c254ce', branch='candidate/drawing-2.0.2.4'
+function inspectPackage(expected, phase) {
+  const all=walk(path.join(desktop,'release'))
+  const candidates=all.filter(p=>process.platform==='darwin'?/\.app\/Contents\/MacOS\/Clover$/.test(p):process.platform==='win32'?/win-unpacked[\\/]Clover\.exe$/i.test(p):/linux-unpacked\/clover$/i.test(p))
+  const matches=candidates.map(executable=>{const stampPath=process.platform==='darwin'?path.join(executable,'../../Resources/install-stamp.json'):path.join(path.dirname(executable),'resources/install-stamp.json');return fs.existsSync(stampPath)?{executable,stamp:JSON.parse(fs.readFileSync(stampPath,'utf8'))}:null}).filter(x=>x?.stamp.commit===expected)
+  assert.equal(matches.length,1,`Expected one ${phase} package, got ${matches.length}: ${candidates}`)
+  assert.equal(matches[0].stamp.dirty,false)
+  fs.writeFileSync(`native-${phase}-stamp.json`,JSON.stringify(matches[0].stamp,null,2))
+  return matches[0]
+}
+let {executable,stamp}=inspectPackage(baseline,'baseline')
 const sandbox = fs.mkdtempSync(path.join(os.tmpdir(),'clover-native-functional-'))
 const home = path.join(sandbox,'home'), clover = path.join(home,'.clover'), userData = path.join(sandbox,'userdata')
 for (const d of [home,clover,userData]) fs.mkdirSync(d,{recursive:true})
@@ -41,7 +45,7 @@ const snapshot=()=>JSON.parse(py(`import sqlite3,json,os
 c=sqlite3.connect(os.path.join(os.environ['CLOVER_HOME'],'state.db'))
 print(json.dumps({'integrity':c.execute('PRAGMA integrity_check').fetchone()[0], 'rows':c.execute('select role,content from messages where session_id=? order by rowid',('${sid}',)).fetchall()}))`))
 try {
-  timeout=setTimeout(()=>{result.errors.push('Overall functional test deadline');save();process.exit(9)},210000)
+  timeout=setTimeout(()=>{result.errors.push('Overall upgrade test deadline');save();process.exit(9)},1350000)
   provider=http.createServer((req,res)=>{
     let body='';req.on('data',c=>body+=c);req.on('end',()=>{
       const json=(code,obj)=>{res.writeHead(code,{'Content-Type':'application/json'});res.end(JSON.stringify(obj))}
@@ -74,12 +78,12 @@ d.set_session_title('${sid}','Native preserved conversation')
 d.close()`)
   result.phases.push('real SessionDB seeded')
   monitor=setInterval(()=>{const f=path.join(clover,'logs/agent.log');if(fs.existsSync(f)&&/Executing tool|tool_turns=[1-9]/.test(fs.readFileSync(f,'utf8'))){result.errors.push('Unexpected tool execution');save();process.exit(8)}},100)
-  const launch=async()=>{
-    app=await _electron.launch({executablePath:executable,args:['--disable-gpu'],env,timeout:60000})
+  const launch=async(version)=>{
+    app=await _electron.launch({executablePath:executable,args:['--disable-gpu',...(process.platform==='linux'?['--no-sandbox']:[])],env,timeout:60000})
     app.process().stdout?.on('data',d=>fs.appendFileSync('native-app.log',d))
     app.process().stderr?.on('data',d=>fs.appendFileSync('native-app.log',d))
     page=await app.firstWindow({timeout:60000});await page.waitForLoadState('domcontentloaded')
-    assert.equal(await app.evaluate(({app})=>app.getVersion()),'2.0.2.4')
+    assert.equal(await app.evaluate(({app})=>app.getVersion()),version)
     for(let i=0;i<90;i++){
       const skip=page.getByRole('button',{name:/skip for now/i});if(await skip.count())await skip.first().click().catch(()=>{})
       const tile=page.getByText('Native preserved conversation',{exact:true}).first()
@@ -89,7 +93,7 @@ d.close()`)
     await expect(page.getByText('Preserved native assistant message',{exact:true}).first()).toBeVisible({timeout:60000})
     result.phases.push('real backend history visible');save()
   }
-  await launch()
+  await launch('2.0.2.3')
   const composer=page.locator('[contenteditable="true"]').first()
   await composer.fill(prompt);await composer.press('Enter')
   await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(reply,{timeout:60000})
@@ -99,10 +103,38 @@ d.close()`)
   await quit()
   const configAfterFirstQuit=configObject();result.configAfterFirstQuit=configAfterFirstQuit
   preserveSubset(initialConfig,configAfterFirstQuit)
-  await launch()
+  const upstream=()=>execFileSync('git',['ls-remote','origin',`refs/heads/${branch}`],{cwd:product,env,encoding:'utf8',timeout:30000}).trim().split(/\s+/)[0]
+  assert.equal(upstream(),target,'Candidate branch moved before update')
+  const updateEnv={...env,GITHUB_SHA:target,GITHUB_REF_NAME:branch}
+  result.phases.push('baseline complete; starting real updater');save()
+  const updateCode=await new Promise((resolve,reject)=>{
+    const child=spawn(python,['-m','clover_cli.main','update','--branch',branch,'--yes'],{cwd:product,env:updateEnv,stdio:['ignore','pipe','pipe']})
+    const out=fs.createWriteStream('native-update.log');child.stdout.pipe(out,{end:false});child.stderr.pipe(out,{end:false})
+    const timer=setTimeout(()=>{child.kill();reject(new Error('Real updater exceeded 20 minutes'))},1200000)
+    child.on('error',reject);child.on('close',code=>{clearTimeout(timer);out.end();resolve(code)})
+  })
+  assert.equal(updateCode,0,'Real updater failed; see native-update.log')
+  assert.equal(execFileSync('git',['rev-parse','HEAD'],{cwd:product,env,encoding:'utf8'}).trim(),target,'Updater did not install exact target')
+  assert.equal(upstream(),target,'Candidate branch moved after update')
+  ;({executable,stamp}=inspectPackage(target,'updated'));result.updated={executable,stamp,gitHead:target};result.phases.push('real updater completed and packaged target inspected');save()
+  assert.deepEqual(snapshot(),before,'Database changed during upgrade')
+  preserveSubset(initialConfig,configObject())
+  await launch('2.0.2.4')
   await expect(page.getByText(prompt,{exact:true}).first()).toBeVisible({timeout:30000})
   await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(reply,{timeout:30000})
   const after=snapshot();assert.deepEqual(after,before)
+  const secondPrompt='Return the updated desktop test response.'
+  await page.locator('[contenteditable="true"]').first().fill(secondPrompt)
+  await page.locator('[contenteditable="true"]').first().press('Enter')
+  await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(reply,{timeout:60000})
+  await expect.poll(()=>snapshot().rows.at(-1),{timeout:15000}).toEqual(['assistant',reply])
+  const updatedRows=snapshot();result.phases.push('updated app chat succeeded')
+  await quit()
+  await launch('2.0.2.4')
+  await expect(page.getByText(secondPrompt,{exact:true}).first()).toBeVisible({timeout:30000})
+  await expect(page.locator('[data-role="assistant"] [data-slot="aui_assistant-message-content"]').last()).toHaveText(reply,{timeout:30000})
+  assert.deepEqual(snapshot(),updatedRows)
+  result.phases.push('updated app restart preserved new chat')
   result.persistence={messages:after.rows.length,integrity:after.integrity,logicalRowsUnchanged:true,fullPriorReplyVisible:true,configUnchanged:hash(path.join(clover,'config.yaml'))===configBefore,envUnchanged:hash(path.join(clover,'.env'))===envBefore,uiSettingToggled:false}
   result.configAfterRestart=configObject()
   preserveSubset(initialConfig,result.configAfterRestart)

@@ -8,7 +8,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [macos-15, windows-2022]
+        os: [macos-15, windows-2022, ubuntu-latest]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 50
     steps:
@@ -20,8 +20,9 @@ jobs:
       - name: Checkout exact product
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd
         with:
-          ref: 7c43ea32629ceff116a047515f1185890ccf081f
+          ref: f3243637efb0a2a92758eb87d98196d1a10bcc9a
           path: product
+          fetch-depth: 0
           persist-credentials: false
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020
         with:
@@ -31,21 +32,22 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = 7c43ea32629ceff116a047515f1185890ccf081f
+          test "$(git rev-parse HEAD)" = f3243637efb0a2a92758eb87d98196d1a10bcc9a
+          test "$(git ls-remote origin refs/heads/candidate/drawing-2.0.2.4 | cut -f1)" = a2c65a244315f028febaf5429089140b20c254ce
           test -z "$(git status --porcelain)"
           node --version; npm --version
           npm ci
       - name: Build desktop
         working-directory: product/apps/desktop
         shell: bash
-        run: GITHUB_SHA=7c43ea32629ceff116a047515f1185890ccf081f GITHUB_REF_NAME=candidate-2.0.2.4 npm run build
+        run: GITHUB_SHA=f3243637efb0a2a92758eb87d98196d1a10bcc9a GITHUB_REF_NAME=baseline-2.0.2.3 npm run build
       - name: Package desktop
         working-directory: product/apps/desktop
         shell: bash
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
         run: |
-          if [ "$RUNNER_OS" = macOS ]; then npm run builder -- --mac zip --publish never; else npm run builder -- --win dir --publish never; fi
+          if [ "$RUNNER_OS" = macOS ]; then npm run builder -- --mac zip --publish never; elif [ "$RUNNER_OS" = Windows ]; then npm run builder -- --win dir --publish never; else npm run builder -- --linux dir --publish never; fi
       - uses: astral-sh/setup-uv@fac544c07dec837d0ccb6301d7b5580bf5edae39
         with:
           version: '0.13.6'
@@ -54,12 +56,17 @@ jobs:
         working-directory: product
         shell: bash
         run: |
-          uv sync --frozen --python 3.11 --extra web --extra mcp --extra cron --extra pty
+          uv python install 3.11.18
+          uv sync --frozen --python 3.11.18 --extra web --extra mcp --extra cron --extra pty
+          uv run --no-sync python -c 'import sys,sqlite3; print(sys.version, sqlite3.sqlite_version)'
           git diff --exit-code
       - name: Verify real backend chat and same-profile restart
-        timeout-minutes: 6
+        timeout-minutes: 25
         shell: bash
-        run: node helper/.github/native-desktop-trial.mjs
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: |
+          if [ "$RUNNER_OS" = Linux ]; then xvfb-run -a node helper/.github/native-desktop-trial.mjs; else node helper/.github/native-desktop-trial.mjs; fi
       - name: Upload evidence and package
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
@@ -72,5 +79,8 @@ jobs:
             native-app.log
             native-agent.log
             native-failure.png
+            native-update.log
+            native-baseline-stamp.json
+            native-updated-stamp.json
           if-no-files-found: warn
           retention-days: 7
